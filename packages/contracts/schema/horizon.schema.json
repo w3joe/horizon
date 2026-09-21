@@ -538,8 +538,21 @@
         "wave_direction_rad": { "type": "number", "description": "Wave travel direction clockwise from north." },
         "significant_wave_height_m": { "type": "number", "minimum": 0 },
         "peak_period_s": { "type": "number", "exclusiveMinimum": 0 },
+        "wave_components": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/WaveComponent" } },
         "qualification": { "type": "string", "enum": ["characterized", "degraded", "unknown"] },
         "reason_codes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "WaveComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amplitude_m", "wave_number_per_m", "angular_frequency_rad_s", "phase_rad", "direction_rad"],
+      "properties": {
+        "amplitude_m": { "type": "number", "minimum": 0 },
+        "wave_number_per_m": { "type": "number", "minimum": 0 },
+        "angular_frequency_rad_s": { "type": "number", "minimum": 0 },
+        "phase_rad": { "type": "number" },
+        "direction_rad": { "type": "number" }
       }
     },
     "SimulationSnapshot": {

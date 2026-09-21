@@ -367,8 +367,17 @@ export interface MarineEnvironment {
   wave_direction_rad: number;
   significant_wave_height_m: number;
   peak_period_s: number;
+  wave_components?: Array<WaveComponent>;
   qualification: "characterized" | "degraded" | "unknown";
   reason_codes: Array<string>;
+}
+
+export interface WaveComponent {
+  amplitude_m: number;
+  wave_number_per_m: number;
+  angular_frequency_rad_s: number;
+  phase_rad: number;
+  direction_rad: number;
 }
 
 export interface SimulationSnapshot {

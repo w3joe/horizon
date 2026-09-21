@@ -339,8 +339,16 @@ class MarineEnvironment(TypedDict):
     wave_direction_rad: float
     significant_wave_height_m: float
     peak_period_s: float
+    wave_components: NotRequired[list[WaveComponent]]
     qualification: Literal['characterized', 'degraded', 'unknown']
     reason_codes: list[str]
+
+class WaveComponent(TypedDict):
+    amplitude_m: float
+    wave_number_per_m: float
+    angular_frequency_rad_s: float
+    phase_rad: float
+    direction_rad: float
 
 class SimulationSnapshot(TypedDict):
     contract_type: Literal['SimulationSnapshot']
