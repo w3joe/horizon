@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 
 import pytest
 
 from horizon_sim.engine import AuthoritativeSimulator, AuthorityError
+from horizon_sim.clock import ManualMonotonicClock
 from horizon_sim.scenario import load_scenario
 
 
@@ -25,7 +27,9 @@ def envelope(sim: AuthoritativeSimulator, sequence: int, heading: float, speed: 
         "command_id": f"command-{sequence}",
         "authority": "filtered_autonomy",
         "sequence": sequence,
+        "epoch": sim.plant_epoch,
         "expires_simulation_time_s": sim.simulation_time_s + 20.0,
+        "expires_monotonic_ns": time.monotonic_ns() + 500_000_000,
         "command": {"heading_rad": heading, "speed_mps": speed},
     }
 
@@ -47,16 +51,39 @@ def test_reset_replays_random_queues_and_physics_exactly() -> None:
     sim = simulator()
     sim.submit_gate_command(envelope(sim, 0, 0.3, 4.0), token=sim.gate_token)
     sim.step(300)
-    first_snapshot = json.dumps(sim.public_snapshot(), sort_keys=True)
-    first_truth = json.dumps(sim.truth_log, sort_keys=True)
-    first_observations = json.dumps(list(sim.observations), sort_keys=True)
+    first_snapshot = sim.public_snapshot()
+    first_truth = sim.truth_log
+    first_observations = list(sim.observations)
 
     sim.reset()
-    sim.submit_gate_command(envelope(sim, 0, 0.3, 4.0), token=sim.gate_token)
+    sim.submit_gate_command(envelope(sim, 1, 0.3, 4.0), token=sim.gate_token)
     sim.step(300)
-    assert json.dumps(sim.public_snapshot(), sort_keys=True) == first_snapshot
-    assert json.dumps(sim.truth_log, sort_keys=True) == first_truth
-    assert json.dumps(list(sim.observations), sort_keys=True) == first_observations
+    second_snapshot = sim.public_snapshot()
+    assert second_snapshot["snapshot_id"] != first_snapshot["snapshot_id"]
+    assert {
+        k: v
+        for k, v in second_snapshot.items()
+        if k not in {"snapshot_id", "active_command_id"}
+    } == {
+        k: v
+        for k, v in first_snapshot.items()
+        if k not in {"snapshot_id", "active_command_id"}
+    }
+    second_truth = sim.truth_log
+    assert len(second_truth) == len(first_truth)
+    for first, second in zip(first_truth, second_truth, strict=True):
+        first = json.loads(json.dumps(first))
+        second = json.loads(json.dumps(second))
+        first["actual_actuator"].pop("command_id")
+        second["actual_actuator"].pop("command_id")
+        assert first == second
+    second_observations = list(sim.observations)
+    assert len(second_observations) == len(first_observations)
+    for first, second in zip(first_observations, second_observations, strict=True):
+        assert first["observation_id"] != second["observation_id"]
+        assert {k: v for k, v in first.items() if k != "observation_id"} == {
+            k: v for k, v in second.items() if k != "observation_id"
+        }
 
 
 def test_cloned_branches_match_then_diverge_after_commands() -> None:
@@ -70,7 +97,9 @@ def test_cloned_branches_match_then_diverge_after_commands() -> None:
     protected.submit_gate_command(envelope(protected, 0, 0.8, 4.0), token=protected.gate_token)
     unprotected_command = envelope(unprotected, 0, -0.8, 4.0)
     unprotected.submit_counterfactual_command(
-        unprotected_command, token=unprotected.evaluation_token
+        unprotected_command,
+        token=unprotected.evaluation_token,
+        offline_monotonic_ns=round(unprotected.simulation_time_s * 1e9),
     )
     protected.step(500)
     unprotected.step(500)
@@ -136,3 +165,87 @@ def test_commands_change_real_actuator_and_motion() -> None:
     assert sim.ownship.rudder_rad != 0.0
     assert sim.ownship.heading_rad != before.heading_rad
     assert sim.ownship.north_m > before.north_m
+
+
+def test_protected_deadline_checked_after_auth_before_mutation() -> None:
+    moments = iter((1_000_000_000, 1_200_000_000))
+    sim = AuthoritativeSimulator(
+        load_scenario(SCENARIO),
+        seed=17,
+        run_id="deadline-race",
+        monotonic_ns=lambda: next(moments),
+    )
+    command = envelope(sim, 0, 0.5, 4.0)
+    command["expires_monotonic_ns"] = 1_100_000_000
+    receipt = sim.submit_gate_command(command, token=sim.gate_token)
+    assert receipt["accepted"] is False
+    assert "HOST_DEADLINE_EXPIRED_BEFORE_ACTUATION" in receipt["reason_codes"]
+    assert sim.active_command.command_id == "initial"
+
+
+@pytest.mark.parametrize(
+    ("expiry", "reason"),
+    (
+        (None, "MISSING_OR_INVALID_HOST_DEADLINE"),
+        (999_999_999, "HOST_DEADLINE_EXPIRED"),
+        (4_000_000_001, "HOST_DEADLINE_TOO_FAR"),
+    ),
+)
+def test_protected_command_rejects_invalid_host_deadline(expiry, reason) -> None:
+    clock = ManualMonotonicClock(1_000_000_000)
+    sim = AuthoritativeSimulator(
+        load_scenario(SCENARIO), seed=17, run_id="deadline-validation", monotonic_ns=clock
+    )
+    command = envelope(sim, 0, 0.5, 4.0)
+    if expiry is None:
+        command.pop("expires_monotonic_ns")
+    else:
+        command["expires_monotonic_ns"] = expiry
+    receipt = sim.submit_gate_command(command, token=sim.gate_token)
+    assert receipt["accepted"] is False
+    assert reason in receipt["reason_codes"]
+
+
+def test_applied_command_falls_back_when_host_deadline_expires() -> None:
+    clock = ManualMonotonicClock(1_000_000_000)
+    sim = AuthoritativeSimulator(
+        load_scenario(SCENARIO), seed=17, run_id="applied-expiry", monotonic_ns=clock
+    )
+    command = envelope(sim, 0, 0.5, 4.0)
+    command["expires_monotonic_ns"] = 1_100_000_000
+    assert sim.submit_gate_command(command, token=sim.gate_token)["accepted"]
+    clock.set_ns(1_100_000_000)
+    sim.step()
+    assert sim.active_command.command_id == "plant-expiry-neutral:host_monotonic_deadline"
+    assert sim.active_command.speed_mps == 0.0
+    assert sim.events[-1]["kind"] == "command_expired"
+
+
+def test_live_reset_epoch_rejects_unseen_delayed_command() -> None:
+    clock = ManualMonotonicClock(1_000_000_000)
+    sim = AuthoritativeSimulator(
+        load_scenario(SCENARIO), seed=17, run_id="reset-epoch", monotonic_ns=clock
+    )
+    delayed = envelope(sim, 7, 0.5, 4.0)
+    delayed["expires_monotonic_ns"] = 1_500_000_000
+    old_epoch = sim.plant_epoch
+    sim.reset()
+    assert sim.plant_epoch == old_epoch + 1
+    receipt = sim.submit_gate_command(delayed, token=sim.gate_token)
+    assert receipt["accepted"] is False
+    assert "STALE_PLANT_EPOCH" in receipt["reason_codes"]
+
+
+def test_offline_replay_requires_explicit_clock_but_not_live_host_deadline() -> None:
+    sim = simulator().clone("offline", protected=False)
+    command = envelope(sim, 0, 0.2, 3.0)
+    command.pop("epoch")
+    command.pop("expires_monotonic_ns")
+    with pytest.raises(TypeError):
+        sim.submit_counterfactual_command(command, token=sim.evaluation_token)  # type: ignore[call-arg]
+    receipt = sim.submit_counterfactual_command(
+        command,
+        token=sim.evaluation_token,
+        offline_monotonic_ns=round(sim.simulation_time_s * 1e9),
+    )
+    assert receipt["accepted"] is True

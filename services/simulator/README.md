@@ -19,6 +19,23 @@ evaluation capability is separate and is never returned in public responses.
 The browser stream and decision-AI fixture receive sensor-derived snapshots;
 fault labels and evaluation truth remain private.
 
+Every protected gate envelope must include a strictly increasing `sequence`,
+the current integer `epoch`, `expires_simulation_time_s`, and
+`expires_monotonic_ns`. The receiver checks the shared-host monotonic deadline
+after bearer authentication, again immediately before actuator mutation, and
+on every plant step while the command remains applied. Missing, expired, or
+more-than-two-seconds-future host deadlines fail closed. Simulation expiry is a
+separate boundary. Either expiry switches the target to zero-speed neutral
+heading and records a private `command_expired` event.
+
+A live reset increments the plant epoch and preserves the last gate sequence.
+The coordinated order is simulator reset followed by the gate's
+`reset-handshake`; until both report the same epoch, protected commands fail
+closed. This prevents an unseen delayed command from the prior epoch from
+reviving when tick numbers restart. Snapshot and observation opaque IDs include
+the epoch, while `/v1/observations` exposes `plant_epoch` on its non-schema
+batch wrapper. The static `/v1/reference` digest remains epoch-free.
+
 Run a manual-step service from the repository root:
 
 ```sh
@@ -43,6 +60,12 @@ Privileged routes:
 - `GET /v1/evaluation/truth?branch=protected&after_tick=-1`
 - `POST /v1/evaluation/{step,reset,clone}` with the evaluation capability
 - `POST /v1/evaluation/command` only for an explicitly unprotected branch
+
+Offline evaluation does not relax the live gate endpoint. Create a simulator
+with `monotonic_ns=ManualMonotonicClock(...)`, advance that clock explicitly in
+the experiment runner, and call `submit_counterfactual_command` with the
+matching `offline_monotonic_ns`. Simulation time remains fixed-step; measured
+candidate compute duration and the gate's 40 ms deadline stay host-timed.
 
 Local console controls use a third bearer capability supplied through
 `--operator-token-file`: `POST /v1/operator/{pause,resume,reset}` and

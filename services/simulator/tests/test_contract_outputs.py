@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 
 from jsonschema import Draft202012Validator
 
@@ -33,7 +34,9 @@ def test_public_snapshot_observations_capability_and_receipt_validate() -> None:
             "command_id": "command-0",
             "authority": "autonomy",
             "sequence": 0,
+            "epoch": sim.plant_epoch,
             "expires_simulation_time_s": sim.simulation_time_s + 1.0,
+            "expires_monotonic_ns": time.monotonic_ns() + 500_000_000,
             "command": {"heading_rad": 0.0, "speed_mps": 3.0},
         },
         token=sim.gate_token,

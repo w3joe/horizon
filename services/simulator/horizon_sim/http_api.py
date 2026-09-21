@@ -129,7 +129,14 @@ class SimulatorHandler(BaseHTTPRequestHandler):
         path, query = self._route()
         try:
             if path == "/health":
-                self._json(HTTPStatus.OK, {"status": "ok", "service": "horizon-simulator"})
+                with self.server.runtime.lock:
+                    branch = next(iter(self.server.runtime.branches.values()))
+                    health = {
+                        "status": "ok",
+                        "service": "horizon-simulator",
+                        "plant_epoch": branch.plant_epoch,
+                    }
+                self._json(HTTPStatus.OK, health)
                 return
             branch = self.server.runtime.branch(self._branch_id(query))
             if path == "/v1/public/snapshot":
@@ -148,7 +155,11 @@ class SimulatorHandler(BaseHTTPRequestHandler):
             if path == "/v1/observations":
                 with self.server.runtime.lock:
                     observations = branch.observation_batch()
-                self._json(HTTPStatus.OK, {"observations": observations})
+                    plant_epoch = branch.plant_epoch
+                self._json(
+                    HTTPStatus.OK,
+                    {"plant_epoch": plant_epoch, "observations": observations},
+                )
                 return
             if path == "/v1/evaluation/truth":
                 after_tick = int(query.get("after_tick", ["-1"])[0])
@@ -212,6 +223,7 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                         return
                     status = {
                         "branch_id": branch.branch_id,
+                        "plant_epoch": branch.plant_epoch,
                         "paused": self.server.runtime.paused.is_set(),
                         "simulation_time_s": branch.simulation_time_s,
                         "manual_fault_active": bool(branch.manual_faults),
@@ -224,8 +236,13 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK if receipt["accepted"] else HTTPStatus.UNPROCESSABLE_ENTITY, receipt)
                 return
             if path == "/v1/evaluation/command":
+                offline_monotonic_ns = body.pop("offline_monotonic_ns", None)
                 with self.server.runtime.lock:
-                    receipt = branch.submit_counterfactual_command(body, token=self._token())
+                    receipt = branch.submit_counterfactual_command(
+                        body,
+                        token=self._token(),
+                        offline_monotonic_ns=offline_monotonic_ns,
+                    )
                 self._json(HTTPStatus.OK if receipt["accepted"] else HTTPStatus.UNPROCESSABLE_ENTITY, receipt)
                 return
             if path == "/v1/evaluation/step":
