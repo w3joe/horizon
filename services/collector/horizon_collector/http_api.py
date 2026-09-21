@@ -10,7 +10,7 @@ import time
 from typing import Any
 from socketserver import TCPServer
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
 from .store import CollectorStore
@@ -33,6 +33,8 @@ class SimulatorPoller:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.last_error: str | None = None
+        self.cursor = 0
+        self.plant_epoch: int | None = None
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._loop, name="collector-simulator", daemon=True)
@@ -44,26 +46,21 @@ class SimulatorPoller:
             self.thread.join(timeout=2.0)
 
     def poll_once(self) -> None:
-        base = f"{self.simulator_url}"
-        reference = _get_json(f"{base}/v1/reference?branch={self.branch}", 0.2)
-        batch = _get_json(f"{base}/v1/observations?branch={self.branch}", 0.2)
-        snapshot = _get_json(f"{base}/v1/public/snapshot?branch={self.branch}", 0.2)
+        query: dict[str, Any] = {"branch": self.branch, "after_cursor": self.cursor, "limit": 512}
+        if self.plant_epoch is not None:
+            query["plant_epoch"] = self.plant_epoch
+        # Anchor before transport, so network/JSON time cannot renew validity.
+        anchor_ns = time.monotonic_ns()
+        batch = _get_json(f"{self.simulator_url}/v1/observations?{urlencode(query)}", 0.2)
+        snapshot = batch["snapshot"]
         plant_epoch = batch.get("plant_epoch")
         snapshot_epoch = re.search(r":epoch-(\d+):snapshot:", str(snapshot.get("snapshot_id", "")))
         if plant_epoch is not None and snapshot_epoch is not None:
             if int(snapshot_epoch.group(1)) != int(plant_epoch):
                 raise ValueError("observation batch and public snapshot span different plant epochs")
-        anchor_ns = time.monotonic_ns()
-        self.store.update_reference(self.branch, reference)
-        if plant_epoch is not None:
-            self.store.update_plant_epoch(self.branch, str(snapshot["run_id"]), int(plant_epoch))
-        self.store.update_snapshot(self.branch, snapshot)
-        for item in batch.get("observations", []):
-            self.store.ingest(
-                item,
-                received_ns=anchor_ns,
-                simulation_time_s=float(snapshot["simulation_time_s"]),
-            )
+        self.store.ingest_simulator_page(self.branch, batch, received_ns=anchor_ns)
+        self.cursor = int(batch["cursor"])
+        self.plant_epoch = int(plant_epoch)
         self.last_error = None
 
     def _loop(self) -> None:
@@ -74,6 +71,8 @@ class SimulatorPoller:
                 self.poll_once()
             except (HTTPError, URLError, TimeoutError, ValueError, KeyError) as exc:
                 self.last_error = str(exc)
+            # Skip missed polling slots instead of accumulating catch-up work.
+            deadline = max(deadline, time.monotonic())
             self.stop_event.wait(max(0.0, deadline - time.monotonic()))
 
 

@@ -1,0 +1,37 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S17",
+  "title": "Delayed or reordered internal sensor-to-AI messages",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "sensor_timing_fault.json"
+  ],
+  "decision_ai_policies": [
+    "stale_lineage"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [
+    {
+      "at_s": 20.0,
+      "action": "delay_link",
+      "target": "collector_to_fusion",
+      "parameters": {
+        "delay_s": 1.0,
+        "duration_s": 6.0
+      }
+    },
+    {
+      "at_s": 26.0,
+      "action": "restore_link",
+      "target": "collector_to_fusion",
+      "parameters": {}
+    }
+  ],
+  "dependencies": [
+    "A01/A08 link-fault orchestration",
+    "A05 ancestry/freshness validation",
+    "A04 gate freshness policy"
+  ],
+  "acceptance_condition": "Self-reported consumed-input ancestry exposes stale consumption despite a live AI heartbeat.",
+  "independent_verification": "pending_A08"
+}

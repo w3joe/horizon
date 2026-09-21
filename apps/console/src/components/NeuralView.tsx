@@ -1,6 +1,14 @@
 import type { ConsolePacket, PerceptionArtifactState, ScenarioEvent } from "../types";
 
 export function NeuralView({ packet, event, artifact }: { packet: ConsolePacket; event?: ScenarioEvent; artifact: PerceptionArtifactState }) {
+  if (artifact.status === "loading") {
+    return (
+      <div className="neural-workspace workspace-scroll">
+        <div className="workspace-heading"><div><span className="eyebrow">RECORDED REPRODUCTION · NOT SIMULATOR CAMERA</span><h2>Loading recorded frame {artifact.frameIndex + 1}</h2></div><span className="health-badge unknown">loading</span></div>
+        <section className="artifact-loading" aria-live="polite"><strong>Loading matching metadata, raw frame, and mask preview…</strong><p>The previous frame has been cleared so its image cannot be associated with this index.</p></section>
+      </div>
+    );
+  }
   if (artifact.status === "available" && artifact.manifest && artifact.frame) {
     const { manifest, frame } = artifact;
     return (

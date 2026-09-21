@@ -9,7 +9,7 @@ import pytest
 
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
-from horizon_gate.core import ActuatorGate, GateConfig, StoredRecovery
+from horizon_gate.core import ActuatorGate, GateConfig, HTTPPlantClient, StoredRecovery
 from horizon_gate.http_api import GateHTTPServer, GateRuntime
 from horizon_sim.clock import ManualMonotonicClock
 
@@ -125,6 +125,46 @@ def test_gate_is_exclusive_and_revalidates_final_command(reference, governor_inp
     assert runtime.stored_recovery is not None
 
 
+@pytest.mark.parametrize("fault", ["invalid", "expired", "missing", "duplicate"])
+def test_gate_independently_rejects_pass_without_qualified_radar(reference, governor_input, fault) -> None:
+    plant = FakePlant()
+    runtime = gate(reference, plant)
+    message = retime_live(governor_input)
+    decision = A1ThresholdSimplex(reference, runtime.checker.config).evaluate(message)
+    assert decision["action"] == "pass"
+    radar = next(item for item in message["health"]["summaries"] if item["source_id"] == "obstacle_perception:radar")
+    if fault == "invalid":
+        radar["status"] = "invalid"
+    elif fault == "expired":
+        radar["valid_until_monotonic_ns"] = time.monotonic_ns() - 1
+    elif fault == "missing":
+        message["health"]["summaries"].remove(radar)
+    else:
+        message["health"]["summaries"].append(copy.deepcopy(radar))
+    receipt = runtime.submit(decision, message, token="decision-secret")
+    assert not receipt["accepted"]
+    assert not plant.envelopes
+    assert any("REQUIRED_HEALTH_SOURCE" in reason for reason in receipt["reason_codes"])
+    runtime.close()
+
+
+def test_recovery_uses_sensor_health_without_primary_ai_health(reference, governor_input) -> None:
+    runtime = gate(reference, FakePlant())
+    message = retime_live(governor_input)
+    for item in message["health"]["summaries"]:
+        if item["source_id"] in {"decision_ai_telemetry", "internal_ship_communications"}:
+            item["status"] = "invalid"
+            item["capability"] = "unavailable"
+    primed, reasons = runtime.prime_recovery(message, token="decision-secret")
+    assert primed, reasons
+    radar = next(item for item in message["health"]["summaries"] if item["source_id"] == "obstacle_perception:radar")
+    radar["status"] = "invalid"
+    primed, reasons = runtime.prime_recovery(message, token="decision-secret")
+    assert not primed
+    assert "REQUIRED_HEALTH_SOURCE_UNAVAILABLE:obstacle_perception:radar" in reasons
+    runtime.close()
+
+
 def test_startup_interlock_requires_recovery_before_autonomy(reference, governor_input) -> None:
     plant = FakePlant()
     governor_input = retime_live(governor_input)
@@ -147,6 +187,77 @@ def test_startup_interlock_requires_recovery_before_autonomy(reference, governor
     assert primed and reasons == ["STARTUP_RECOVERY_VALIDATED"]
     accepted = runtime.submit(decision, governor_input, token="decision-secret")
     assert accepted["accepted"]
+
+
+def test_status_exposes_only_current_immutable_startup_recovery_certificate(
+    reference, governor_input
+) -> None:
+    message = retime_live(governor_input)
+    clock = ManualMonotonicClock(int(message["monotonic_time_ns"]))
+    runtime = ActuatorGate(
+        run_id="fixture-run-001",
+        branch_id="protected",
+        plant=FakePlant(),
+        reference=reference,
+        decision_token="decision-secret",
+        operator_token="operator-secret",
+        monotonic_ns=clock,
+        config=GateConfig(asynchronous_recovery_cache=False),
+        assurance_config=AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0),
+    )
+    accepted, reasons = runtime.prime_recovery(message, token="decision-secret")
+    assert accepted, reasons
+    assert runtime.stored_recovery is not None
+    original_expiry = runtime.stored_recovery.host_valid_until_ns
+
+    first = runtime.status()
+    expected = {
+        "run_id": message["run_id"],
+        "branch_id": message["branch_id"],
+        "decision_id": "startup-recovery-prime",
+        "input_snapshot_id": message["snapshot"]["snapshot_id"],
+        "proposal_id": message["proposal"]["command_id"],
+        "plant_epoch": 0,
+        "original_host_valid_until_ns": original_expiry,
+    }
+    assert first["startup_recovery_ready"] is True
+    assert first["startup_recovery_certificate"] == expected
+
+    clock.advance_ns(1_000_000)
+    second = runtime.status()
+    assert second["startup_recovery_certificate"] == expected
+    assert runtime.stored_recovery.host_valid_until_ns == original_expiry
+
+    clock.advance_ns(original_expiry - clock())
+    expired = runtime.status()
+    assert expired["startup_recovery_ready"] is False
+    assert expired["startup_recovery_certificate"] is None
+
+
+def test_status_withholds_recovery_certificate_from_another_epoch(
+    reference, governor_input
+) -> None:
+    message = retime_live(governor_input)
+    clock = ManualMonotonicClock(int(message["monotonic_time_ns"]))
+    runtime = ActuatorGate(
+        run_id="fixture-run-001",
+        branch_id="protected",
+        plant=FakePlant(),
+        reference=reference,
+        decision_token="decision-secret",
+        monotonic_ns=clock,
+        config=GateConfig(asynchronous_recovery_cache=False),
+        assurance_config=AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0),
+    )
+    accepted, reasons = runtime.prime_recovery(message, token="decision-secret")
+    assert accepted, reasons
+    assert runtime.stored_recovery is not None
+
+    runtime.stored_recovery.plant_epoch += 1
+    status = runtime.status()
+
+    assert status["startup_recovery_ready"] is False
+    assert status["startup_recovery_certificate"] is None
 
 
 def test_gate_rejects_solver_numeric_and_replay_faults(reference, governor_input) -> None:
@@ -404,6 +515,7 @@ def test_recovery_substitution_is_revalidated_as_actual_command(reference, gover
         host_valid_until_ns=decision["expires_monotonic_ns"],
         source_decision_id="old-recovery",
         governor_input=copy.deepcopy(governor_input),
+        plant_epoch=runtime.epoch,
     )
     receipt = runtime.submit(
         decision, governor_input, token="decision-secret", now_ns=4_210_000_000
@@ -544,6 +656,7 @@ def test_watchdog_rechecks_certificate_after_slow_snapshot(reference, governor_i
         host_valid_until_ns=time.monotonic_ns() + 5_000_000,
         source_decision_id="recovery-before-slow-snapshot",
         governor_input=copy.deepcopy(governor_input),
+        plant_epoch=runtime.epoch,
     )
     receipt = runtime.watchdog_tick()
     assert receipt and receipt["accepted"]
@@ -561,6 +674,7 @@ def test_watchdog_recovers_after_one_transport_timeout(reference, governor_input
         host_valid_until_ns=time.monotonic_ns() + 2_000_000_000,
         source_decision_id="timeout-recovery",
         governor_input=copy.deepcopy(governor_input),
+        plant_epoch=runtime.epoch,
     )
     first = runtime.watchdog_tick()
     assert first and not first["accepted"]
@@ -690,6 +804,34 @@ def test_gate_reset_handshake_rotates_epoch_and_supervisor_token(reference, gove
     assert new and new != old
     assert runtime.epoch == 1
     assert runtime.last_tick == -1
+
+
+def test_http_reset_reads_epoch_metadata_without_changing_snapshot(reference, tmp_path, monkeypatch) -> None:
+    plant = HTTPPlantClient("http://127.0.0.1:8100", "protected", "private-test-token")
+    requested = []
+
+    def request(path, body=None):
+        requested.append(path)
+        assert path == "/health"
+        return {"status": "ok", "plant_epoch": 3}
+
+    monkeypatch.setattr(plant, "_request", request)
+    actuator_gate = gate(reference, plant)
+    destination = tmp_path / "decision.token"
+    runtime = GateRuntime(actuator_gate, str(destination))
+    assert runtime.reset("operator-secret")
+    assert requested == ["/health"]
+    assert actuator_gate.epoch == 3
+    assert destination.read_text().strip() == actuator_gate.decision_token
+    actuator_gate.close()
+
+
+@pytest.mark.parametrize("epoch", [True, "3", -1, None])
+def test_http_plant_epoch_rejects_invalid_metadata(epoch, monkeypatch) -> None:
+    plant = HTTPPlantClient("http://127.0.0.1:8100", "protected", "private-test-token")
+    monkeypatch.setattr(plant, "_request", lambda path: {"plant_epoch": epoch})
+    with pytest.raises(ValueError, match="invalid plant epoch"):
+        plant.plant_epoch()
 
 
 def test_watchdog_continues_fresh_recovery_then_reports_unknown(reference, governor_input) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import json
 import math
 from pathlib import Path
@@ -15,6 +16,7 @@ from horizon_assurance.candidates import (
     A2ProbabilisticRisk,
     A3PredictiveBounded,
     A4RobustBarrierFilter,
+    A4VelocityQPBaseline,
     A5EvidenceHybrid,
     candidate,
 )
@@ -163,17 +165,103 @@ def test_a2_probability_threshold_triggers_simplex_recovery(reference, governor_
 
 def test_a4_tracking_filter_revalidates_exact_modified_command(reference, governor_input) -> None:
     message = copy.deepcopy(governor_input)
-    message["snapshot"]["contacts"][0]["position_ne_m"] = [20.0, 30.0]
+    message["snapshot"]["contacts"][0]["position_ne_m"] = [30.0, 30.0]
     message["snapshot"]["contacts"][0]["velocity_ne_mps"] = [0.0, 0.0]
     implementation = A4RobustBarrierFilter(reference, fast_config())
     decision = implementation.evaluate(message)
     VALIDATOR.validate(decision)
     assert decision["action"] == "modify"
+    assert decision["candidate_version"] == "a4-discrete-plant-map-barrier-search-v1"
     assert decision["solver"]["status"] == "optimal"
     assert decision["solver"]["primal_residual"] <= 1e-8
-    assert decision["solver"]["dual_residual"] <= 1e-8
+    assert decision["solver"]["dual_residual"] is None
     assert decision["issued_command"]["speed_mps"] <= fast_config().maximum_command_speed_mps
     assert implementation.checker.assess(message, decision["issued_command"]).safe
+    initial = implementation._plant_map_margins(
+        message, decision["issued_command"], elapsed_s=0.0
+    )
+    terminal = implementation._plant_map_margins(
+        message,
+        decision["issued_command"],
+        elapsed_s=fast_config().barrier_step_s,
+    )
+    assert initial is not None and terminal is not None
+    decay = 1.0 - fast_config().barrier_decay_rate_per_s * fast_config().barrier_step_s
+    for constraint_id, initial_margin in initial.items():
+        assert (
+            terminal[constraint_id]
+            - fast_config().barrier_model_residual_m
+            + fast_config().barrier_feasibility_tolerance_m
+            >= max(0.0, decay * initial_margin)
+        )
+
+
+def test_a4_reports_infeasible_and_timeout_without_fabricating_duals(
+    reference, governor_input
+) -> None:
+    message = copy.deepcopy(governor_input)
+    message["snapshot"]["contacts"][0]["position_ne_m"] = [20.0, 30.0]
+    message["snapshot"]["contacts"][0]["velocity_ne_mps"] = [0.0, 0.0]
+    implementation = A4RobustBarrierFilter(reference, fast_config())
+
+    _, infeasible_residual, dual, status = implementation._filter_command(
+        message, message["proposal"]["command"], host_deadline_ns=10**30
+    )
+    assert status == "infeasible"
+    assert infeasible_residual > 0.0
+    assert dual is None
+    _, _, _, timeout = implementation._filter_command(
+        governor_input, governor_input["proposal"]["command"], host_deadline_ns=0
+    )
+    assert timeout == "timeout"
+
+
+def test_a4_velocity_qp_baseline_remains_explicitly_reproducible(
+    reference, governor_input
+) -> None:
+    baseline = candidate("A4-VQP", reference, fast_config())
+
+    assert isinstance(baseline, A4VelocityQPBaseline)
+    assert baseline.candidate_version == "a4-provisional-kinematic-filter-full-plant-validation-v1"
+
+
+def test_a4_rejects_unbounded_or_inconsistent_barrier_configuration(
+    reference,
+) -> None:
+    with pytest.raises(ValueError, match="residual reserve"):
+        A4RobustBarrierFilter(
+            reference, replace(fast_config(), barrier_model_residual_m=-0.1)
+        )
+    with pytest.raises(ValueError, match="discrete decay"):
+        A4RobustBarrierFilter(
+            reference,
+            replace(
+                fast_config(),
+                barrier_step_s=2.0,
+                barrier_decay_rate_per_s=0.6,
+            ),
+        )
+
+
+def test_a4_plant_map_uses_live_rudder_rate_and_lag(reference, governor_input) -> None:
+    implementation = A4RobustBarrierFilter(reference, fast_config())
+    command = {"heading_rad": math.pi / 2.0, "speed_mps": 6.0}
+    normal = implementation.checker.rollout(
+        governor_input, command, horizon_s=fast_config().barrier_step_s
+    )[-1]
+    degraded_input = copy.deepcopy(governor_input)
+    degraded_input["snapshot"]["actuator"]["rudder_rate_limit_rps"] = 0.001
+    degraded_input["snapshot"]["actuator"]["steering_lag_s"] = 20.0
+    degraded = implementation.checker.rollout(
+        degraded_input, command, horizon_s=fast_config().barrier_step_s
+    )[-1]
+
+    # A point-velocity filter would move about 12 m east immediately. The
+    # actual target->PID->actuator plant remains mostly northbound, and the
+    # live degraded capability further reduces the achieved turn.
+    assert abs(normal["east_m"]) < 1.0
+    assert abs(degraded["east_m"]) < abs(normal["east_m"]) / 100.0
+    assert abs(degraded["heading_rad"]) < abs(normal["heading_rad"]) / 100.0
 
 
 def test_covariance_only_uses_named_odd_bounds_without_nonfinite_json(
@@ -229,11 +317,11 @@ def test_radar_mode_ignores_optional_unknown_but_falls_back_on_required_loss(
     assert allowed["action"] == "pass"
 
     required_degraded = copy.deepcopy(governor_input)
-    fusion_health(required_degraded, degraded_source="obstacle_perception")
+    fusion_health(required_degraded, degraded_source="obstacle_perception:radar")
     fallback = A1ThresholdSimplex(reference, fast_config()).evaluate(required_degraded)
     assert fallback["action"] in {"recover", "minimum_risk"}
     assert any(
-        reason.startswith("REQUIRED_HEALTH_SOURCE_DEGRADED:obstacle_perception")
+        reason.startswith("REQUIRED_HEALTH_SOURCE_DEGRADED:obstacle_perception:radar")
         for reason in fallback["reason_codes"]
     )
 
@@ -243,11 +331,28 @@ def test_radar_mode_ignores_optional_unknown_but_falls_back_on_required_loss(
     missing_required["health"]["summaries"] = [
         item
         for item in missing_required["health"]["summaries"]
-        if item["source_id"] != "obstacle_perception"
+        if item["source_id"] != "obstacle_perception:radar"
     ]
     missing = A1ThresholdSimplex(reference, fast_config()).evaluate(missing_required)
     assert missing["action"] in {"recover", "minimum_risk"}
-    assert "REQUIRED_HEALTH_SOURCE_MISSING:obstacle_perception" in missing["reason_codes"]
+    assert "REQUIRED_HEALTH_SOURCE_MISSING:obstacle_perception:radar" in missing["reason_codes"]
+
+
+def test_candidate_expiry_cannot_outlive_qualified_radar(reference, governor_input) -> None:
+    radar = next(item for item in governor_input["health"]["summaries"] if item["source_id"] == "obstacle_perception:radar")
+    radar["valid_until_monotonic_ns"] = governor_input["monotonic_time_ns"] + 80_000_000
+    decision = A1ThresholdSimplex(reference, fast_config()).evaluate(governor_input)
+    assert decision["action"] == "pass"
+    assert decision["expires_monotonic_ns"] == radar["valid_until_monotonic_ns"]
+
+
+def test_no_qualified_radar_cannot_be_labeled_validated_recovery(reference, governor_input) -> None:
+    radar = next(item for item in governor_input["health"]["summaries"] if item["source_id"] == "obstacle_perception:radar")
+    radar["status"] = "invalid"
+    decision = A1ThresholdSimplex(reference, fast_config()).evaluate(governor_input)
+    assert decision["action"] == "minimum_risk"
+    assert "VALIDATED_RECOVERY_SELECTED" not in decision["reason_codes"]
+    assert "MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE" in decision["reason_codes"]
 
 
 def test_configured_odd_bounds_require_model_and_contact_source_eligibility(
@@ -279,7 +384,7 @@ def test_a5_conditions_declared_bounds_and_speed_for_degraded_required_source(
     reference, governor_input
 ) -> None:
     message = copy.deepcopy(governor_input)
-    fusion_health(message, degraded_source="obstacle_perception")
+    fusion_health(message, degraded_source="obstacle_perception:radar")
     message["proposal"]["command"]["speed_mps"] = 5.0
     decision = A5EvidenceHybrid(reference, fast_config()).evaluate(message)
     VALIDATOR.validate(decision)

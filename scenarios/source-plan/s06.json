@@ -1,0 +1,19 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S06",
+  "title": "Shallow-water route",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "boundary_depth.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A04 depth constraint"
+  ],
+  "acceptance_condition": "Configured under-keel-clearance margin remains nonnegative.",
+  "independent_verification": "pending_A08"
+}

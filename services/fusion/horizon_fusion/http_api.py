@@ -41,6 +41,7 @@ class FusionLoop:
         self.branch = branch
         self.interval_s = interval_s
         self.cursor = 0
+        self.upstream_gap_count = 0
         self.latest: dict[str, Any] | None = None
         self.last_processed_snapshot_id: str | None = None
         self.last_error_reasons = ["STARTING"]
@@ -60,6 +61,12 @@ class FusionLoop:
     def cycle_once(self) -> None:
         query = urlencode({"branch": self.branch, "after_cursor": self.cursor, "limit": 512})
         batch = _get_json(f"{self.collector_url}/v1/batch?{query}")
+        upstream = batch.get("upstream", {})
+        gap_count = int(upstream.get("gap_count", 0))
+        upstream_gap = gap_count != self.upstream_gap_count
+        self.upstream_gap_count = gap_count
+        if upstream_gap:
+            self.engine.invalidate_collection("SIMULATOR_TRANSPORT_LOSS")
         new_plant_epoch = (
             batch.get("plant_epoch") is not None
             and batch["plant_epoch"] != self.engine.plant_epoch
@@ -80,11 +87,13 @@ class FusionLoop:
         complete_reset_page = new_plant_epoch and {
             "gnss", "imu", "radar", "actuator"
         }.issubset({item.get("source_id") for item in batch.get("observations", [])})
-        if (batch.get("cursor_lost") and not complete_reset_page) or batch.get("has_more"):
+        if upstream_gap or upstream.get("has_more") or (batch.get("cursor_lost") and not complete_reset_page) or batch.get("has_more"):
             with self.lock:
                 self.latest = None
                 self.last_processed_snapshot_id = None
                 self.last_error_reasons = [
+                    "SIMULATOR_TRANSPORT_LOSS" if upstream_gap else
+                    "SIMULATOR_TRANSPORT_BACKLOG" if upstream.get("has_more") else
                     "COLLECTOR_CURSOR_LOSS" if batch.get("cursor_lost") else "COLLECTOR_BACKLOG"
                 ]
             return

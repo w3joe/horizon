@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PerceptionArtifactState, PerceptionFrame, PerceptionManifest } from "../types";
 
 const ARTIFACT_BASE = "/api/artifacts/perception";
@@ -18,14 +18,19 @@ export function usePerceptionArtifact(enabled: boolean): PerceptionArtifactState
   const [frameIndex, setFrameIndex] = useState(0);
   const [status, setStatus] = useState<PerceptionArtifactState["status"]>(enabled ? "loading" : "unavailable");
   const [error, setError] = useState<string | null>(null);
+  const frameRequest = useRef(0);
 
   useEffect(() => {
     if (!enabled) {
       setStatus("unavailable");
+      setManifest(null);
+      setFrame(null);
       return;
     }
     const controller = new AbortController();
     setStatus("loading");
+    setManifest(null);
+    setFrame(null);
     fetch(`${ARTIFACT_BASE}/manifest`, { signal: controller.signal, headers: { Accept: "application/json" } })
       .then(async (response) => {
         if (!response.ok) throw new Error(`artifact manifest HTTP ${response.status}`);
@@ -34,6 +39,8 @@ export function usePerceptionArtifact(enabled: boolean): PerceptionArtifactState
       .then((value) => { setManifest(value); setStatus("available"); setError(null); })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return;
+        setManifest(null);
+        setFrame(null);
         setStatus("unavailable");
         setError(reason instanceof Error ? reason.message : "artifact manifest unavailable");
       });
@@ -44,12 +51,16 @@ export function usePerceptionArtifact(enabled: boolean): PerceptionArtifactState
     if (!enabled || !manifest) return;
     const controller = new AbortController();
     const id = frameId(frameIndex);
+    const request = ++frameRequest.current;
+    setFrame(null);
+    setStatus("loading");
     fetch(`${ARTIFACT_BASE}/frames/${id}`, { signal: controller.signal, headers: { Accept: "application/json" } })
       .then(async (response) => {
         if (!response.ok) throw new Error(`frame metadata HTTP ${response.status}`);
         return response.json() as Promise<CompactFramePayload>;
       })
       .then((value) => {
+        if (request !== frameRequest.current) return;
         setFrame({
           ...value,
           layers: Object.values(value.layers).map((layer) => ({ ...layer, standard_deviation: layer.std })),
@@ -61,7 +72,7 @@ export function usePerceptionArtifact(enabled: boolean): PerceptionArtifactState
         setError(null);
       })
       .catch((reason: unknown) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || request !== frameRequest.current) return;
         setFrame(null);
         setStatus("error");
         setError(reason instanceof Error ? reason.message : "frame metadata unavailable");
@@ -75,6 +86,11 @@ export function usePerceptionArtifact(enabled: boolean): PerceptionArtifactState
     frame,
     frameIndex,
     error,
-    selectFrame: (index) => setFrameIndex(Math.max(0, Math.min((manifest?.sequence_frame_count ?? 1) - 1, Math.round(index)))),
+    selectFrame: (index) => {
+      frameRequest.current += 1;
+      setFrame(null);
+      setStatus("loading");
+      setFrameIndex(Math.max(0, Math.min((manifest?.sequence_frame_count ?? 1) - 1, Math.round(index))));
+    },
   };
 }

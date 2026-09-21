@@ -1,0 +1,29 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S21",
+  "title": "Output-only neural appliance",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "source_conflict.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "external_artifact_required",
+  "orchestrator_steps": [
+    {
+      "at_s": 0.0,
+      "action": "set_diagnostic_mode",
+      "target": "perception",
+      "parameters": {
+        "mode": "output_only"
+      }
+    }
+  ],
+  "dependencies": [
+    "A07 output-only perception adapter",
+    "A05 unknown internal-health handling"
+  ],
+  "acceptance_condition": "Output, temporal, and cross-sensor checks run without invented layer telemetry.",
+  "independent_verification": "pending_A08"
+}

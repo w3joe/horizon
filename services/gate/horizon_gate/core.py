@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from horizon_assurance.configuration import AssuranceConfig, NavigationReference
+from horizon_assurance.health_policy import required_health_evidence
 from horizon_assurance.predictive import Assessment, BoundedPredictiveChecker
 from horizon_assurance.validation import InputRejected, validate_decision_identity, validate_governor_input
 
@@ -38,6 +39,8 @@ class PlantClient(Protocol):
     def command(self, envelope: dict[str, Any]) -> dict[str, Any]: ...
 
     def snapshot(self) -> dict[str, Any]: ...
+
+    def plant_epoch(self) -> int: ...
 
 
 class HTTPPlantClient:
@@ -67,6 +70,13 @@ class HTTPPlantClient:
         query = urlencode({"branch": self.branch_id})
         return self._request(f"/v1/public/snapshot?{query}")
 
+    def plant_epoch(self) -> int:
+        # Epoch is transport metadata, deliberately outside SimulationSnapshot.
+        epoch = self._request("/health")["plant_epoch"]
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+            raise ValueError("invalid plant epoch")
+        return epoch
+
 
 @dataclass
 class StoredRecovery:
@@ -74,6 +84,7 @@ class StoredRecovery:
     host_valid_until_ns: int
     source_decision_id: str
     governor_input: dict[str, Any]
+    plant_epoch: int
 
 
 @dataclass(frozen=True)
@@ -170,6 +181,11 @@ class ActuatorGate:
 
         def worker() -> None:
             try:
+                health_expiry, health_reasons = required_health_evidence(
+                    source, self.checker.config, recovery=True, now_ns=self._monotonic_ns()
+                )
+                if health_reasons:
+                    return
                 selection = self.checker.recovery_from_current(source)
                 if not selection.assessment.safe or selection.command is None:
                     return
@@ -183,6 +199,7 @@ class ActuatorGate:
                     int(source["snapshot"]["valid_until_monotonic_ns"]),
                     int(source["proposal"]["expires_monotonic_ns"]),
                     option_expiry,
+                    health_expiry,
                 )
                 valid_until = self._map_remote_expiry(
                     source,
@@ -204,6 +221,7 @@ class ActuatorGate:
                         host_valid_until_ns=valid_until,
                         source_decision_id=str(decision["decision_id"]),
                         governor_input=source,
+                        plant_epoch=epoch,
                     )
             finally:
                 with self.lock:
@@ -250,6 +268,11 @@ class ActuatorGate:
                 raise InputRejected(("CONFIGURATION_HASH_MISMATCH",))
             if governor_input["run_id"] != self.run_id or governor_input["branch_id"] != self.branch_id:
                 raise InputRejected(("RUN_OR_BRANCH_MISMATCH",))
+            health_expiry, health_reasons = required_health_evidence(
+                governor_input, self.checker.config, recovery=True, now_ns=self._monotonic_ns()
+            )
+            if health_reasons:
+                raise InputRejected(health_reasons)
             selection = self.checker.recovery_from_current(governor_input)
         except InputRejected as exc:
             return False, list(exc.reason_codes)
@@ -265,6 +288,7 @@ class ActuatorGate:
             int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
             int(governor_input["proposal"]["expires_monotonic_ns"]),
             option_expiry,
+            health_expiry,
         )
         valid_until = self._map_remote_expiry(governor_input, source_valid_until, now)
         with self.lock:
@@ -275,6 +299,7 @@ class ActuatorGate:
                 host_valid_until_ns=valid_until,
                 source_decision_id="startup-recovery-prime",
                 governor_input=copy.deepcopy(governor_input),
+                plant_epoch=epoch,
             )
         return True, ["STARTUP_RECOVERY_VALIDATED"]
 
@@ -386,6 +411,15 @@ class ActuatorGate:
                 else []
             ),
         )
+        if decision.get("action") in {"pass", "modify", "recover"}:
+            health_expiry, health_reasons = required_health_evidence(
+                governor_input,
+                self.checker.config,
+                recovery=decision.get("action") == "recover",
+                now_ns=arrival_ns,
+            )
+            source_valid_until_ns = min(source_valid_until_ns, health_expiry)
+            reasons.extend(health_reasons)
         if int(decision.get("expires_monotonic_ns", -1)) > source_valid_until_ns:
             reasons.append("DECISION_EXPIRY_EXCEEDS_SOURCE_VALIDITY")
         command = decision.get("issued_command")
@@ -667,6 +701,7 @@ class ActuatorGate:
                     ),
                     source_decision_id=str(decision["decision_id"]),
                     governor_input=copy.deepcopy(governor_input),
+                    plant_epoch=self.epoch,
                 )
                 self.recovery_latched = True
                 self.clear_decisions = 0
@@ -822,6 +857,33 @@ class ActuatorGate:
     def status(self) -> dict[str, Any]:
         with self.lock:
             observed_monotonic_ns = self._monotonic_ns()
+            stored = self.stored_recovery
+            certificate = None
+            if (
+                stored is not None
+                and stored.plant_epoch == self.epoch
+                and observed_monotonic_ns < stored.host_valid_until_ns
+            ):
+                source = stored.governor_input
+                snapshot = source.get("snapshot", {})
+                proposal = source.get("proposal", {})
+                identity = {
+                    "run_id": source.get("run_id"),
+                    "branch_id": source.get("branch_id"),
+                    "decision_id": stored.source_decision_id,
+                    "input_snapshot_id": snapshot.get("snapshot_id"),
+                    "proposal_id": proposal.get("command_id"),
+                }
+                if (
+                    all(isinstance(value, str) and bool(value) for value in identity.values())
+                    and identity["run_id"] == self.run_id
+                    and identity["branch_id"] == self.branch_id
+                ):
+                    certificate = {
+                        **identity,
+                        "plant_epoch": stored.plant_epoch,
+                        "original_host_valid_until_ns": stored.host_valid_until_ns,
+                    }
             return {
                 "service": "horizon-gate",
                 "observed_monotonic_ns": observed_monotonic_ns,
@@ -836,9 +898,9 @@ class ActuatorGate:
                 "transport_failures": self.transport_failures,
                 "last_transport_error": self.last_transport_error,
                 "startup_recovery_ready": bool(
-                    self.stored_recovery
-                    and observed_monotonic_ns < self.stored_recovery.host_valid_until_ns
+                    certificate is not None
                 ),
+                "startup_recovery_certificate": certificate,
                 "retained_receipt_count": len(self.receipts),
                 "retained_snapshot_id_count": len(self.seen_snapshot_ids),
                 "local_receipt_sequence": self.local_receipt_sequence,

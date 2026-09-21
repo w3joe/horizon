@@ -13,11 +13,12 @@
     {
       "id": "A2",
       "name": "probabilistic_risk_simplex",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_assurance.candidates:A2ProbabilisticRisk",
       "alias_of": null,
       "required_input_representations": ["covariance", "covariance_coverage"],
-      "required_failure_behavior": ["uncalibrated_risk_unknown", "deadline_recovery"]
+      "required_failure_behavior": ["uncalibrated_risk_unknown", "deadline_recovery"],
+      "research_status": "analytic Gaussian trigger; probability threshold is not empirically calibrated"
     },
     {
       "id": "A3",
@@ -31,18 +32,19 @@
     {
       "id": "A4",
       "name": "model_appropriate_robust_barrier_filter",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_assurance.candidates:A4RobustBarrierFilter",
       "alias_of": null,
       "required_input_representations": ["declared_dynamics_abstraction", "bounded_disturbance"],
       "required_failure_behavior": ["infeasible_recovery", "invalid_residual_recovery", "timeout_recovery"],
-      "required_method_disclosures": ["barrier_geometry", "relative_degree", "qp_convexity", "sampled_data_margin", "final_command_revalidation"]
+      "required_method_disclosures": ["barrier_geometry", "relative_degree", "qp_convexity", "sampled_data_margin", "final_command_revalidation"],
+      "research_status": "current implementation a4-discrete-plant-map-barrier-search-v1; finite nonlinear eight-state plant-map search with configured residual reserve and final rollout revalidation; no formal invariance claim; earlier velocity QP retained separately as A4-VQP and earlier results do not transfer"
     },
     {
       "id": "A5",
       "name": "evidence_conditioned_hybrid",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_assurance.candidates:A5EvidenceHybrid",
       "alias_of": null,
       "required_input_representations": ["bounded_set", "source_health", "perception_health"],
       "required_failure_behavior": ["diagnostics_missing_policy", "independent_recovery", "final_command_revalidation"]

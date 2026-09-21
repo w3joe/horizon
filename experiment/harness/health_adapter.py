@@ -1,36 +1,114 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import math
 from pathlib import Path
 from typing import Any, Callable
 
 
-def _finite(value: Any) -> bool:
-    if value is None or isinstance(value, (str, bool)):
+_MAX_JSON_DEPTH = 16
+_MAX_JSON_NODES = 10_000
+_MAX_MAPPING_ITEMS = 1_024
+_MAX_LIST_ITEMS = 4_096
+_MAX_REASON_CODES = 64
+_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+_MAX_ARTIFACT_JSON_NODES = 500_000
+_DECLARED_CAPABILITIES = {
+    "unavailable",
+    "output_only",
+    "output_and_conventional",
+    "internal_activations",
+}
+_AUTHORIZING_CAPABILITIES = {"output_and_conventional", "internal_activations"}
+
+
+def _finite(
+    value: Any,
+    *,
+    _depth: int = 0,
+    _budget: list[int] | None = None,
+    _ancestors: set[int] | None = None,
+) -> bool:
+    """Accept only bounded, finite JSON-like values.
+
+    Entry points are in-process research plugins, so their results must be
+    treated like untrusted decoded JSON. The depth/node limits also make cyclic
+    or accidentally enormous values fail closed without unbounded traversal.
+    """
+    budget = _budget if _budget is not None else [_MAX_JSON_NODES]
+    ancestors = _ancestors if _ancestors is not None else set()
+    budget[0] -= 1
+    if budget[0] < 0 or _depth > _MAX_JSON_DEPTH:
+        return False
+    if value is None or type(value) in {str, bool}:
         return True
-    if isinstance(value, (int, float)):
+    if type(value) is int:
+        return True
+    if type(value) is float:
         return math.isfinite(value)
-    if isinstance(value, dict):
-        return all(_finite(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return all(_finite(item) for item in value)
+    if type(value) is dict:
+        if len(value) > _MAX_MAPPING_ITEMS or any(type(key) is not str for key in value):
+            return False
+        identity = id(value)
+        if identity in ancestors:
+            return False
+        ancestors.add(identity)
+        valid = all(
+            _finite(item, _depth=_depth + 1, _budget=budget, _ancestors=ancestors)
+            for item in value.values()
+        )
+        ancestors.remove(identity)
+        return valid
+    if type(value) is list:
+        if len(value) > _MAX_LIST_ITEMS:
+            return False
+        identity = id(value)
+        if identity in ancestors:
+            return False
+        ancestors.add(identity)
+        valid = all(
+            _finite(item, _depth=_depth + 1, _budget=budget, _ancestors=ancestors)
+            for item in value
+        )
+        ancestors.remove(identity)
+        return valid
     return False
 
 
-def _safe_nonnegative_ns(value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0
-    if not math.isfinite(value) or value < 0:
-        return 0
-    return int(value)
+def _nonnegative_ns(value: Any) -> int | None:
+    if type(value) is not int or value < 0:
+        return None
+    return value
 
 
-def _unknown(method_id: str, payload: dict[str, Any], reason: str) -> dict[str, Any]:
-    sensor_id = str(payload.get("sensor_id", "unknown"))
-    inference_id = str(payload.get("inference_id", "unknown"))
-    valid_until = _safe_nonnegative_ns(payload.get("valid_until_ns", 0))
+def _identifier(value: Any) -> str:
+    return value if type(value) is str and 0 < len(value) <= 256 else "unknown"
+
+
+def _string_list(value: Any, *, maximum: int = _MAX_LIST_ITEMS) -> list[str] | None:
+    if type(value) is not list or len(value) > maximum:
+        return None
+    if any(type(item) is not str or len(item) > 512 for item in value):
+        return None
+    return value
+
+
+def _score(value: Any) -> float | None:
+    if type(value) not in {int, float}:
+        return None
+    try:
+        numeric = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _unknown(method_id: str, payload: Any, reason: str) -> dict[str, Any]:
+    safe_payload = payload if type(payload) is dict else {}
+    sensor_id = _identifier(safe_payload.get("sensor_id"))
+    inference_id = _identifier(safe_payload.get("inference_id"))
+    valid_until = _nonnegative_ns(safe_payload.get("valid_until_ns")) or 0
     health_id = f"{sensor_id}:{inference_id}:{method_id}"
     return {
         "perception_health": {
@@ -68,13 +146,23 @@ def _artifact(path: str | None) -> dict[str, Any] | None:
     if not path:
         return None
     try:
-        value = json.loads(Path(path).read_text())
+        source = Path(path)
+        if source.stat().st_size > _MAX_ARTIFACT_BYTES:
+            return None
+        contents = source.read_bytes()
+        if len(contents) > _MAX_ARTIFACT_BYTES:
+            return None
+        value = json.loads(contents)
+        if type(value) is not dict or not _finite(
+            value, _budget=[_MAX_ARTIFACT_JSON_NODES]
+        ):
+            return None
         body = {key: item for key, item in value.items() if key != "artifact_hash"}
         digest = hashlib.sha256(
             json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         return value if value.get("artifact_hash") == digest else None
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    except Exception:
         return None
 
 
@@ -85,16 +173,22 @@ def _lineage_valid(
     calibration_path: str | None,
     reference_path: str | None,
 ) -> bool:
+    raw_frames = _string_list(raw.get("frame_ids"))
+    payload_frames = _string_list(payload.get("frame_ids"))
+    raw_observations = _string_list(raw.get("supporting_observation_ids"))
+    payload_observations = _string_list(payload.get("observation_ids", []))
     if raw.get("sensor_id") != payload.get("sensor_id"):
         return False
     if raw.get("inference_id") != payload.get("inference_id"):
         return False
-    if list(raw.get("frame_ids", [])) != list(payload.get("frame_ids", [])):
+    if raw_frames is None or payload_frames is None or raw_frames != payload_frames:
         return False
     if raw.get("reference_model_version") != payload.get("reference_model_version"):
         return False
-    if list(raw.get("supporting_observation_ids", [])) != list(
-        payload.get("observation_ids", [])
+    if (
+        raw_observations is None
+        or payload_observations is None
+        or raw_observations != payload_observations
     ):
         return False
     calibration = _artifact(calibration_path)
@@ -109,15 +203,26 @@ def _lineage_valid(
         or calibration.get("scope") != raw.get("risk_scope")
     ):
         return False
-    scope = raw.get("risk_scope") or {}
-    context = payload.get("risk_context") or {}
+    scope = raw.get("risk_scope")
+    context = payload.get("risk_context")
     required_scope = {"model_version", "preprocessor_version", "geometry_version", "source_group"}
-    if not isinstance(scope, dict) or not isinstance(context, dict):
+    if (
+        type(scope) is not dict
+        or type(context) is not dict
+        or len(scope) > 32
+        or len(context) > 32
+    ):
         return False
     if not required_scope.issubset(scope):
         return False
     for key, allowed in scope.items():
-        if not isinstance(allowed, (list, tuple, set)) or context.get(key) not in allowed:
+        if (
+            type(key) is not str
+            or type(allowed) is not list
+            or not allowed
+            or len(allowed) > 256
+            or context.get(key) not in allowed
+        ):
             return False
     reference = _artifact(reference_path)
     expected_reference_hash = calibration.get("reference_hash")
@@ -131,24 +236,47 @@ def _lineage_valid(
 
 def adapt_health_result(
     method_id: str,
-    payload: dict[str, Any],
-    raw: dict[str, Any],
+    payload: Any,
+    raw: Any,
     *,
     calibration_path: str | None = None,
     reference_path: str | None = None,
 ) -> dict[str, Any]:
-    if raw.get("method_id") != method_id or not _finite(raw):
+    if type(payload) is not dict or type(raw) is not dict or not _finite(raw):
         return _unknown(method_id, payload, "invalid_health_entrypoint_result")
-    status = str(raw.get("status", "unknown"))
-    if status not in {"healthy", "degraded", "invalid", "unknown"}:
+    if raw.get("method_id") != method_id:
+        return _unknown(method_id, payload, "invalid_health_entrypoint_result")
+    status = raw.get("status", "unknown")
+    if type(status) is not str or status not in {"healthy", "degraded", "invalid", "unknown"}:
         return _unknown(method_id, payload, "invalid_health_status")
-    reasons = [str(item) for item in raw.get("reasons", [])]
-    risk = raw.get("missed_obstacle_risk") or {"kind": "unknown"}
+    reasons = _string_list(raw.get("reasons", []), maximum=_MAX_REASON_CODES)
+    risk = raw.get("missed_obstacle_risk")
+    statistics = raw.get("statistics")
+    declared_capability = raw.get("capability")
+    if (
+        reasons is None
+        or type(risk) is not dict
+        or type(risk.get("kind")) is not str
+        or type(statistics) is not dict
+        or type(raw.get("camera_free_space_usable")) is not bool
+        or type(raw.get("completeness")) is not str
+        or declared_capability not in _DECLARED_CAPABILITIES
+        or (
+            raw.get("calibration_version") is not None
+            and type(raw.get("calibration_version")) is not str
+        )
+    ):
+        return _unknown(method_id, payload, "invalid_health_entrypoint_result")
+    raw_frames = _string_list(raw.get("frame_ids"))
+    payload_frames = _string_list(payload.get("frame_ids"))
+    raw_observations = _string_list(raw.get("supporting_observation_ids"))
+    payload_observations = _string_list(payload.get("observation_ids", []))
     identity_matches = all(
         (
             raw.get("sensor_id") == payload.get("sensor_id"),
             raw.get("inference_id") == payload.get("inference_id"),
-            list(raw.get("frame_ids", [])) == list(payload.get("frame_ids", [])),
+            raw_frames is not None and raw_frames == payload_frames,
+            raw_observations is not None and raw_observations == payload_observations,
             raw.get("reference_model_version") == payload.get("reference_model_version"),
         )
     )
@@ -157,25 +285,41 @@ def adapt_health_result(
     risk_validated = risk.get("kind") == "calibrated_band" and _lineage_valid(
         method_id, payload, raw, calibration_path, reference_path
     )
-    camera_usable = bool(raw.get("camera_free_space_usable")) and risk_validated
+    camera_usable = (
+        raw["camera_free_space_usable"]
+        and risk_validated
+        and status == "healthy"
+        and raw.get("completeness") == "complete"
+        and declared_capability in _AUTHORIZING_CAPABILITIES
+    )
     if raw.get("camera_free_space_usable") and not risk_validated:
         reasons.append("unvalidated_risk_cannot_authorize_free_space")
         status = "unknown"
-    score = (raw.get("statistics") or {}).get("health_score")
-    score = float(score) if isinstance(score, (int, float)) and math.isfinite(score) else None
-    sensor_id = str(raw.get("sensor_id", payload.get("sensor_id", "unknown")))
-    inference_id = str(raw.get("inference_id", payload.get("inference_id", "unknown")))
+    score = _score(statistics.get("health_score"))
+    sensor_id = _identifier(raw.get("sensor_id"))
+    inference_id = _identifier(raw.get("inference_id"))
     health_id = f"{sensor_id}:{inference_id}:{method_id}"
-    valid_until = _safe_nonnegative_ns(
-        raw.get("valid_until_ns", payload.get("valid_until_ns", 0))
-    )
+    request_valid_until = _nonnegative_ns(payload.get("valid_until_ns"))
+    valid_until = _nonnegative_ns(raw.get("valid_until_ns", request_valid_until))
+    if valid_until is None:
+        return _unknown(method_id, payload, "invalid_health_expiry")
+    if request_valid_until is None or valid_until > request_valid_until:
+        return _unknown(method_id, payload, "health_expiry_exceeds_request")
     scope = raw.get("risk_scope")
     scope_text = (
         json.dumps(scope, sort_keys=True, separators=(",", ":"))
         if scope and risk_validated
         else "risk_unvalidated"
     )
-    capability = "available" if raw.get("completeness") == "complete" else "degraded"
+    if declared_capability == "unavailable":
+        capability = "unavailable"
+    elif (
+        raw.get("completeness") == "complete"
+        and declared_capability in _AUTHORIZING_CAPABILITIES
+    ):
+        capability = "available"
+    else:
+        capability = "degraded"
     shared = {
         "contract_type": "PerceptionHealth",
         "schema_version": "0.1.0",
@@ -199,12 +343,18 @@ def adapt_health_result(
         "reason_codes": shared["reason_codes"],
         "valid_until_monotonic_ns": valid_until,
     }
+    if camera_usable:
+        authorization_reason = "heldout_validated_risk_band"
+    elif risk_validated and declared_capability not in _AUTHORIZING_CAPABILITIES:
+        authorization_reason = "declared_capability_not_authorizing"
+    else:
+        authorization_reason = "risk_not_validated"
     return {
         "perception_health": shared,
         "governor_summary": summary,
         "authorization": {
             "camera_free_space_usable": camera_usable,
-            "reason": "heldout_validated_risk_band" if camera_usable else "risk_not_validated",
+            "reason": authorization_reason,
         },
         "raw_health": raw,
     }
@@ -212,16 +362,27 @@ def adapt_health_result(
 
 def evaluate_health(
     method_id: str,
-    payload: dict[str, Any],
-    entrypoint: Callable[[dict[str, Any]], dict[str, Any]],
+    payload: Any,
+    entrypoint: Callable[[dict[str, Any]], Any],
     *,
     calibration_path: str | None = None,
     reference_path: str | None = None,
 ) -> dict[str, Any]:
     if method_id not in {"H0", "H1", "H2", "H3", "H4"}:
         raise ValueError(f"unsupported health method: {method_id}")
+    if type(payload) is not dict:
+        return _unknown(method_id, payload, "invalid_health_payload_type")
     if not _finite(payload):
         return _unknown(method_id, payload, "nonfinite_health_payload")
+    if (
+        _identifier(payload.get("sensor_id")) == "unknown"
+        or _identifier(payload.get("inference_id")) == "unknown"
+        or _identifier(payload.get("reference_model_version")) == "unknown"
+        or _string_list(payload.get("frame_ids")) is None
+        or _string_list(payload.get("observation_ids", [])) is None
+        or _nonnegative_ns(payload.get("valid_until_ns")) is None
+    ):
+        return _unknown(method_id, payload, "invalid_health_payload")
     request = dict(payload)
     if calibration_path:
         request["calibration_path"] = calibration_path
@@ -229,7 +390,7 @@ def evaluate_health(
         request["reference_path"] = reference_path
     try:
         raw = entrypoint(request)
-    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+    except Exception:
         return _unknown(method_id, payload, "health_entrypoint_rejected_payload")
     return adapt_health_result(
         method_id,

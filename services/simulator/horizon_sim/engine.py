@@ -6,6 +6,7 @@ from collections import deque
 import copy
 from dataclasses import asdict, dataclass, replace
 import math
+from itertools import islice
 import secrets
 import time
 from collections.abc import Callable
@@ -100,7 +101,12 @@ class AuthoritativeSimulator:
         self.ownship = self.scenario.ownship.copy()
         self.traffic = [TrafficState(item, item.state.copy()) for item in self.scenario.traffic]
         self.parameters = self.base_parameters
-        self.active_command = TargetCommand(self.ownship.heading_rad, self.ownship.surge_mps, "initial")
+        self.active_command = TargetCommand(
+            self.ownship.heading_rad, 0.0, "plant-startup-passive"
+        )
+        self.active_command_authority = "plant_startup_passive"
+        self.active_declared_authority: str | None = None
+        self.active_controller_enabled = False
         self.active_command_expiry_s = math.inf
         self.active_command_host_expiry_ns: int | None = None
         self.receipts: list[dict[str, Any]] = []
@@ -108,8 +114,10 @@ class AuthoritativeSimulator:
         self.events: list[dict[str, Any]] = []
         self.truth_log: list[dict[str, Any]] = []
         self.observations: deque[dict[str, Any]] = deque(maxlen=20_000)
+        self.observation_cursor = 0
         self.sensors = SensorSuite(self.seed, self.parameters.fixed_step_s)
         self.sensors.initialize_prior(self.ownship)
+        self.observation_tick_index = 0
         self.path_length_m = 0.0
         self._collision_pairs: set[tuple[str, str]] = set()
         self._boundary_violating = False
@@ -235,6 +243,9 @@ class AuthoritativeSimulator:
                 reason_codes.append("HOST_DEADLINE_EXPIRED_BEFORE_ACTUATION")
         if accepted:
             self.active_command = TargetCommand(wrap_angle(float(heading)), float(speed), command_id)
+            self.active_command_authority = endpoint_authority
+            self.active_declared_authority = authority
+            self.active_controller_enabled = True
             self.active_command_expiry_s = float(expires_s)
             self.active_command_host_expiry_ns = host_expiry
             self.last_sequence = sequence
@@ -297,6 +308,11 @@ class AuthoritativeSimulator:
                     rudder_rate_scale=float(fault.parameters.get("rate_scale", 0.3)),
                     rudder_limit_scale=float(fault.parameters.get("limit_scale", 1.0)),
                 )
+            elif fault.kind == "stuck_rudder":
+                # A zero rate limit freezes the physical rudder at its current
+                # position. Feedback reports that measured state; no online
+                # message receives the private fault label.
+                parameters = parameters.degraded(rudder_rate_scale=0.0)
             elif fault.kind == "thrust_reduction":
                 parameters = parameters.degraded(thrust_scale=float(fault.parameters.get("scale", 0.5)))
         return parameters
@@ -307,21 +323,22 @@ class AuthoritativeSimulator:
         for _ in range(steps):
             if self.simulation_time_s >= self.scenario.duration_s:
                 break
-            if (
-                self.active_command_host_expiry_ns is not None
-                and self._monotonic_ns() >= self.active_command_host_expiry_ns
-            ):
-                self._expire_active_command("host_monotonic_deadline")
-            elif self.simulation_time_s >= self.active_command_expiry_s:
+            host_expired = self._expire_host_command_if_needed()
+            if not host_expired and self.simulation_time_s >= self.active_command_expiry_s:
                 self._expire_active_command("simulation_deadline")
             previous_ownship = self.ownship.copy()
             previous_traffic = [item.state.copy() for item in self.traffic]
             self.parameters = self._fault_adjusted_parameters()
             self.ownship = integrate_step(
-                self.ownship, self.active_command, self.scenario.environment, self.parameters
+                self.ownship,
+                self.active_command,
+                self.scenario.environment,
+                self.parameters,
+                controller_enabled=self.active_controller_enabled,
             )
             self._step_traffic()
             self.tick_index += 1
+            self.observation_tick_index += 1
             self.simulation_time_s = self.tick_index * self.parameters.fixed_step_s
             path_increment = math.hypot(
                 self.ownship.north_m - previous_ownship.north_m,
@@ -332,11 +349,33 @@ class AuthoritativeSimulator:
             self._sample_sensors()
             self._record_truth(path_increment)
 
+    def observe_while_paused(self, steps: int = 1) -> None:
+        """Advance sensor cadence and host expiry without moving physical state."""
+
+        if steps < 0:
+            raise ValueError("steps must be nonnegative")
+        for _ in range(steps):
+            self._expire_host_command_if_needed()
+            self.observation_tick_index += 1
+            self._sample_sensors(capture_clock="host_cadence_while_physics_paused")
+
+    def _expire_host_command_if_needed(self) -> bool:
+        if (
+            self.active_command_host_expiry_ns is not None
+            and self._monotonic_ns() >= self.active_command_host_expiry_ns
+        ):
+            self._expire_active_command("host_monotonic_deadline")
+            return True
+        return False
+
     def _expire_active_command(self, reason: str) -> None:
         expired_id = self.active_command.command_id
         self.active_command = TargetCommand(
             self.ownship.heading_rad, 0.0, f"plant-expiry-neutral:{reason}"
         )
+        self.active_command_authority = "plant_expiry_fallback"
+        self.active_declared_authority = None
+        self.active_controller_enabled = True
         self.active_command_expiry_s = math.inf
         self.active_command_host_expiry_ns = None
         self._event("command_expired", {"reason": reason, "expired_command_id": expired_id})
@@ -401,20 +440,25 @@ class AuthoritativeSimulator:
             }
         )
 
-    def _sample_sensors(self) -> None:
+    def _sample_sensors(self, *, capture_clock: str = "simulation_fixed_step") -> None:
         delivered = self.sensors.sample(
             run_id=self.run_id,
             branch_id=self.branch_id,
             plant_epoch=self.plant_epoch,
-            tick_index=self.tick_index,
+            observation_tick_index=self.observation_tick_index,
+            physical_tick_index=self.tick_index,
             simulation_time_s=self.simulation_time_s,
             ownship=self.ownship,
             traffic=[(item.spec, item.state) for item in self.traffic],
             depth_m=self.scenario.depth_at(self.ownship.north_m, self.ownship.east_m),
             parameters=self.parameters,
             faults=self._active_faults(),
+            active_command=self.active_command,
+            controller_enabled=self.active_controller_enabled,
+            capture_clock=capture_clock,
         )
         self.observations.extend(delivered)
+        self.observation_cursor += len(delivered)
 
     def _margins(self) -> tuple[float, float, float]:
         own_polygon = hull_polygon(self.ownship, self.parameters.hull)
@@ -463,7 +507,7 @@ class AuthoritativeSimulator:
                 "recovery_feasible_sampled": None,
                 "mission_progress": {"distance_remaining_m": distance_remaining},
                 "path_increment_m": path_increment_m,
-                "active_authority": "gate" if self.protected else "evaluation_bypass",
+                "active_authority": self.active_command_authority,
                 "actual_actuator": {
                     "rudder_rad": self.ownship.rudder_rad,
                     "thrust_fraction": self.ownship.thrust_fraction,
@@ -493,11 +537,12 @@ class AuthoritativeSimulator:
             "contract_type": "SimulationSnapshot",
             "schema_version": "0.1.0",
             "snapshot_id": (
-                f"{self.run_id}:{self.branch_id}:epoch-{self.plant_epoch}:snapshot:{self.tick_index}"
+                f"{self.run_id}:{self.branch_id}:epoch-{self.plant_epoch}:snapshot:"
+                f"{self.observation_tick_index}"
             ),
             "run_id": self.run_id,
             "branch_id": self.branch_id,
-            "tick_index": self.tick_index,
+            "tick_index": self.observation_tick_index,
             "simulation_time_s": self.simulation_time_s,
             "frame": "NED",
             "ownship": {
@@ -561,6 +606,38 @@ class AuthoritativeSimulator:
 
     def observation_batch(self, after_sequence: int = -1) -> list[dict[str, Any]]:
         return [copy.deepcopy(item) for item in self.observations if item["sequence"] > after_sequence]
+
+    def observation_page(
+        self, *, after_cursor: int = 0, plant_epoch: int | None = None, limit: int = 512
+    ) -> dict[str, Any]:
+        """Bound delivery work without confusing independent sensor sequences.
+
+        Caller holds the runtime lock so the public context and page have one
+        epoch. This transport cursor never enters an observation's identity.
+        """
+        if after_cursor < 0 or not 1 <= limit <= 1024:
+            raise ValueError("cursor must be non-negative and page limit between 1 and 1024")
+        reset = plant_epoch is not None and plant_epoch != self.plant_epoch
+        if reset:
+            after_cursor = 0
+        if after_cursor > self.observation_cursor:
+            raise ValueError("cursor is ahead of the current plant epoch")
+        retained_start = self.observation_cursor - len(self.observations)
+        dropped = max(0, retained_start - after_cursor)
+        first = max(after_cursor, retained_start)
+        page = list(islice(self.observations, first - retained_start, first - retained_start + limit))
+        cursor = first + len(page)
+        return {
+            "plant_epoch": self.plant_epoch,
+            "cursor": cursor,
+            "cursor_reset": reset,
+            "cursor_lost": dropped > 0,
+            "dropped_observations": dropped,
+            "has_more": cursor < self.observation_cursor,
+            "observations": copy.deepcopy(page),
+            "snapshot": self.public_snapshot(),
+            "reference": self.public_reference(),
+        }
 
     def private_truth(self, *, token: str, after_tick: int = -1) -> list[dict[str, Any]]:
         self._require_evaluation(token)

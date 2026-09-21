@@ -1,0 +1,20 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S08",
+  "title": "AIS and radar disagreement",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "source_conflict.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A05 source-conflict fusion",
+    "A04 assurance/gate"
+  ],
+  "acceptance_condition": "The radar-supported closing contact remains constrained despite the AIS claim.",
+  "independent_verification": "pending_A08"
+}

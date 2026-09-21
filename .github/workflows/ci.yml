@@ -44,3 +44,14 @@ jobs:
           ./scripts/python.sh scripts/run_modal_job.py --reservation a07-wasrt-sequence-002
       - name: Start and stop the implemented CPU slice
         run: ./scripts/launch_cpu.sh --smoke-seconds 1
+      - name: Upload sanitized runtime diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-slice-diagnostics-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/horizon-runs/**/run.json
+            ${{ runner.temp }}/horizon-runs/**/logs/*.log
+          if-no-files-found: warn
+          include-hidden-files: false
+          retention-days: 7

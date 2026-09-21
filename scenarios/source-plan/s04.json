@@ -1,0 +1,20 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S04",
+  "title": "Overtaking and acceptable close pass",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "overtaking_recoverable.json",
+    "benign_close_pass.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A04 assurance/gate"
+  ],
+  "acceptance_condition": "Avoid collision while bounding intervention on the benign variant.",
+  "independent_verification": "pending_A08"
+}

@@ -88,6 +88,58 @@ def stop_all(processes: list[ManagedProcess]) -> None:
         item.log_handle.close()
 
 
+def monitor_processes(
+    processes: list[ManagedProcess],
+    status: dict[str, object],
+    run_file: Path,
+    *,
+    smoke_seconds: float,
+) -> None:
+    """Record component exits without taking healthy sibling processes down."""
+    deadline = time.monotonic() + smoke_seconds if smoke_seconds else None
+    recorded: set[str] = set()
+    while True:
+        for item in processes:
+            exit_code = item.process.poll()
+            if exit_code is None or item.name in recorded:
+                continue
+            recorded.add(item.name)
+            status["runtime_status"] = "degraded"
+            process_status = status["processes"]
+            assert isinstance(process_status, dict)
+            process_status[item.name] = {
+                "pid": item.process.pid,
+                "port": process_status[item.name]["port"],
+                "health": "exited",
+                "exit_code": exit_code,
+            }
+            failures = status.setdefault("component_failures", [])
+            assert isinstance(failures, list)
+            failures.append(
+                {
+                    "name": item.name,
+                    "exit_code": exit_code,
+                    "observed_utc": datetime.now(timezone.utc).isoformat(),
+                    "automatic_restart": False,
+                }
+            )
+            run_file.write_text(json.dumps(status, indent=2) + "\n")
+            print(
+                f"component {item.name} exited with code {exit_code}; "
+                "surviving components remain active (no automatic restart)",
+                flush=True,
+            )
+
+        if not any(item.process.poll() is None for item in processes):
+            return
+        if deadline is not None and time.monotonic() >= deadline:
+            return
+        wait_s = 0.5
+        if deadline is not None:
+            wait_s = min(wait_s, max(0.0, deadline - time.monotonic()))
+        time.sleep(wait_s)
+
+
 def post_json(url: str, value: dict[str, object]) -> tuple[int, dict[str, object]]:
     request = Request(
         url,
@@ -100,6 +152,100 @@ def post_json(url: str, value: dict[str, object]) -> tuple[int, dict[str, object
             return response.status, json.load(response)
     except HTTPError as exc:
         return exc.code, json.loads(exc.read())
+
+
+def _increment(counter: dict[str, int], value: object) -> None:
+    key = str(value) if value not in (None, "") else "unknown"
+    counter[key] = counter.get(key, 0) + 1
+
+
+def summarize_smoke_diagnostics(
+    snapshot: dict[str, object],
+    gate: dict[str, object],
+    assurance: dict[str, object],
+) -> dict[str, object]:
+    receipt_authorities: dict[str, int] = {}
+    receipt_reasons: dict[str, int] = {}
+    receipts = gate.get("receipts", [])
+    accepted_receipts = 0
+    for receipt in receipts[-200:] if isinstance(receipts, list) else []:
+        if not isinstance(receipt, dict):
+            continue
+        if receipt.get("accepted") is True:
+            accepted_receipts += 1
+        _increment(receipt_authorities, receipt.get("authority"))
+        for reason in receipt.get("reason_codes", []):
+            _increment(receipt_reasons, reason)
+
+    event_types: dict[str, int] = {}
+    event_reasons: dict[str, int] = {}
+    decision_actions: dict[str, int] = {}
+    events = assurance.get("control_events", [])
+    for event in events[-200:] if isinstance(events, list) else []:
+        if not isinstance(event, dict):
+            continue
+        _increment(event_types, event.get("event_type"))
+        for reason in event.get("reason_codes", []):
+            _increment(event_reasons, reason)
+        decision = event.get("decision")
+        if isinstance(decision, dict):
+            _increment(
+                decision_actions,
+                f"{decision.get('action', 'unknown')}:{decision.get('authority', 'unknown')}",
+            )
+            for reason in decision.get("reason_codes", []):
+                _increment(event_reasons, reason)
+
+    return {
+        "simulator": {
+            "run_id": snapshot.get("run_id"),
+            "branch_id": snapshot.get("branch_id"),
+            "tick_index": snapshot.get("tick_index"),
+            "active_command_id": snapshot.get("active_command_id"),
+        },
+        "gate": {
+            "epoch": gate.get("epoch"),
+            "last_tick": gate.get("last_tick"),
+            "quarantined": gate.get("quarantined"),
+            "startup_recovery_ready": gate.get("startup_recovery_ready"),
+            "receipt_count": len(receipts) if isinstance(receipts, list) else 0,
+            "accepted_receipt_count": accepted_receipts,
+            "receipt_authorities": receipt_authorities,
+            "receipt_reason_counts": receipt_reasons,
+        },
+        "assurance": {
+            "event_count": len(events) if isinstance(events, list) else 0,
+            "event_type_counts": event_types,
+            "event_reason_counts": event_reasons,
+            "decision_action_counts": decision_actions,
+        },
+    }
+
+
+def collect_smoke_diagnostics(host: str, ports: dict[str, int]) -> dict[str, object]:
+    payloads: dict[str, dict[str, object]] = {}
+    urls = {
+        "snapshot": f"http://{host}:{ports['simulator']}/v1/public/snapshot?branch=protected",
+        "gate": f"http://{host}:{ports['gate']}/v1/telemetry",
+        "assurance": f"http://{host}:{ports['assurance']}/v1/telemetry",
+    }
+    errors: dict[str, str] = {}
+    for name, url in urls.items():
+        try:
+            with urlopen(url, timeout=1.0) as response:
+                value = json.load(response)
+            if isinstance(value, dict):
+                payloads[name] = value
+        except (HTTPError, URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as exc:
+            errors[name] = type(exc).__name__
+    summary = summarize_smoke_diagnostics(
+        payloads.get("snapshot", {}),
+        payloads.get("gate", {}),
+        payloads.get("assurance", {}),
+    )
+    if errors:
+        summary["collection_errors"] = errors
+    return summary
 
 
 def verify_operator_reset(host: str, ports: dict[str, int]) -> dict[str, object]:
@@ -213,8 +359,8 @@ def verify_public_slice(
     if governor.get("contract_type") != "GovernorInput":
         raise RuntimeError("fusion did not produce a fresh GovernorInput")
 
-    evidence_url = f"http://{host}:{ports['assurance']}/v1/evidence/latest"
-    evidence: dict[str, object] = {}
+    assurance_telemetry_url = f"http://{host}:{ports['assurance']}/v1/telemetry"
+    gate_telemetry_url = f"http://{host}:{ports['gate']}/v1/telemetry"
     accepted_input: dict[str, object] = {}
     decision: dict[str, object] = {}
     receipt: dict[str, object] = {}
@@ -222,46 +368,83 @@ def verify_public_slice(
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         try:
-            with urlopen(evidence_url, timeout=0.5) as response:
-                evidence = json.load(response)
-        except HTTPError as exc:
-            if exc.code != 503:
-                raise
+            with urlopen(
+                f"http://{host}:{ports['simulator']}/v1/public/snapshot?branch=protected",
+                timeout=0.5,
+            ) as response:
+                response_snapshot = json.load(response)
+            with urlopen(gate_telemetry_url, timeout=0.5) as response:
+                gate_telemetry = json.load(response)
+            with urlopen(assurance_telemetry_url, timeout=0.5) as response:
+                assurance_telemetry = json.load(response)
+        except (HTTPError, URLError, TimeoutError, ConnectionError):
             time.sleep(0.02)
             continue
-        except (URLError, TimeoutError, ConnectionError):
+        active_command_id = response_snapshot.get("active_command_id")
+        gate_receipts = gate_telemetry.get("receipts", [])
+        events = assurance_telemetry.get("control_events", [])
+        if not isinstance(active_command_id, str) or not isinstance(gate_receipts, list):
             time.sleep(0.02)
             continue
-        accepted_input = evidence.get("governor_input", {})
-        decision = evidence.get("decision", {})
-        receipt = evidence.get("receipt", {})
+        matching_receipt = next(
+            (
+                item
+                for item in reversed(gate_receipts)
+                if isinstance(item, dict)
+                and item.get("command_id") == active_command_id
+                and item.get("accepted") is True
+            ),
+            None,
+        )
+        if matching_receipt is None or not isinstance(events, list):
+            time.sleep(0.02)
+            continue
+        matching_event = next(
+            (
+                item
+                for item in reversed(events)
+                if isinstance(item, dict)
+                and isinstance(item.get("receipt"), dict)
+                and item["receipt"].get("receipt_id") == matching_receipt.get("receipt_id")
+            ),
+            None,
+        )
+        if matching_event is None:
+            time.sleep(0.02)
+            continue
+        accepted_input = matching_event.get("input", matching_event.get("input_summary", {}))
+        decision = matching_event.get("decision", {})
+        receipt = matching_event.get("receipt", {})
         if not all(isinstance(item, dict) for item in (accepted_input, decision, receipt)):
-            raise RuntimeError("assurance evidence did not contain a joined control chain")
+            raise RuntimeError("assurance history did not contain an identity-checkable control chain")
+        input_snapshot = accepted_input.get("snapshot", {})
+        input_snapshot_id = (
+            input_snapshot.get("snapshot_id")
+            if isinstance(input_snapshot, dict)
+            else None
+        ) or accepted_input.get("snapshot_id")
+        proposal = accepted_input.get("proposal", {})
         if (
-            decision.get("input_snapshot_id")
-            != accepted_input.get("snapshot", {}).get("snapshot_id")
-            or decision.get("proposal_id")
-            != accepted_input.get("proposal", {}).get("command_id")
+            decision.get("input_snapshot_id") != input_snapshot_id
+            or not isinstance(proposal, dict)
+            or decision.get("proposal_id") != proposal.get("command_id")
             or receipt.get("decision_id") != decision.get("decision_id")
+            or receipt.get("command_id") != active_command_id
             or receipt.get("accepted") is not True
             or receipt.get("actuated_monotonic_ns") is None
             or not isinstance(receipt.get("actual_command"), dict)
+            or int(response_snapshot.get("tick_index", -1))
+            <= int(accepted_input.get("tick_index", -1))
         ):
-            raise RuntimeError("joined evidence was not an accepted, identity-matched plant command")
-        with urlopen(
-            f"http://{host}:{ports['simulator']}/v1/public/snapshot?branch=protected",
-            timeout=0.5,
-        ) as response:
-            response_snapshot = json.load(response)
-        if (
-            response_snapshot.get("active_command_id") == receipt.get("command_id")
-            and int(response_snapshot.get("tick_index", -1))
-            > int(accepted_input.get("tick_index", -1))
-        ):
-            break
-        time.sleep(0.02)
+            time.sleep(0.02)
+            continue
+        break
     else:
-        raise RuntimeError("no joined receipt matched the subsequent simulator command state")
+        diagnostics = collect_smoke_diagnostics(host, ports)
+        raise RuntimeError(
+            "no joined receipt matched the subsequent simulator command state; "
+            f"public_diagnostics={json.dumps(diagnostics, sort_keys=True)}"
+        )
     command_id = receipt["command_id"]
     actuator_after: dict[str, object] = {}
     deadline = time.monotonic() + 2.0
@@ -280,7 +463,12 @@ def verify_public_slice(
         time.sleep(0.02)
     if not actuator_after:
         raise RuntimeError("no later actuator observation followed the accepted plant command")
-    before_snapshot = accepted_input["snapshot"]
+    before_snapshot = accepted_input.get("snapshot")
+    if not isinstance(before_snapshot, dict):
+        before_snapshot = {
+            "ownship": accepted_input.get("ownship", {}),
+            "actuator": accepted_input.get("actuator", {}),
+        }
     after_snapshot = actuator_after["snapshot"]
     result = {
         "console_to_simulator": "passed",
@@ -442,6 +630,7 @@ def main() -> int:
         "repository_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "ports": ports,
         "unavailable": unavailable,
+        "runtime_status": "starting",
         "processes": {},
     }
     (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
@@ -477,22 +666,18 @@ def main() -> int:
         status["smoke_checks"] = verify_public_slice(
             host, ports, verify_reset=args.verify_reset
         )
+        status["runtime_status"] = "ready"
         (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
 
         print(f"Horizon run {run_id} ready: http://{host}:{ports['console']}", flush=True)
         for name, reason in unavailable.items():
             print(f"unavailable {name}: {reason}", flush=True)
-        if args.smoke_seconds:
-            time.sleep(args.smoke_seconds)
-        else:
-            while all(item.process.poll() is None for item in managed):
-                time.sleep(0.5)
-        failed = [item for item in managed if item.process.poll() is not None]
-        if failed:
-            detail = ", ".join(
-                f"{item.name}={item.process.returncode}" for item in failed
-            )
-            raise RuntimeError(f"local run component exited; no automatic restart: {detail}")
+        monitor_processes(
+            managed,
+            status,
+            run_dir / "run.json",
+            smoke_seconds=args.smoke_seconds,
+        )
     except KeyboardInterrupt:
         pass
     except Exception as exc:

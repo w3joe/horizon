@@ -1,0 +1,17 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S01",
+  "title": "Normal transit",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "normal_transit.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "simulator_executable",
+  "orchestrator_steps": [],
+  "dependencies": [],
+  "acceptance_condition": "Mission completion without unnecessary replacement.",
+  "independent_verification": "pending_A08"
+}

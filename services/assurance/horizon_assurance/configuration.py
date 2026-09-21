@@ -104,7 +104,7 @@ class AssuranceConfig:
     operating_mode_id: str = "radar-led-constrained-v1"
     required_health_sources: tuple[str, ...] = (
         "navigation_environment",
-        "obstacle_perception",
+        "obstacle_perception:radar",
         "ship_actuator_feedback",
         "internal_ship_communications",
         "decision_ai_telemetry",
@@ -125,6 +125,19 @@ class AssuranceConfig:
     recovery_hold_ticks: int = 3
     maximum_contact_age_s: float = 2.0
     maximum_command_speed_mps: float = 6.0
+    barrier_step_s: float = 2.0
+    barrier_decay_rate_per_s: float = 0.20
+    barrier_model_residual_m: float = 0.5
+    barrier_feasibility_tolerance_m: float = 1.0e-6
+    barrier_heading_cost_weight: float = 4.0
+    barrier_heading_offsets_rad: tuple[float, ...] = (
+        0.0,
+        math.radians(20.0),
+        math.radians(-20.0),
+        math.radians(35.0),
+        math.radians(-35.0),
+    )
+    barrier_speed_levels_mps: tuple[float, ...] = (0.0, 1.0, 2.0)
     ownship_draft_m: float = 1.0
     minimum_under_keel_clearance_m: float = 0.5
     ownship_odd_bound: EngineeringBound | None = field(

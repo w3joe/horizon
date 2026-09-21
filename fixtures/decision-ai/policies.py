@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from typing import Any
 
 
@@ -12,15 +13,28 @@ def _wrap(angle: float) -> float:
 
 
 class FixturePolicy:
-    def __init__(self, mode: str = "nominal", *, model_version: str | None = None):
-        if mode not in {"nominal", "unsafe_straight", "expired", "stale_lineage"}:
+    def __init__(
+        self,
+        mode: str = "nominal",
+        *,
+        model_version: str | None = None,
+        monotonic_ns: Callable[[], int] = time.monotonic_ns,
+    ):
+        if mode not in {
+            "nominal",
+            "unsafe_straight",
+            "expired",
+            "stale_lineage",
+            "malformed",
+        }:
             raise ValueError(f"unsupported fixture policy: {mode}")
         self.mode = mode
         self.model_version = model_version or f"decision-ai-fixture-{mode}-v1"
+        self._monotonic_ns = monotonic_ns
         self.sequence = 0
 
     def propose(self, snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        start_ns = time.monotonic_ns()
+        start_ns = self._monotonic_ns()
         ownship = snapshot["ownship"]
         heading = float(ownship["heading_rad"])
         speed = 4.0
@@ -64,7 +78,11 @@ class FixturePolicy:
             "command": {"heading_rad": heading, "speed_mps": speed},
             "inference_trace_id": trace_id,
         }
-        completed_ns = time.monotonic_ns()
+        if self.mode == "malformed":
+            # Deliberately violates ProposedCommand. The standalone service
+            # still returns JSON so boundary validation is exercised.
+            proposal["command"]["speed_mps"] = "six"
+        completed_ns = self._monotonic_ns()
         trace = {
             "contract_type": "AIInferenceTrace",
             "schema_version": "0.1.0",

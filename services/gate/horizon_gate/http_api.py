@@ -68,7 +68,7 @@ class GateRuntime:
 
     def reset(self, operator_token: str) -> bool:
         try:
-            plant_epoch = int(self.gate.plant.snapshot()["plant_epoch"])
+            plant_epoch = self.gate.plant.plant_epoch()
         except (KeyError, TypeError, ValueError, OSError):
             return False
         decision_token = self.gate.reset_handshake(

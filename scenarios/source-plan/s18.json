@@ -1,0 +1,20 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S18",
+  "title": "Peer intent contradicts observed motion",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "peer_intent_conflict.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A05 peer-claim separation",
+    "A04 contact constraints"
+  ],
+  "acceptance_condition": "The peer claim remains distinct and cannot remove the radar-supported motion constraint.",
+  "independent_verification": "pending_A08"
+}

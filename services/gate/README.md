@@ -57,6 +57,16 @@ that anchor with elapsed time since receipt to age authority data without
 mixing it with wall time or a browser-specific monotonic epoch. The field is
 public telemetry and contains no capability token or simulator truth.
 
+While the stored startup recovery remains eligible, status also exposes
+`startup_recovery_certificate` with its run, branch, decision, input snapshot,
+proposal, and plant-epoch identities plus `original_host_valid_until_ns`.
+The object becomes `null` at expiry, after an epoch change, or when its stored
+identity is inconsistent. Its expiry is the original host-monotonic ceiling;
+reading status never recomputes or extends it. An operator proxy can carry this
+public evidence identity to an atomic simulator resume request. The simulator
+must still validate the authenticated request's epoch and strict host expiry
+under the same lock that clears pause.
+
 Deterministic experiment harnesses should inject their
 `ManualMonotonicClock`, set `GateConfig(asynchronous_recovery_cache=False)`,
 prime recovery before the first protected command, and call `gate.close()` at
@@ -87,3 +97,11 @@ The gate checks the immutable ceiling on
 arrival, after command assessment, and immediately before plant dispatch using
 the same injected host monotonic clock. These checks never remap or renew an
 expired source timestamp.
+
+Normal and filtered autonomy also require exactly one current record for each
+configured required health source. Their original expiries cap authority even
+when the snapshot or proposal lasts longer. The gate independently checks this
+qualification. Validated recovery requires fresh independent sensor evidence;
+primary-AI telemetry and AI-consumption health are not prerequisites for that
+recovery. Missing radar coverage yields explicit minimum-risk behavior under
+unknown assurance, rather than a validated obstacle-free recovery claim.

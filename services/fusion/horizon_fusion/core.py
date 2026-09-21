@@ -22,6 +22,17 @@ INPUT_GROUPS = (
     "neural_sensor_internals",
 )
 
+# Engineering qualification threshold, not a calibrated probability bound.
+CONTACT_CLOCK_LIMIT_MS = 50.0
+
+
+def _contact_eligible(observation: dict[str, Any], now_ns: int) -> bool:
+    return (
+        int(observation["time"]["valid_until_monotonic_ns"]) >= now_ns
+        and observation.get("capability", "available") == "available"
+        and float(observation["time"]["clock_uncertainty_ms"]) <= CONTACT_CLOCK_LIMIT_MS
+    )
+
 
 class NotReady(RuntimeError):
     def __init__(self, reasons: list[str]):
@@ -194,6 +205,7 @@ class FusionEngine:
             observation
             for observation in self.latest_by_source.values()
             if observation.get("input_group") == "obstacle_perception"
+            and _contact_eligible(observation, now_ns)
         ]
         target_event_time = max(
             (float(item["time"]["event_time_s"]) for item in source_observations),
@@ -493,6 +505,34 @@ class FusionEngine:
                     "valid_until_monotonic_ns": valid,
                 }
             )
+        # Keep the complete group status above (including degraded AIS) visible.
+        # Radar-led assurance depends on the qualified radar source itself.
+        radar = next(
+            (item for item in group_sources["obstacle_perception"] if item["source_id"] == "radar"),
+            None,
+        )
+        radar_reasons: list[str] = []
+        if radar is None or int(radar["time"]["valid_until_monotonic_ns"]) < now_ns:
+            radar_status, radar_capability = "unknown", "unavailable"
+            radar_reasons.append("RADAR_MISSING_OR_STALE")
+        elif not _contact_eligible(radar, now_ns):
+            radar_status, radar_capability = "invalid", str(radar.get("capability", "available"))
+            if float(radar["time"]["clock_uncertainty_ms"]) > CONTACT_CLOCK_LIMIT_MS:
+                radar_reasons.append("CLOCK_UNCERTAINTY_HIGH")
+            if radar_capability != "available":
+                radar_reasons.append("SOURCE_CAPABILITY_NOT_AVAILABLE")
+        else:
+            radar_status, radar_capability = "healthy", "available"
+        records.append({
+            "health_id": f"{self.last_run_branch[0]}:{self.last_run_branch[1]}:health:{self.epoch}:obstacle_perception:radar:{self.last_tick}",
+            "source_id": "obstacle_perception:radar",
+            "status": radar_status,
+            "age_s": source_age(radar) if radar else 0.0,
+            "capability": radar_capability,
+            "reason_codes": radar_reasons,
+            "valid_until_monotonic_ns": int(radar["time"]["valid_until_monotonic_ns"]) if radar else now_ns,
+        })
+        statuses.append(radar_status)
         overall = "invalid" if "invalid" in statuses else ("degraded" if "degraded" in statuses else ("unknown" if "unknown" in statuses else "healthy"))
         self.health_records = records
         return records, overall
@@ -584,6 +624,9 @@ class FusionEngine:
             int(actuator["time"]["valid_until_monotonic_ns"]),
             int(normalized_proposal["expires_monotonic_ns"]),
         )
+        radar_health = next(item for item in health if item["source_id"] == "obstacle_perception:radar")
+        if radar_health["status"] == "healthy":
+            validity = min(validity, int(radar_health["valid_until_monotonic_ns"]))
         config_hash = canonical_sha256(self.reference)
         scenario = str(self.reference["scenario_id"])
         constraints = [

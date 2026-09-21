@@ -1,0 +1,20 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S07",
+  "title": "GNSS bias and dropout",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "navigation_fault.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A05 independent-source health",
+    "A04 assurance/gate"
+  ],
+  "acceptance_condition": "Bias is detected when independent evidence permits, or loss of assurance is explicit during dropout.",
+  "independent_verification": "pending_A08"
+}
