@@ -82,6 +82,34 @@ def ts_type(node: dict[str, Any]) -> str:
 
 def generate(schema: dict[str, Any]) -> tuple[str, str]:
     defs = schema["$defs"]
+    # Python aliases and TypedDict annotations are evaluated at import time.
+    # Emit referenced definitions first, regardless of JSON member order.
+    ordered: dict[str, Any] = {}
+    visiting: set[str] = set()
+
+    def references(node: Any):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                yield ref_name(node["$ref"])
+            for child in node.values():
+                yield from references(child)
+        elif isinstance(node, list):
+            for child in node:
+                yield from references(child)
+
+    def visit(name: str) -> None:
+        if name in ordered:
+            return
+        if name in visiting:
+            raise ValueError(f"recursive contract requires forward-reference support: {name}")
+        visiting.add(name)
+        for dependency in references(defs[name]):
+            visit(dependency)
+        visiting.remove(name)
+        ordered[name] = defs[name]
+
+    for name in defs:
+        visit(name)
     py = [
         '"""Generated from packages/contracts/schema/horizon.schema.json; do not edit."""',
         "",
@@ -89,7 +117,7 @@ def generate(schema: dict[str, Any]) -> tuple[str, str]:
         "",
     ]
     ts = ["// Generated from packages/contracts/schema/horizon.schema.json; do not edit.", ""]
-    for name, node in defs.items():
+    for name, node in ordered.items():
         if node.get("type") == "object" and "properties" in node:
             required = set(node.get("required", []))
             py.append(f"class {name}(TypedDict):")

@@ -329,6 +329,13 @@ class VesselSnapshot(TypedDict):
     angular_velocity_rp_rps: NotRequired[Vector2]
     hull: Hull
 
+class WaveComponent(TypedDict):
+    amplitude_m: float
+    wave_number_per_m: float
+    angular_frequency_rad_s: float
+    phase_rad: float
+    direction_rad: float
+
 class MarineEnvironment(TypedDict):
     model_version: str
     sea_state_id: str
@@ -342,13 +349,6 @@ class MarineEnvironment(TypedDict):
     wave_components: NotRequired[list[WaveComponent]]
     qualification: Literal['characterized', 'degraded', 'unknown']
     reason_codes: list[str]
-
-class WaveComponent(TypedDict):
-    amplitude_m: float
-    wave_number_per_m: float
-    angular_frequency_rad_s: float
-    phase_rad: float
-    direction_rad: float
 
 class SimulationSnapshot(TypedDict):
     contract_type: Literal['SimulationSnapshot']
