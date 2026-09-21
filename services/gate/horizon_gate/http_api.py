@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from socketserver import TCPServer
 import threading
 from typing import Any
 from urllib.request import urlopen
@@ -160,6 +161,11 @@ class GateHTTPServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], runtime: GateRuntime):
         self.runtime = runtime
         super().__init__(address, GateHandler)
+
+    def server_bind(self) -> None:
+        TCPServer.server_bind(self)
+        self.server_name = str(self.server_address[0])
+        self.server_port = int(self.server_address[1])
 
 
 def _public_reference(url: str) -> NavigationReference:

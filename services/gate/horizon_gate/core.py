@@ -370,6 +370,24 @@ class ActuatorGate:
             reasons.append("AUTHORITY_ACTION_MISMATCH")
         if action in {"recover", "minimum_risk"} and authority != "recovery":
             reasons.append("AUTHORITY_ACTION_MISMATCH")
+        if action == "minimum_risk" and isinstance(command, dict):
+            ownship = governor_input["snapshot"]["ownship"]
+            canonical = {
+                "heading_rad": float(ownship["heading_rad"]),
+                "speed_mps": min(
+                    1.0,
+                    max(0.0, float(ownship["velocity_body_mps"][0])),
+                ),
+            }
+            if set(command) != set(canonical) or any(
+                not isinstance(command.get(key), (int, float))
+                or isinstance(command.get(key), bool)
+                or not math.isclose(
+                    float(command[key]), expected, rel_tol=0.0, abs_tol=1e-12
+                )
+                for key, expected in canonical.items()
+            ):
+                reasons.append("NON_CANONICAL_MINIMUM_RISK_COMMAND")
         solver = decision.get("solver", {})
         if candidate_id in {"A4", "A5"} and action == "modify":
             if solver.get("status") != "optimal":
