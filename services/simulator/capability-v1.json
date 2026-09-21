@@ -1,0 +1,25 @@
+{
+  "capability_version": "synthetic-12m-3dof-v1",
+  "characterization": {
+    "speed_after_60s_at_4mps_command_mps": 4.000000000001701,
+    "stopping_distance_m": 17.119943938449353,
+    "stopping_from_speed_mps": 4.000000000001701,
+    "stopping_time_to_0_1mps_s": 12.019999999999833,
+    "turn_90deg_max_east_excursion_m": 129.22345325673544,
+    "turn_90deg_time_s": 38.92
+  },
+  "fixed_step_s": 0.02,
+  "frame": "NED; heading clockwise from north; body y starboard",
+  "hull": {
+    "beam_m": 3.0,
+    "draft_m": 1.0,
+    "length_m": 12.0
+  },
+  "limits": {
+    "current_bound_mps": 0.5,
+    "rudder_rad": 0.6108652381980153,
+    "rudder_rate_rps": 0.20943951023931956,
+    "speed_command_mps": 6.0
+  },
+  "qualification": "synthetic simulation assumption; not vessel-identified"
+}
