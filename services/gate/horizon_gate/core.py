@@ -51,7 +51,7 @@ class HTTPPlantClient:
                 "Authorization": f"Bearer {self._plant_token}",
             },
         )
-        with urlopen(request, timeout=1.0) as response:  # noqa: S310 - configured plant endpoint
+        with urlopen(request, timeout=0.1) as response:  # noqa: S310 - configured plant endpoint
             return json.load(response)
 
     def command(self, envelope: dict[str, Any]) -> dict[str, Any]:
@@ -103,8 +103,12 @@ class ActuatorGate:
         self.decision_token = decision_token or secrets.token_urlsafe(32)
         self.operator_token = operator_token or secrets.token_urlsafe(32)
         self.config = config or GateConfig()
-        self.checker = BoundedPredictiveChecker(reference, assurance_config)
+        gate_assurance_config = assurance_config or AssuranceConfig(
+            prediction_horizon_s=self.config.command_validity_s
+        )
+        self.checker = BoundedPredictiveChecker(reference, gate_assurance_config)
         self.lock = threading.RLock()
+        self.plant_lock = threading.Lock()
         self.receipts: list[dict[str, Any]] = []
         self.telemetry: list[dict[str, Any]] = []
         self.last_tick = -1
@@ -119,6 +123,53 @@ class ActuatorGate:
         self.clear_decisions = 0
         self.operator_acknowledged = False
         self.epoch = 0
+        self.control_generation = 0
+
+    def _schedule_recovery_cache(
+        self,
+        governor_input: dict[str, Any],
+        decision: dict[str, Any],
+        *,
+        epoch: int,
+    ) -> None:
+        source = copy.deepcopy(governor_input)
+        source_tick = int(source["tick_index"])
+
+        def worker() -> None:
+            selection = self.checker.recovery_from_current(source)
+            if not selection.assessment.safe or selection.command is None:
+                return
+            option_expiry = int(
+                (selection.option or {}).get(
+                    "valid_until_monotonic_ns", decision["expires_monotonic_ns"]
+                )
+            )
+            now = time.monotonic_ns()
+            valid_until = self._map_remote_expiry(
+                source, min(int(decision["expires_monotonic_ns"]), option_expiry), now
+            )
+            with self.lock:
+                if self.epoch != epoch or now >= valid_until or self.recovery_latched:
+                    return
+                current_tick = (
+                    int(self.stored_recovery.governor_input["tick_index"])
+                    if self.stored_recovery is not None
+                    else -1
+                )
+                if source_tick < current_tick:
+                    return
+                self.stored_recovery = StoredRecovery(
+                    command=copy.deepcopy(selection.command),
+                    host_valid_until_ns=valid_until,
+                    source_decision_id=str(decision["decision_id"]),
+                    governor_input=source,
+                )
+
+        threading.Thread(
+            target=worker,
+            name=f"gate-recovery-cache-{source_tick}",
+            daemon=True,
+        ).start()
 
     def _authorized(self, supplied: str, expected: str) -> bool:
         return bool(supplied) and secrets.compare_digest(supplied, expected)
@@ -177,10 +228,6 @@ class ActuatorGate:
             reasons.append("BRANCH_MISMATCH")
         if candidate_id not in self.config.allowed_candidates:
             reasons.append("UNAUTHORIZED_CANDIDATE")
-        tick = int(decision["tick_index"])
-        snapshot_id = str(decision["input_snapshot_id"])
-        if tick <= self.last_tick or snapshot_id in self.seen_snapshot_ids:
-            reasons.append("RESET_OR_REPLAY_DETECTED")
         if not _finite(decision):
             reasons.append("NON_FINITE_DECISION")
         if not bool(decision.get("valid")) or not bool(decision.get("deadline_met")):
@@ -219,7 +266,7 @@ class ActuatorGate:
             raise InputRejected(reasons)
         return self.checker.assess(governor_input, command)
 
-    def _actuate(
+    def _reserve_actuation(
         self,
         *,
         decision_id: str,
@@ -229,7 +276,7 @@ class ActuatorGate:
         reason_codes: list[str],
         assurance_status: str,
         now_ns: int,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         envelope = {
             "run_id": self.run_id,
             "branch_id": self.branch_id,
@@ -241,19 +288,26 @@ class ActuatorGate:
             "command": copy.deepcopy(command),
         }
         self.plant_sequence += 1
-        receipt = self.plant.command(envelope)
-        self.receipts.append(receipt)
-        self.telemetry.append(
-            {
-                "event_type": "gate_decision",
-                "epoch": self.epoch,
-                "host_monotonic_ns": now_ns,
-                "decision_id": decision_id,
-                "assurance_status": assurance_status,
-                "reason_codes": list(dict.fromkeys(reason_codes)),
-                "receipt": receipt,
-            }
-        )
+        self.control_generation += 1
+        event = {
+            "event_type": "gate_decision",
+            "epoch": self.epoch,
+            "host_monotonic_ns": now_ns,
+            "decision_id": decision_id,
+            "assurance_status": assurance_status,
+            "reason_codes": list(dict.fromkeys(reason_codes)),
+        }
+        return envelope, event
+
+    def _send_reserved(
+        self, envelope: dict[str, Any], event: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self.plant_lock:
+            receipt = self.plant.command(envelope)
+        with self.lock:
+            self.receipts.append(receipt)
+            event["receipt"] = receipt
+            self.telemetry.append(event)
         return receipt
 
     def submit(
@@ -265,37 +319,99 @@ class ActuatorGate:
         now_ns: int | None = None,
     ) -> dict[str, Any]:
         arrival = time.monotonic_ns() if now_ns is None else now_ns
+        clock = (lambda: time.monotonic_ns()) if now_ns is None else (lambda: now_ns)
         with self.lock:
             if not self._authorized(token, self.decision_token):
                 return self._local_rejection(decision, ["UNAUTHORIZED_SUPERVISOR"], arrival)
-            try:
-                assessment = self._validate_submission(decision, governor_input, arrival)
-            except InputRejected as exc:
+            start_epoch = self.epoch
+            start_generation = self.control_generation
+
+        try:
+            assessment = self._validate_submission(decision, governor_input, arrival)
+        except InputRejected as exc:
+            with self.lock:
                 self.invalid_count += 1
-                if "RESET_OR_REPLAY_DETECTED" in exc.reason_codes or self.invalid_count >= self.config.invalid_quarantine_threshold:
+                if self.invalid_count >= self.config.invalid_quarantine_threshold:
                     self.quarantined = True
                     self.quarantine_reasons.extend(exc.reason_codes)
                 return self._local_rejection(decision, list(exc.reason_codes), arrival)
 
-            self.invalid_count = 0
-            self.last_supervisor_host_ns = arrival
-            self.last_tick = int(decision["tick_index"])
-            self.seen_snapshot_ids.add(str(decision["input_snapshot_id"]))
+        with self.lock:
+            completion = clock()
+            sequence_reasons: list[str] = []
+            if self.epoch != start_epoch or self.control_generation != start_generation:
+                sequence_reasons.append("STALE_VALIDATION_COMPLETION")
+            if int(decision["tick_index"]) <= self.last_tick:
+                sequence_reasons.append("RESET_OR_REPLAY_DETECTED")
+            if str(decision["input_snapshot_id"]) in self.seen_snapshot_ids:
+                sequence_reasons.append("RESET_OR_REPLAY_DETECTED")
+            if completion >= int(decision["expires_monotonic_ns"]):
+                sequence_reasons.append("DECISION_EXPIRED_BEFORE_ACTUATION")
+            if sequence_reasons:
+                if "RESET_OR_REPLAY_DETECTED" in sequence_reasons:
+                    self.quarantined = True
+                    self.quarantine_reasons.extend(sequence_reasons)
+                return self._local_rejection(decision, sequence_reasons, completion)
+
             action = str(decision["action"])
+            original_action = action
             command = dict(decision["issued_command"])
             reasons = list(decision["reason_codes"])
             assurance_status = assessment.status
-
             if assessment.status != "safe" and action != "minimum_risk":
                 return self._local_rejection(
                     decision,
                     [*assessment.reason_codes, "FINAL_COMMAND_REVALIDATION_FAILED"],
-                    arrival,
+                    completion,
                 )
             if self.quarantined and action not in {"recover", "minimum_risk"}:
-                return self._local_rejection(decision, ["SOURCE_QUARANTINED"], arrival)
+                return self._local_rejection(decision, ["SOURCE_QUARANTINED"], completion)
+            proposed_clear_decisions = self.clear_decisions
+            substituted = False
+            if action == "pass" and self.recovery_latched:
+                proposed_clear_decisions += 1
+                if not (
+                    proposed_clear_decisions >= self.config.release_clear_decisions
+                    and self.operator_acknowledged
+                ):
+                    if self.stored_recovery and completion < self.stored_recovery.host_valid_until_ns:
+                        command = copy.deepcopy(self.stored_recovery.command)
+                        action = "recover"
+                        reasons.append("RECOVERY_RELEASE_HANDSHAKE_PENDING")
+                        substituted = True
+                    else:
+                        return self._local_rejection(
+                            decision, ["RECOVERY_RELEASE_HANDSHAKE_PENDING"], completion
+                        )
 
-            if action == "recover" and assessment.safe:
+        # A cached recovery selected after evaluating a different command must
+        # itself pass the complete checker against this input.
+        selected_assessment = (
+            self.checker.assess(governor_input, command) if substituted else assessment
+        )
+        with self.lock:
+            completion = clock()
+            stale_reasons: list[str] = []
+            if self.epoch != start_epoch or self.control_generation != start_generation:
+                stale_reasons.append("STALE_VALIDATION_COMPLETION")
+            if completion >= int(decision["expires_monotonic_ns"]):
+                stale_reasons.append("DECISION_EXPIRED_BEFORE_ACTUATION")
+            if int(decision["tick_index"]) <= self.last_tick:
+                stale_reasons.append("RESET_OR_REPLAY_DETECTED")
+            if stale_reasons:
+                return self._local_rejection(decision, stale_reasons, completion)
+            if selected_assessment.status != "safe" and action != "minimum_risk":
+                return self._local_rejection(
+                    decision,
+                    [*selected_assessment.reason_codes, "ACTUAL_COMMAND_REVALIDATION_FAILED"],
+                    completion,
+                )
+
+            self.invalid_count = 0
+            self.last_supervisor_host_ns = completion
+            self.last_tick = int(decision["tick_index"])
+            self.seen_snapshot_ids.add(str(decision["input_snapshot_id"]))
+            if original_action == "recover" and selected_assessment.safe:
                 remote_expiry = int(decision["expires_monotonic_ns"])
                 if decision.get("recovery") is not None:
                     remote_expiry = min(
@@ -304,7 +420,7 @@ class ActuatorGate:
                 self.stored_recovery = StoredRecovery(
                     command=copy.deepcopy(command),
                     host_valid_until_ns=self._map_remote_expiry(
-                        governor_input, remote_expiry, arrival
+                        governor_input, remote_expiry, completion
                     ),
                     source_decision_id=str(decision["decision_id"]),
                     governor_input=copy.deepcopy(governor_input),
@@ -312,115 +428,99 @@ class ActuatorGate:
                 self.recovery_latched = True
                 self.clear_decisions = 0
                 self.operator_acknowledged = False
-            elif action == "pass" and self.recovery_latched:
-                self.clear_decisions += 1
-                if not (
-                    self.clear_decisions >= self.config.release_clear_decisions
-                    and self.operator_acknowledged
-                ):
-                    if self.stored_recovery and arrival < self.stored_recovery.host_valid_until_ns:
-                        command = copy.deepcopy(self.stored_recovery.command)
-                        action = "recover"
-                        reasons.append("RECOVERY_RELEASE_HANDSHAKE_PENDING")
-                        assurance_status = "safe"
-                    else:
-                        return self._local_rejection(
-                            decision, ["RECOVERY_RELEASE_HANDSHAKE_PENDING"], arrival
-                        )
-                else:
+            elif original_action == "pass" and self.recovery_latched:
+                self.clear_decisions = proposed_clear_decisions
+                if action == "pass":
                     self.recovery_latched = False
                     self.stored_recovery = None
                     self.clear_decisions = 0
                     self.operator_acknowledged = False
 
-            if action in {"pass", "modify"} and not self.recovery_latched:
-                independent_recovery = self.checker.recovery_from_current(governor_input)
-                if independent_recovery.assessment.safe and independent_recovery.command is not None:
-                    option_expiry = int(
-                        (independent_recovery.option or {}).get(
-                            "valid_until_monotonic_ns", decision["expires_monotonic_ns"]
-                        )
-                    )
-                    self.stored_recovery = StoredRecovery(
-                        command=copy.deepcopy(independent_recovery.command),
-                        host_valid_until_ns=self._map_remote_expiry(
-                            governor_input,
-                            min(int(decision["expires_monotonic_ns"]), option_expiry),
-                            arrival,
-                        ),
-                        source_decision_id=str(decision["decision_id"]),
-                        governor_input=copy.deepcopy(governor_input),
-                    )
-                    reasons.append("INDEPENDENT_RECOVERY_CACHED")
-                else:
-                    reasons.append("NO_INDEPENDENT_RECOVERY_CACHED")
-
+            assurance_status = selected_assessment.status
             authority = {
                 "pass": "autonomy",
                 "modify": "filtered_autonomy",
                 "recover": "recovery",
                 "minimum_risk": "recovery",
             }[action]
-            return self._actuate(
+            envelope, event = self._reserve_actuation(
                 decision_id=str(decision["decision_id"]),
                 command=command,
                 authority=authority,
                 simulation_time_s=float(governor_input["simulation_time_s"]),
                 reason_codes=reasons,
                 assurance_status=assurance_status,
-                now_ns=arrival,
+                now_ns=completion,
             )
+            schedule_cache = original_action in {"pass", "modify"} and not self.recovery_latched
+            cache_epoch = self.epoch
+        receipt = self._send_reserved(envelope, event)
+        if schedule_cache and receipt.get("accepted"):
+            self._schedule_recovery_cache(
+                governor_input, decision, epoch=cache_epoch
+            )
+        return receipt
 
     def watchdog_tick(self, *, now_ns: int | None = None) -> dict[str, Any] | None:
         now = time.monotonic_ns() if now_ns is None else now_ns
         with self.lock:
             if now - self.last_supervisor_host_ns <= int(self.config.supervisor_timeout_s * 1e9):
                 return None
-            try:
-                simulation_time = float(self.plant.snapshot()["simulation_time_s"])
-            except Exception as exc:  # plant outage is visible and cannot be repaired by issuing a command
+            # Advancing the generation invalidates supervisor validations that
+            # began before watchdog takeover.
+            self.control_generation += 1
+            takeover_generation = self.control_generation
+            takeover_epoch = self.epoch
+            stored = copy.deepcopy(self.stored_recovery)
+            self.last_supervisor_host_ns = now
+        try:
+            simulation_time = float(self.plant.snapshot()["simulation_time_s"])
+        except Exception as exc:  # plant outage is visible and cannot be repaired by issuing a command
+            with self.lock:
                 self.telemetry.append(
                     {
                         "event_type": "watchdog",
-                        "epoch": self.epoch,
+                        "epoch": takeover_epoch,
                         "host_monotonic_ns": now,
                         "assurance_status": "unknown",
                         "reason_codes": ["PLANT_STATUS_UNAVAILABLE", type(exc).__name__],
                     }
                 )
-                self.last_supervisor_host_ns = now
-                return None
-            if self.stored_recovery and now < self.stored_recovery.host_valid_until_ns:
-                command = self.stored_recovery.command
-                reasons = ["SUPERVISOR_WATCHDOG", "STORED_VALIDATED_RECOVERY_CONTINUED"]
-                status = "safe"
-            else:
-                source = self.stored_recovery.governor_input if self.stored_recovery else None
-                if source is None:
+            return None
+        if stored and now < stored.host_valid_until_ns:
+            command = stored.command
+            reasons = ["SUPERVISOR_WATCHDOG", "STORED_VALIDATED_RECOVERY_CONTINUED"]
+            status = "safe"
+        else:
+            source = stored.governor_input if stored else None
+            if source is None:
+                with self.lock:
                     self.telemetry.append(
                         {
                             "event_type": "watchdog",
-                            "epoch": self.epoch,
+                            "epoch": takeover_epoch,
                             "host_monotonic_ns": now,
                             "assurance_status": "unknown",
                             "reason_codes": ["NO_STORED_RECOVERY", "NO_COMMAND_ISSUED"],
                         }
                     )
-                    self.last_supervisor_host_ns = now
-                    return None
-                own = source["snapshot"]["ownship"]
-                command = {
-                    "heading_rad": float(own["heading_rad"]),
-                    "speed_mps": min(1.0, max(0.0, float(own["velocity_body_mps"][0]))),
-                }
-                reasons = [
-                    "SUPERVISOR_WATCHDOG",
-                    "ASSURANCE_CERTIFICATE_EXPIRED",
-                    "MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE",
-                ]
-                status = "unknown"
-            self.last_supervisor_host_ns = now
-            return self._actuate(
+                return None
+            own = source["snapshot"]["ownship"]
+            command = {
+                "heading_rad": float(own["heading_rad"]),
+                "speed_mps": min(1.0, max(0.0, float(own["velocity_body_mps"][0]))),
+            }
+            reasons = [
+                "SUPERVISOR_WATCHDOG",
+                "ASSURANCE_CERTIFICATE_EXPIRED",
+                "MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE",
+            ]
+            status = "unknown"
+
+        with self.lock:
+            if self.epoch != takeover_epoch or self.control_generation != takeover_generation:
+                return None
+            envelope, event = self._reserve_actuation(
                 decision_id=f"watchdog:{self.epoch}:{now}",
                 command=command,
                 authority="gate_watchdog",
@@ -429,6 +529,7 @@ class ActuatorGate:
                 assurance_status=status,
                 now_ns=now,
             )
+        return self._send_reserved(envelope, event)
 
     def acknowledge_operator(self, *, token: str) -> bool:
         with self.lock:
@@ -442,6 +543,7 @@ class ActuatorGate:
             if not self._authorized(token, self.operator_token):
                 return None
             self.epoch += 1
+            self.control_generation += 1
             self.decision_token = secrets.token_urlsafe(32)
             self.last_tick = -1
             self.seen_snapshot_ids.clear()

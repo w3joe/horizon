@@ -6,6 +6,12 @@ decision submission but does not make it safe: the gate independently checks
 schema/identity, run and branch, monotonic tick sequence, origin snapshot,
 expiry, finite numerics, decision deadline, solver status, authority, and the
 final issued command against collision, boundary, depth, and actuator limits.
+The gate revalidates the command over its 400 ms plant-command validity window;
+the supervisor owns the declared 60 second predictive envelope. A complete
+60 second recovery-library check is cached asynchronously so plant I/O and the
+watchdog state lock remain bounded. Before that first cache is ready, a killed
+supervisor produces an explicit unknown/no-command watchdog event rather than
+a fabricated safe recovery.
 
 The watchdog uses host monotonic time, independent of accelerated or paused
 simulation time.  If supervisor output stops it continues the last complete,
@@ -31,4 +37,3 @@ PYTHONPATH=services/gate:services/assurance:services/simulator \
 
 Endpoints are `GET /health`, `GET /v1/telemetry`, `POST /v1/decision`,
 `POST /v1/operator/acknowledge`, and `POST /v1/operator/reset-handshake`.
-

@@ -26,6 +26,7 @@ class NavigationReference:
     model_version: str | None = None
     plant_parameters: dict[str, Any] | None = None
     disturbance_current_bound_mps: float | None = None
+    configuration_hash: str | None = None
 
     @classmethod
     def from_simulator_reference(cls, message: dict[str, Any]) -> "NavigationReference":
@@ -36,6 +37,9 @@ class NavigationReference:
         depth = message["depth_field"]
         depth_id = str(depth["depth_field_id"])
         version = f"{message['scenario_version']}:{message['model_version']}"
+        source_hash = hashlib.sha256(
+            json.dumps(message, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         return cls(
             reference_version=version,
             water_boundaries={
@@ -63,9 +67,12 @@ class NavigationReference:
             disturbance_current_bound_mps=float(
                 message.get("disturbance_bounds", {}).get("current_speed_mps", 0.0)
             ),
+            configuration_hash=source_hash,
         )
 
     def digest(self) -> str:
+        if self.configuration_hash is not None:
+            return self.configuration_hash
         payload = {
             "reference_version": self.reference_version,
             "water_boundaries": self.water_boundaries,

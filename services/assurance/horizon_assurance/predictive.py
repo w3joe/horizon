@@ -28,7 +28,13 @@ class RecoverySelection:
     assessment: Assessment
 
 
-def _bounded_radius(uncertainty: dict[str, Any], elapsed_s: float) -> tuple[float, str | None]:
+def _bounded_radius(
+    uncertainty: dict[str, Any],
+    elapsed_s: float,
+    *,
+    hull_radius_m: float,
+    heading_coupled_speed_mps: float = 0.0,
+) -> tuple[float, str | None]:
     bounded = uncertainty.get("bounded_error")
     if not isinstance(bounded, dict):
         return math.inf, None
@@ -36,7 +42,19 @@ def _bounded_radius(uncertainty: dict[str, Any], elapsed_s: float) -> tuple[floa
     speed = bounded.get("speed_mps")
     if not isinstance(position, (int, float)) or not isinstance(speed, (int, float)):
         return math.inf, None
-    radius = float(position) + max(0.0, elapsed_s) * float(speed)
+    heading = bounded.get("heading_rad")
+    if not isinstance(heading, (int, float)):
+        return math.inf, None
+    angle = min(math.pi, abs(float(heading)))
+    radius = (
+        float(position)
+        + max(0.0, elapsed_s) * float(speed)
+        + 2.0 * hull_radius_m * math.sin(angle / 2.0)
+        + 2.0
+        * max(0.0, elapsed_s)
+        * abs(heading_coupled_speed_mps)
+        * math.sin(angle / 2.0)
+    )
     return radius, str(bounded.get("assumption_id", "unspecified-bound"))
 
 
@@ -131,9 +149,10 @@ class BoundedPredictiveChecker:
         time_offset_s: float = 0.0,
     ) -> Assessment:
         from horizon_sim.geometry import (
+            convex_hull,
             hull_polygon,
-            signed_boundary_margin,
             signed_polygon_clearance,
+            signed_boundary_margin,
             swept_hulls_intersect,
         )
         from horizon_sim.model import Hull, VesselState
@@ -212,6 +231,8 @@ class BoundedPredictiveChecker:
 
         collision_evidence: dict[str, dict[str, Any]] = {}
         previous_own = None
+        previous_own_polygon = None
+        previous_inflation = None
         previous_contacts: dict[str, Any] = {}
         stride = max(1, round(0.1 / self._parameters(capability).fixed_step_s))
         sample_indexes = list(range(0, len(rollout), stride))
@@ -221,21 +242,34 @@ class BoundedPredictiveChecker:
             sample = rollout[sample_index]
             own_state = _state_from_sample(sample)
             elapsed = time_offset_s + sample["time_s"]
-            own_radius, own_assumption = _bounded_radius(own_uncertainty, elapsed)
+            own_hull_radius = math.hypot(own_hull.length_m, own_hull.beam_m) / 2.0
+            own_radius, own_assumption = _bounded_radius(
+                own_uncertainty,
+                elapsed,
+                hull_radius_m=own_hull_radius,
+                heading_coupled_speed_mps=self.config.maximum_command_speed_mps,
+            )
             if not math.isfinite(own_radius):
                 reasons.append("OWNSHIP_BOUND_UNAVAILABLE")
                 own_radius = math.inf
             inflation = own_radius + current_rate * elapsed
             own_polygon = hull_polygon(own_state, own_hull)
+            swept_own_polygon = (
+                convex_hull((*previous_own_polygon, *own_polygon))
+                if previous_own_polygon is not None
+                else own_polygon
+            )
+            swept_inflation = max(inflation, previous_inflation or inflation)
             for constraint in depth_constraints:
                 ref = str(constraint.get("geometry_ref"))
                 if ref not in self.reference.depth_fields_m:
                     continue
                 depth_m = self.reference.depth_fields_m[ref]
                 for _, polygon, zone_depth_m in self.reference.depth_zones.get(ref, ()):
-                    from horizon_sim.geometry import point_in_polygon
-
-                    if point_in_polygon((own_state.north_m, own_state.east_m), polygon):
+                    # A depth zone applies when the complete swept hull or its
+                    # bounded-error tube touches it. Center-point sampling can
+                    # otherwise miss a bow crossing or a between-sample pass.
+                    if signed_polygon_clearance(swept_own_polygon, polygon) <= swept_inflation:
                         depth_m = min(depth_m, zone_depth_m)
                 margin = (
                     depth_m
@@ -254,8 +288,8 @@ class BoundedPredictiveChecker:
                 if boundary is None:
                     continue
                 margin = (
-                    signed_boundary_margin(own_polygon, boundary)
-                    - inflation
+                    signed_boundary_margin(swept_own_polygon, boundary)
+                    - swept_inflation
                     - float(constraint["minimum_margin"])
                 )
                 record = evidence[constraint["constraint_id"]]
@@ -280,8 +314,13 @@ class BoundedPredictiveChecker:
                 contact_hull = Hull(
                     float(contact["hull"]["length_m"]), float(contact["hull"]["beam_m"])
                 )
+                contact_hull_radius = math.hypot(
+                    contact_hull.length_m, contact_hull.beam_m
+                ) / 2.0
                 contact_radius, contact_assumption = _bounded_radius(
-                    contact["uncertainty"], elapsed + float(contact["age_s"])
+                    contact["uncertainty"],
+                    elapsed + float(contact["age_s"]),
+                    hull_radius_m=contact_hull_radius,
                 )
                 if not math.isfinite(contact_radius):
                     reasons.append("CONTACT_BOUND_UNAVAILABLE")
@@ -322,6 +361,8 @@ class BoundedPredictiveChecker:
                     reasons.append("COLLISION_MARGIN_VIOLATION")
                 previous_contacts[contact_id] = contact_state
             previous_own = own_state
+            previous_own_polygon = own_polygon
+            previous_inflation = inflation
 
         rudder_low, rudder_high = map(float, capability["rudder_limits_rad"])
         thrust_low, thrust_high = map(float, capability["thrust_limits"])

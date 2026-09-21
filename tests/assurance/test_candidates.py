@@ -9,7 +9,8 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from horizon_assurance.candidates import A1ThresholdSimplex, A3PredictiveBounded
-from horizon_assurance.configuration import AssuranceConfig
+from horizon_assurance.configuration import AssuranceConfig, NavigationReference
+from horizon_assurance.predictive import BoundedPredictiveChecker
 from horizon_assurance.validation import InputRejected
 
 
@@ -86,6 +87,46 @@ def test_missed_supervisor_deadline_never_emits_actuation(reference, governor_in
     assert decision["issued_command"] is None
     assert not decision["valid"]
     assert "DECISION_DEADLINE_MISSED" in decision["reason_codes"]
+
+
+def test_heading_bound_inflates_hull_and_path_envelope(reference, governor_input) -> None:
+    message = copy.deepcopy(governor_input)
+    message["snapshot"]["contacts"][0]["position_ne_m"] = [30.0, 0.0]
+    message["snapshot"]["contacts"][0]["velocity_ne_mps"] = [0.0, 0.0]
+    checker = BoundedPredictiveChecker(reference, fast_config())
+    zero_heading = copy.deepcopy(message)
+    zero_heading["snapshot"]["ownship"]["uncertainty"]["bounded_error"]["heading_rad"] = 0.0
+    zero_heading["snapshot"]["contacts"][0]["uncertainty"]["bounded_error"]["heading_rad"] = 0.0
+    bounded_heading = copy.deepcopy(zero_heading)
+    bounded_heading["snapshot"]["ownship"]["uncertainty"]["bounded_error"]["heading_rad"] = 0.5
+    assert checker.assess(zero_heading, zero_heading["proposal"]["command"], horizon_s=0.0).safe
+    assessment = checker.assess(
+        bounded_heading, bounded_heading["proposal"]["command"], horizon_s=0.0
+    )
+    assert not assessment.safe
+    assert "COLLISION_MARGIN_VIOLATION" in assessment.reason_codes
+
+
+def test_long_hull_bow_overlap_with_shallow_zone_is_detected(reference, governor_input) -> None:
+    depth_reference = NavigationReference(
+        reference_version=reference.reference_version,
+        water_boundaries=reference.water_boundaries,
+        depth_fields_m=reference.depth_fields_m,
+        depth_uncertainty_m=reference.depth_uncertainty_m,
+        depth_zones={
+            "harbor-depth-v1": (
+                ("bow-shoal", ((5.0, -2.0), (8.0, -2.0), (8.0, 2.0), (5.0, 2.0)), 0.8),
+            )
+        },
+        model_version=reference.model_version,
+    )
+    message = copy.deepcopy(governor_input)
+    message["configuration_hash"] = depth_reference.digest()
+    assessment = BoundedPredictiveChecker(depth_reference, fast_config()).assess(
+        message, message["proposal"]["command"], horizon_s=0.0
+    )
+    assert not assessment.safe
+    assert "DEPTH_MARGIN_VIOLATION" in assessment.reason_codes
 
 
 def test_identity_expiry_nan_and_sequence_are_rejected(reference, governor_input) -> None:
