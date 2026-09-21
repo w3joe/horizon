@@ -7,6 +7,8 @@ import copy
 from dataclasses import asdict, dataclass, replace
 import math
 import secrets
+import time
+from collections.abc import Callable
 from typing import Any
 
 from .geometry import (
@@ -61,6 +63,8 @@ class AuthoritativeSimulator:
         parameters: PlantParameters | None = None,
         gate_token: str | None = None,
         evaluation_token: str | None = None,
+        monotonic_ns: Callable[[], int] | None = None,
+        maximum_host_command_validity_s: float = 2.0,
     ):
         self.scenario = scenario
         self.seed = int(seed)
@@ -73,10 +77,24 @@ class AuthoritativeSimulator:
         self.evaluation_token = evaluation_token or secrets.token_urlsafe(32)
         self._initial_gate_token = self.gate_token
         self._initial_evaluation_token = self.evaluation_token
-        self.reset()
+        self._monotonic_ns = monotonic_ns or time.monotonic_ns
+        self.maximum_host_command_validity_ns = round(maximum_host_command_validity_s * 1e9)
+        if self.maximum_host_command_validity_ns <= 0:
+            raise ValueError("maximum host command validity must be positive")
+        self.plant_epoch = 0
+        self.last_sequence = -1
+        self._initialized = False
+        self.reset(live=False)
 
-    def reset(self) -> None:
-        """Restore all physical, scheduler, queue, and random-stream state."""
+    def reset(self, *, live: bool = True) -> None:
+        """Restore model state and advance the live command epoch.
+
+        The plant sequence is deliberately preserved across live resets. The
+        epoch rejects delayed pre-reset requests even when their sequence was
+        never observed before the reset.
+        """
+        if live and self._initialized:
+            self.plant_epoch += 1
         self.tick_index = 0
         self.simulation_time_s = 0.0
         self.ownship = self.scenario.ownship.copy()
@@ -84,7 +102,7 @@ class AuthoritativeSimulator:
         self.parameters = self.base_parameters
         self.active_command = TargetCommand(self.ownship.heading_rad, self.ownship.surge_mps, "initial")
         self.active_command_expiry_s = math.inf
-        self.last_sequence = -1
+        self.active_command_host_expiry_ns: int | None = None
         self.receipts: list[dict[str, Any]] = []
         self.authority_transitions: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
@@ -99,6 +117,7 @@ class AuthoritativeSimulator:
         self.manual_faults: list[FaultSpec] = []
         self._sample_sensors()
         self._record_truth(0.0)
+        self._initialized = True
 
     def clone(self, branch_id: str, *, protected: bool | None = None) -> "AuthoritativeSimulator":
         """Clone every deterministic state component for a paired branch."""
@@ -128,25 +147,71 @@ class AuthoritativeSimulator:
 
     def submit_gate_command(self, envelope: dict[str, Any], *, token: str) -> dict[str, Any]:
         self._require_gate(token)
-        return self._accept_command(envelope, endpoint_authority="gate")
+        authenticated_ns = self._monotonic_ns()
+        return self._accept_command(
+            envelope,
+            endpoint_authority="gate",
+            received_monotonic_ns=authenticated_ns,
+            enforce_host_deadline=True,
+        )
 
-    def submit_counterfactual_command(self, envelope: dict[str, Any], *, token: str) -> dict[str, Any]:
+    def submit_counterfactual_command(
+        self,
+        envelope: dict[str, Any],
+        *,
+        token: str,
+        offline_monotonic_ns: int,
+    ) -> dict[str, Any]:
         self._require_evaluation(token)
         if self.protected:
             raise AuthorityError("counterfactual bypass is disabled on protected branches")
-        return self._accept_command(envelope, endpoint_authority="evaluation_bypass")
+        if isinstance(offline_monotonic_ns, bool) or not isinstance(offline_monotonic_ns, int):
+            raise ValueError("offline_monotonic_ns must be an explicit integer replay clock")
+        if offline_monotonic_ns < 0:
+            raise ValueError("offline_monotonic_ns must be nonnegative")
+        return self._accept_command(
+            envelope,
+            endpoint_authority="evaluation_bypass",
+            received_monotonic_ns=offline_monotonic_ns,
+            enforce_host_deadline=False,
+        )
 
-    def _accept_command(self, envelope: dict[str, Any], *, endpoint_authority: str) -> dict[str, Any]:
+    def _accept_command(
+        self,
+        envelope: dict[str, Any],
+        *,
+        endpoint_authority: str,
+        received_monotonic_ns: int,
+        enforce_host_deadline: bool,
+    ) -> dict[str, Any]:
         reason_codes: list[str] = []
         command = envelope.get("command") or {}
         sequence = envelope.get("sequence")
         expires_s = envelope.get("expires_simulation_time_s")
         if envelope.get("run_id") != self.run_id or envelope.get("branch_id") != self.branch_id:
             reason_codes.append("RUN_OR_BRANCH_MISMATCH")
-        if not isinstance(sequence, int) or sequence <= self.last_sequence:
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= self.last_sequence:
             reason_codes.append("NON_MONOTONIC_SEQUENCE")
-        if not isinstance(expires_s, (int, float)) or expires_s < self.simulation_time_s:
-            reason_codes.append("COMMAND_EXPIRED")
+        if not isinstance(expires_s, (int, float)) or isinstance(expires_s, bool):
+            reason_codes.append("MISSING_OR_INVALID_SIMULATION_DEADLINE")
+        elif not math.isfinite(expires_s) or expires_s <= self.simulation_time_s:
+            reason_codes.append("SIMULATION_DEADLINE_EXPIRED")
+        if enforce_host_deadline:
+            envelope_epoch = envelope.get("epoch")
+            if isinstance(envelope_epoch, bool) or not isinstance(envelope_epoch, int):
+                reason_codes.append("MISSING_OR_INVALID_PLANT_EPOCH")
+            elif envelope_epoch != self.plant_epoch:
+                reason_codes.append("STALE_PLANT_EPOCH")
+            host_expiry = envelope.get("expires_monotonic_ns")
+            if isinstance(host_expiry, bool) or not isinstance(host_expiry, int):
+                reason_codes.append("MISSING_OR_INVALID_HOST_DEADLINE")
+                host_expiry = None
+            elif host_expiry <= received_monotonic_ns:
+                reason_codes.append("HOST_DEADLINE_EXPIRED")
+            elif host_expiry > received_monotonic_ns + self.maximum_host_command_validity_ns:
+                reason_codes.append("HOST_DEADLINE_TOO_FAR")
+        else:
+            host_expiry = None
         heading = command.get("heading_rad")
         speed = command.get("speed_mps")
         if not isinstance(heading, (int, float)) or not math.isfinite(heading):
@@ -162,9 +227,16 @@ class AuthoritativeSimulator:
         accepted = not reason_codes
         command_id = str(envelope.get("command_id", "unknown"))
         actual_command: dict[str, Any] | None = None
+        mutation_ns = received_monotonic_ns
+        if accepted and enforce_host_deadline:
+            mutation_ns = self._monotonic_ns()
+            if host_expiry is None or mutation_ns >= host_expiry:
+                accepted = False
+                reason_codes.append("HOST_DEADLINE_EXPIRED_BEFORE_ACTUATION")
         if accepted:
             self.active_command = TargetCommand(wrap_angle(float(heading)), float(speed), command_id)
             self.active_command_expiry_s = float(expires_s)
+            self.active_command_host_expiry_ns = host_expiry
             self.last_sequence = sequence
             actual_command = {
                 "heading_rad": self.active_command.heading_rad,
@@ -172,11 +244,12 @@ class AuthoritativeSimulator:
             }
             if "trajectory_ne_m" in command:
                 actual_command["trajectory_ne_m"] = command["trajectory_ne_m"]
-        now_ns = round(self.simulation_time_s * 1e9)
         receipt = {
             "contract_type": "GateReceipt",
             "schema_version": "0.1.0",
-            "receipt_id": f"receipt:{self.branch_id}:{len(self.receipts)}",
+            "receipt_id": (
+                f"receipt:{self.branch_id}:epoch-{self.plant_epoch}:{len(self.receipts)}"
+            ),
             "run_id": self.run_id,
             "branch_id": self.branch_id,
             "decision_id": str(envelope.get("decision_id", "direct-gate-command")),
@@ -184,8 +257,8 @@ class AuthoritativeSimulator:
             "authority": authority,
             "accepted": accepted,
             "reason_codes": reason_codes,
-            "received_monotonic_ns": now_ns,
-            "actuated_monotonic_ns": now_ns if accepted else None,
+            "received_monotonic_ns": received_monotonic_ns,
+            "actuated_monotonic_ns": mutation_ns if accepted else None,
             "actual_command": actual_command,
         }
         self.receipts.append(receipt)
@@ -234,10 +307,13 @@ class AuthoritativeSimulator:
         for _ in range(steps):
             if self.simulation_time_s >= self.scenario.duration_s:
                 break
-            if self.simulation_time_s > self.active_command_expiry_s:
-                self.active_command = TargetCommand(
-                    self.ownship.heading_rad, 0.0, "plant-expiry-neutral"
-                )
+            if (
+                self.active_command_host_expiry_ns is not None
+                and self._monotonic_ns() >= self.active_command_host_expiry_ns
+            ):
+                self._expire_active_command("host_monotonic_deadline")
+            elif self.simulation_time_s >= self.active_command_expiry_s:
+                self._expire_active_command("simulation_deadline")
             previous_ownship = self.ownship.copy()
             previous_traffic = [item.state.copy() for item in self.traffic]
             self.parameters = self._fault_adjusted_parameters()
@@ -255,6 +331,15 @@ class AuthoritativeSimulator:
             self._detect_events(previous_ownship, previous_traffic)
             self._sample_sensors()
             self._record_truth(path_increment)
+
+    def _expire_active_command(self, reason: str) -> None:
+        expired_id = self.active_command.command_id
+        self.active_command = TargetCommand(
+            self.ownship.heading_rad, 0.0, f"plant-expiry-neutral:{reason}"
+        )
+        self.active_command_expiry_s = math.inf
+        self.active_command_host_expiry_ns = None
+        self._event("command_expired", {"reason": reason, "expired_command_id": expired_id})
 
     def _step_traffic(self) -> None:
         dt = self.parameters.fixed_step_s
@@ -304,7 +389,9 @@ class AuthoritativeSimulator:
     def _event(self, kind: str, details: dict[str, Any]) -> None:
         self.events.append(
             {
-                "event_id": f"{self.run_id}:{self.branch_id}:event:{len(self.events)}",
+                "event_id": (
+                    f"{self.run_id}:{self.branch_id}:epoch-{self.plant_epoch}:event:{len(self.events)}"
+                ),
                 "run_id": self.run_id,
                 "branch_id": self.branch_id,
                 "tick_index": self.tick_index,
@@ -318,6 +405,7 @@ class AuthoritativeSimulator:
         delivered = self.sensors.sample(
             run_id=self.run_id,
             branch_id=self.branch_id,
+            plant_epoch=self.plant_epoch,
             tick_index=self.tick_index,
             simulation_time_s=self.simulation_time_s,
             ownship=self.ownship,
@@ -404,7 +492,9 @@ class AuthoritativeSimulator:
         return {
             "contract_type": "SimulationSnapshot",
             "schema_version": "0.1.0",
-            "snapshot_id": f"{self.run_id}:{self.branch_id}:snapshot:{self.tick_index}",
+            "snapshot_id": (
+                f"{self.run_id}:{self.branch_id}:epoch-{self.plant_epoch}:snapshot:{self.tick_index}"
+            ),
             "run_id": self.run_id,
             "branch_id": self.branch_id,
             "tick_index": self.tick_index,

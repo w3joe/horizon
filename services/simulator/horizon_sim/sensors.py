@@ -92,6 +92,7 @@ class SensorSuite:
         *,
         run_id: str,
         branch_id: str,
+        plant_epoch: int,
         tick_index: int,
         simulation_time_s: float,
         ownship: VesselState,
@@ -126,7 +127,9 @@ class SensorSuite:
             observation = {
                 "contract_type": "Observation",
                 "schema_version": "0.1.0",
-                "observation_id": f"{run_id}:{branch_id}:{definition.source_id}:{sequence}",
+                "observation_id": (
+                    f"{run_id}:{branch_id}:epoch-{plant_epoch}:{definition.source_id}:{sequence}"
+                ),
                 "run_id": run_id,
                 "branch_id": branch_id,
                 "input_group": definition.input_group,

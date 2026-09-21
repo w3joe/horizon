@@ -294,6 +294,7 @@ class ActuatorGate:
             "command_id": f"{decision_id}:gate:{self.plant_sequence}",
             "authority": authority,
             "sequence": self.plant_sequence,
+            "epoch": self.epoch,
             "expires_simulation_time_s": simulation_time_s + self.config.command_validity_s,
             "expires_monotonic_ns": host_valid_until_ns,
             "command": copy.deepcopy(command),
