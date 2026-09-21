@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -335,8 +336,15 @@ def test_live_fusion_covariance_only_input_uses_explicit_eligible_assumptions() 
 
 @pytest.mark.parametrize("contact_count", [1, 12])
 def test_a3_deadline_aware_hazard_and_dense_cases_return_explicit_unknown(
-    reference, governor_input, contact_count
+    reference, governor_input, contact_count, monkeypatch
 ) -> None:
+    # Exercise exhaustion at a repeatable point. A scheduler-dependent timing
+    # assertion is not a deadline guarantee; actual latency is characterized
+    # separately, and late results must still fail closed in production.
+    ticks = iter(range(0, 1_000_000_000, 1_000_000))
+    clock = SimpleNamespace(monotonic_ns=lambda: next(ticks))
+    monkeypatch.setattr("horizon_assurance.candidates.time", clock)
+    monkeypatch.setattr("horizon_assurance.predictive.time", clock)
     message = copy.deepcopy(governor_input)
     own = message["snapshot"]["ownship"]["position_ne_m"]
     source = message["snapshot"]["contacts"][0]
