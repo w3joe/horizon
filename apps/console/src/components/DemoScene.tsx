@@ -29,15 +29,31 @@ function yaw(headingRad: number): number {
 const oceanVertex = /* glsl */ `
   uniform float uTime;
   varying float vHeight;
-  varying vec2 vUvSea;
+  varying vec3 vSeaNormal;
+  varying vec3 vSeaPosition;
   void main() {
     vec3 p = position;
-    float a = sin(p.x * 0.052 + uTime * 0.42) * 0.24;
-    float b = sin((p.x * 0.027 + p.y * 0.063) - uTime * 0.31) * 0.15;
-    float c = cos((p.x * -0.071 + p.y * 0.021) + uTime * 0.56) * 0.08;
-    p.z += a + b + c;
-    vHeight = a + b + c;
-    vUvSea = uv;
+    float phaseA = p.x * 0.044 + p.y * 0.019 + uTime * 0.34;
+    float phaseB = p.x * -0.025 + p.y * 0.058 - uTime * 0.27;
+    float phaseC = p.x * 0.076 + p.y * -0.049 + uTime * 0.43;
+    float phaseD = p.x * -0.091 + p.y * -0.022 - uTime * 0.51;
+    float a = sin(phaseA) * 0.18;
+    float b = sin(phaseB) * 0.11;
+    float c = sin(phaseC) * 0.055;
+    float d = sin(phaseD) * 0.035;
+    float height = a + b + c + d;
+    float dx = cos(phaseA) * 0.18 * 0.044
+      + cos(phaseB) * 0.11 * -0.025
+      + cos(phaseC) * 0.055 * 0.076
+      + cos(phaseD) * 0.035 * -0.091;
+    float dy = cos(phaseA) * 0.18 * 0.019
+      + cos(phaseB) * 0.11 * 0.058
+      + cos(phaseC) * 0.055 * -0.049
+      + cos(phaseD) * 0.035 * -0.022;
+    p.z += height;
+    vHeight = height;
+    vSeaNormal = normalize(normalMatrix * vec3(-dx, -dy, 1.0));
+    vSeaPosition = (modelMatrix * vec4(p, 1.0)).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }
 `;
@@ -47,14 +63,21 @@ const oceanFragment = /* glsl */ `
   uniform vec3 uShallow;
   uniform vec3 uAccent;
   varying float vHeight;
-  varying vec2 vUvSea;
+  varying vec3 vSeaNormal;
+  varying vec3 vSeaPosition;
   void main() {
-    float crest = smoothstep(0.24, 0.43, vHeight);
-    float glint = pow(max(0.0, sin((vUvSea.x + vUvSea.y) * 220.0)), 18.0) * 0.055;
-    vec3 color = mix(uDeep, uShallow, clamp(vHeight + 0.48, 0.0, 1.0));
-    color = mix(color, uAccent, crest * 0.34);
-    color += glint;
-    gl_FragColor = vec4(color, 0.975);
+    vec3 normal = normalize(vSeaNormal);
+    vec3 viewDirection = normalize(cameraPosition - vSeaPosition);
+    vec3 sunDirection = normalize(vec3(-0.42, 0.78, -0.46));
+    vec3 halfDirection = normalize(viewDirection + sunDirection);
+    float facing = clamp(dot(normal, viewDirection), 0.0, 1.0);
+    float fresnel = pow(1.0 - facing, 3.0);
+    float specular = pow(max(dot(normal, halfDirection), 0.0), 84.0) * 0.28;
+    float crest = smoothstep(0.19, 0.34, vHeight);
+    vec3 color = mix(uDeep, uShallow, clamp(0.48 + vHeight * 0.9, 0.0, 1.0));
+    color = mix(color, uAccent, crest * 0.12 + fresnel * 0.09);
+    color += vec3(0.92, 0.97, 0.98) * specular;
+    gl_FragColor = vec4(color, 0.985);
   }
 `;
 
@@ -154,7 +177,10 @@ function CameraDirector({ snapshot, trail, mode }: {
       const maxEast = Math.max(...points.map((point) => point.east));
       const center = ned((minNorth + maxNorth) / 2, (minEast + maxEast) / 2);
       const aspect = Math.max(size.width / Math.max(size.height, 1), 1);
-      const verticalSpan = Math.max(220, maxNorth - minNorth + 34, (maxEast - minEast + 34) / aspect);
+      const northSpan = maxNorth - minNorth;
+      const eastSpan = maxEast - minEast;
+      const padding = Math.max(14, Math.min(24, Math.max(northSpan, eastSpan) * 0.08));
+      const verticalSpan = Math.max(82, northSpan + padding * 2, (eastSpan + padding * 2) / aspect);
       camera.position.set(center[0], 245, center[2] + 0.01);
       camera.up.set(0, 0, -1);
       camera.lookAt(center[0], 0, center[2]);
@@ -313,10 +339,10 @@ function TrailWake({ trail, protectedBranch, playing }: {
   playing: boolean;
 }) {
   const geometry = useMemo(() => {
-    const points = trail.slice(-140).map((point) => new THREE.Vector3(...ned(point.north, point.east, 0.12)));
+    const points = trail.slice(-140).map((point) => new THREE.Vector3(...ned(point.north, point.east, 0.09)));
     if (points.length < 2) return null;
     const curve = new THREE.CatmullRomCurve3(points, false, "centripetal");
-    return new THREE.TubeGeometry(curve, Math.max(8, points.length * 2), 0.18, 5, false);
+    return new THREE.TubeGeometry(curve, Math.max(8, points.length * 2), 0.09, 5, false);
   }, [trail]);
   useEffect(() => () => geometry?.dispose(), [geometry]);
   if (!geometry) return null;
@@ -325,7 +351,7 @@ function TrailWake({ trail, protectedBranch, playing }: {
       <meshBasicMaterial
         color={protectedBranch ? "#bff9f3" : "#f4d2a8"}
         transparent
-        opacity={playing ? 0.43 : 0.31}
+        opacity={playing ? 0.3 : 0.23}
         depthWrite={false}
       />
     </mesh>
@@ -334,26 +360,33 @@ function TrailWake({ trail, protectedBranch, playing }: {
 
 function SternWake({ snapshot, branch }: Pick<DemoSceneProps, "snapshot" | "branch">) {
   const own = snapshot.ownship;
-  const position = ned(own.position_ne_m[0], own.position_ne_m[1], 0.11);
-  const geometry = useMemo(() => {
-    const result = new THREE.BufferGeometry();
-    result.setAttribute("position", new THREE.Float32BufferAttribute([
-      -1.1, 0, 4.5, 1.1, 0, 4.5, -4.0, 0, 22,
-      1.1, 0, 4.5, 4.0, 0, 22, -4.0, 0, 22,
-    ], 3));
-    return result;
-  }, []);
-  useEffect(() => () => geometry.dispose(), [geometry]);
+  const position = ned(own.position_ne_m[0], own.position_ne_m[1], 0.1);
+  const strength = THREE.MathUtils.clamp(own.speed_mps / 4.5, 0, 1);
+  if (strength < 0.06) return null;
+  const color = branch === "protected" ? "#d8ffff" : "#ffe5c5";
   return (
-    <mesh position={position} rotation-y={yaw(own.heading_rad)} geometry={geometry}>
-      <meshBasicMaterial
-        color={branch === "protected" ? "#d8ffff" : "#ffe5c5"}
-        transparent
-        opacity={0.2}
-        depthWrite={false}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
+    <group position={position} rotation-y={yaw(own.heading_rad)}>
+      {[5.4, 7.2, 9.4, 12].map((astern, index) => {
+        const width = 1.55 + index * 0.72;
+        return (
+          <mesh
+            key={astern}
+            position={[0, 0, astern]}
+            rotation-x={-Math.PI / 2}
+            scale={[width, 1 + index * 0.24, 1]}
+          >
+            <ringGeometry args={[0.62, 0.79, 28, 1, Math.PI * 0.12, Math.PI * 0.76]} />
+            <meshBasicMaterial
+              color={color}
+              transparent
+              opacity={strength * (0.2 - index * 0.034)}
+              depthWrite={false}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+        );
+      })}
+    </group>
   );
 }
 
@@ -413,9 +446,6 @@ function Scene({ snapshot, trail, timeS, branch, cameraMode, collision, interven
       <Traffic snapshot={snapshot} collision={collision} />
       {intervention && <InterventionMarker snapshot={snapshot} timeS={timeS} />}
       {collision && <CollisionMarker snapshot={snapshot} timeS={timeS} />}
-      {cameraMode === "tactical" && (
-        <gridHelper args={[240, 24, "#7cc8cb", "#47747c"]} position-y={0.08} />
-      )}
       <CameraDirector snapshot={snapshot} trail={trail} mode={cameraMode} />
     </>
   );
