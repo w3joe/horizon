@@ -17,14 +17,31 @@
       "device_kind": "mps",
       "fp16": false,
       "manifest_sha256": "8591eb97d9ae7dc0aedb83322d94b195e7af25075d8a67cd2fc36875452fa642",
-      "features_sha256": "6ecbf7bf663cc2899d712f8713d937b5ac8bcaacbd19a14bf351393f74e2cacb"
+      "features_sha256": "6ecbf7bf663cc2899d712f8713d937b5ac8bcaacbd19a14bf351393f74e2cacb",
+      "source_sha256": {
+        "health_features.py": "9f6a89a2d13f01929a6114034182fda5590fdcd84e97203153b57ac93e5180b4",
+        "instrumentation.py": "65217249915e568fc48e09188258a53d0bbd0bf17fe3e01b6cb56c5efbea3882",
+        "reproduce.py": "8c0bc4a62527d70f881742580d52957c7aaf6e5559cead60f055a42cd2e85b0e",
+        "runner.py": "52dc2025d5511ce9d331c57d8ee15713f2eae0d11e36af82003365ce2d43ac87"
+      }
     },
     "candidate": {
       "runtime_id": "wasrt-cuda-l4-fp16-v1",
       "device_kind": "cuda",
       "fp16": true,
-      "split_manifest_sha256": "45a116eeeeeb55e9a2e566327c6d6045a5f8682f8ad7c5a6260ef4eaf301b425"
+      "split_manifest_sha256": "45a116eeeeeb55e9a2e566327c6d6045a5f8682f8ad7c5a6260ef4eaf301b425",
+      "source_sha256": {
+        "health_features.py": "9f6a89a2d13f01929a6114034182fda5590fdcd84e97203153b57ac93e5180b4",
+        "instrumentation.py": "65217249915e568fc48e09188258a53d0bbd0bf17fe3e01b6cb56c5efbea3882",
+        "reproduce.py": "6c19647eb477db5ec1eb5b6b14a3afdd024f1534e4b12ec03e48634e5052fffc",
+        "runner.py": "52dc2025d5511ce9d331c57d8ee15713f2eae0d11e36af82003365ce2d43ac87"
+      }
     },
+    "shared_computation_sources": [
+      "health_features.py",
+      "instrumentation.py",
+      "runner.py"
+    ],
     "layers": {
       "encoder": {"statistics": ["pooled_mean", "pooled_standard_deviation"]},
       "temporal_fusion": {"statistics": ["pooled_mean", "pooled_standard_deviation"]},

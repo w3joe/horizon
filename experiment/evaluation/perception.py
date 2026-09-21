@@ -115,6 +115,10 @@ def _validate_drift_manifest(
     agreement = manifest.get("instrumentation_validation", {})
     _require(agreement.get("outputs_identical") is True, f"{arm} hooks changed outputs")
     _require(agreement.get("reset_reproducible") is True, f"{arm} reset replay differs")
+    expected_sources = arm_spec.get("source_sha256")
+    if expected_sources:
+        actual_sources = manifest.get("horizon_code", {}).get("source_sha256", {})
+        _require(actual_sources == expected_sources, f"{arm} extraction source hashes mismatch")
     if arm_spec.get("manifest_sha256"):
         _require(
             _sha256_file(manifest_path) == arm_spec["manifest_sha256"],
@@ -189,6 +193,13 @@ def compare_runtime_drift(
     _require(
         reference_manifest.get("input_sha256") == candidate_manifest.get("input_sha256"),
         "paired input hashes differ",
+    )
+    shared_computation_sources = config["drift"]["shared_computation_sources"]
+    reference_sources = reference_manifest["horizon_code"]["source_sha256"]
+    candidate_sources = candidate_manifest["horizon_code"]["source_sha256"]
+    _require(
+        all(reference_sources.get(name) == candidate_sources.get(name) for name in shared_computation_sources),
+        "paired computation source hashes differ",
     )
     reference_rows = _load_jsonl(reference_features_path)
     candidate_rows = _load_jsonl(candidate_features_path)

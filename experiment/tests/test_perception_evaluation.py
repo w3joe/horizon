@@ -50,6 +50,7 @@ def _drift_fixture(tmp_path: Path):
         "fp16": False,
         "input_sha256": inputs,
         "environment": {"preprocessing": {"sha256": preprocessing}},
+        "horizon_code": {"source_sha256": {"runner.py": "6" * 64}},
         "instrumentation_validation": {
             "outputs_identical": True,
             "reset_reproducible": True,
@@ -82,13 +83,16 @@ def _drift_fixture(tmp_path: Path):
                 "device_kind": "mps",
                 "fp16": False,
                 "manifest_sha256": hashlib.sha256(base_manifest_path.read_bytes()).hexdigest(),
+                "source_sha256": {"runner.py": "6" * 64},
             },
             "candidate": {
                 "runtime_id": "cuda-fp16",
                 "device_kind": "cuda",
                 "fp16": True,
                 "split_manifest_sha256": split_hash,
+                "source_sha256": {"runner.py": "6" * 64},
             },
+            "shared_computation_sources": ["runner.py"],
             "layers": {
                 "encoder": {"statistics": ["pooled_mean", "pooled_standard_deviation"]},
             },
