@@ -9,6 +9,8 @@ from typing import Sequence
 
 from experiment.errors import ExperimentError
 from experiment.evaluation.calibration import calibrate_threshold, require_calibration_split
+from experiment.evaluation.controller_evidence import assess_controller_evidence
+from experiment.evaluation.perception import calibrate_perception_methods, compare_runtime_drift
 from experiment.evaluation.reporting import summarize_records
 from experiment.harness.manifests import (
     expand_jobs,
@@ -23,6 +25,7 @@ EXPERIMENT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CAPABILITIES = EXPERIMENT_ROOT / "configs" / "capabilities.json"
 DEFAULT_SPLITS = EXPERIMENT_ROOT / "manifests" / "splits.json"
 DEFAULT_SMOKE = EXPERIMENT_ROOT / "manifests" / "smoke-study.json"
+DEFAULT_PERCEPTION_STAGE2 = EXPERIMENT_ROOT / "configs" / "perception-stage2.json"
 
 
 def _validate(args: argparse.Namespace) -> int:
@@ -107,6 +110,35 @@ def _summarize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_drift(args: argparse.Namespace) -> int:
+    report = compare_runtime_drift(
+        args.config,
+        args.reference_manifest,
+        args.reference_features,
+        args.candidate_manifest,
+        args.candidate_features,
+        args.reference_masks,
+        args.candidate_masks,
+    )
+    write_json(args.output, report)
+    print(json.dumps({"status": "ok", "artifact_hash": report["artifact_hash"]}, indent=2))
+    return 0
+
+
+def _perception_calibrate(args: argparse.Namespace) -> int:
+    report = calibrate_perception_methods(args.config, args.bundle)
+    write_json(args.output, report)
+    print(json.dumps({"status": "ok", "artifact_hash": report["artifact_hash"]}, indent=2))
+    return 0
+
+
+def _controller_evidence(args: argparse.Namespace) -> int:
+    report = assess_controller_evidence(args.index, args.selection_rule)
+    write_json(args.output, report)
+    print(json.dumps({"status": report["recommendation_status"]}, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Horizon paired experiment harness")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -149,6 +181,35 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("records", nargs="+")
     summarize.add_argument("--output", required=True)
     summarize.set_defaults(function=_summarize)
+
+    drift = subparsers.add_parser(
+        "perception-drift", help="compare paired development runtime feature artifacts"
+    )
+    drift.add_argument("--config", default=DEFAULT_PERCEPTION_STAGE2)
+    drift.add_argument("--reference-manifest", required=True)
+    drift.add_argument("--reference-features", required=True)
+    drift.add_argument("--candidate-manifest", required=True)
+    drift.add_argument("--candidate-features", required=True)
+    drift.add_argument("--reference-masks")
+    drift.add_argument("--candidate-masks")
+    drift.add_argument("--output", required=True)
+    drift.set_defaults(function=_perception_drift)
+
+    perception_calibrate = subparsers.add_parser(
+        "perception-calibrate", help="fit matched-FPR H0-H4 calibration thresholds"
+    )
+    perception_calibrate.add_argument("--config", default=DEFAULT_PERCEPTION_STAGE2)
+    perception_calibrate.add_argument("--bundle", required=True)
+    perception_calibrate.add_argument("--output", required=True)
+    perception_calibrate.set_defaults(function=_perception_calibrate)
+
+    controller = subparsers.add_parser(
+        "controller-evidence", help="check whether paired controller evidence supports selection"
+    )
+    controller.add_argument("--index", required=True)
+    controller.add_argument("--selection-rule", default=EXPERIMENT_ROOT / "configs" / "selection-rule.json")
+    controller.add_argument("--output", required=True)
+    controller.set_defaults(function=_controller_evidence)
     return parser
 
 

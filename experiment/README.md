@@ -18,6 +18,21 @@ PYTHONPATH=.:packages/contracts/python:services/assurance:services/gate:services
   --entrypoint experiment.harness.closed_loop:run_assured_episode \
   --run-id local-development --max-simulation-time-s 0.45 \
   --output ../horizon-runs/local-development
+
+PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment perception-drift \
+  --reference-manifest ../horizon-runs/compute/a07-modd2-dev-kope81-00006800/manifest.json \
+  --reference-features ../horizon-runs/compute/a07-modd2-dev-kope81-00006800/features.jsonl \
+  --candidate-manifest ../horizon-runs/compute/a07-modd2-dev-cuda-fp16/manifest.json \
+  --candidate-features ../horizon-runs/compute/a07-modd2-dev-cuda-fp16/features.jsonl \
+  --output ../horizon-runs/analysis/a02-perception-runtime-drift.json
+
+PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment perception-calibrate \
+  --bundle ../horizon-runs/calibration/perception-calibration-bundle.json \
+  --output ../horizon-runs/calibration/perception-calibration-report.json
+
+PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment controller-evidence \
+  --index ../horizon-runs/development/controller-study/index.json \
+  --output ../horizon-runs/development/controller-study/readiness.json
 ```
 
 `plan` refuses methods until the relevant production entrypoint is registered in
@@ -49,10 +64,17 @@ new timestamps.
 `harness.runner.run_adapter_jobs` checks complete response identity and provenance, refuses duplicate
 or overwritten jobs, and routes replay to response-only scoring or closed loop to truth scoring.
 
+The stage-2 commands enforce the frozen runtime/split identities in
+`configs/perception-stage2.json`. The drift command is descriptive development analysis. The
+calibration command rejects heldout observations, mismatched method arms, inconsistent labels, and
+unready H2-H4 artifacts. The controller command checks evidence completeness and returns no ranking.
+The detailed gates are in `protocol/perception-stage2.md`.
+
 The external data status is deliberately explicit:
 
 - MaSTr1325 is nominal/reference material with training overlap for published WaSR/WaSR-T weights. It is not held-out evidence.
 - The official MODS download is currently access-blocked through the available route. MODD2 must not be relabeled as the MODS benchmark.
-- A failed central preflight incurred USD 0.00515378 and produced no GPU evidence. A02 launched no
-  cloud compute. Central attempt 002 built its image but stopped before L4 activation because the
-  provider requires a payment method. It produced no GPU evidence, and no further launch is pending.
+- A failed central preflight incurred USD 0.00515378 and produced no GPU evidence. Attempt 002 built
+  its image but stopped before L4 activation. Centrally launched attempt 003 later completed all 85
+  integration frames on one NVIDIA L4 and was recovered without rerunning inference. This is bounded
+  integration and timing evidence, not calibration or heldout evidence. A02 launched no cloud compute.

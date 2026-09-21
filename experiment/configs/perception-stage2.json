@@ -1,0 +1,101 @@
+{
+  "schema_version": "horizon.perception-stage2-plan.v1",
+  "dataset": "MODD2_RAW",
+  "analysis_seed": 20260921,
+  "split_manifest_sha256": "45a116eeeeeb55e9a2e566327c6d6045a5f8682f8ad7c5a6260ef4eaf301b425",
+  "development_sequence_id": "kope81-00-00006800-00007095",
+  "development_frame_count": 296,
+  "target_runtime_id": "wasrt-cuda-l4-fp16-v1",
+  "model": {
+    "source_commit": "1b5360af20408e09bbf0116a0029f7e0c0800e7c",
+    "weights_sha256": "6e70dd6583a984e6a10ceeb5c42ac8f00c6f45d6e3ed41605e4e85a9797954ef",
+    "preprocessing_sha256": "2056a83b36de33f4a8a123150cfe067238029934890bd625e4073333a90a2886"
+  },
+  "drift": {
+    "reference": {
+      "runtime_id": "wasrt-mps-fp32-development-v1",
+      "device_kind": "mps",
+      "fp16": false,
+      "manifest_sha256": "8591eb97d9ae7dc0aedb83322d94b195e7af25075d8a67cd2fc36875452fa642",
+      "features_sha256": "6ecbf7bf663cc2899d712f8713d937b5ac8bcaacbd19a14bf351393f74e2cacb"
+    },
+    "candidate": {
+      "runtime_id": "wasrt-cuda-l4-fp16-v1",
+      "device_kind": "cuda",
+      "fp16": true,
+      "split_manifest_sha256": "45a116eeeeeb55e9a2e566327c6d6045a5f8682f8ad7c5a6260ef4eaf301b425"
+    },
+    "layers": {
+      "encoder": {"statistics": ["pooled_mean", "pooled_standard_deviation"]},
+      "temporal_fusion": {"statistics": ["pooled_mean", "pooled_standard_deviation"]},
+      "decoder_logits": {"statistics": ["pooled_mean", "pooled_standard_deviation"]}
+    },
+    "output_health_fields": [
+      "entropy_mean",
+      "entropy_p95",
+      "confidence_mean",
+      "confidence_p05",
+      "predicted_obstacle_fraction"
+    ]
+  },
+  "calibration_collection_groups": ["kope67", "kope75"],
+  "calibration_sequences": [
+    "kope67-00-00004500-00005050",
+    "kope67-00-00025200-00025670",
+    "kope67-00-00027400-00027650",
+    "kope67-00-00040950-00041190",
+    "kope67-00-00060561-00061461",
+    "kope67-00-00061851-00062671",
+    "kope67-00-00062671-00063461",
+    "kope67-00-00067272-00067942",
+    "kope67-00-00074432-00074612",
+    "kope75-00-00013780-00014195",
+    "kope75-00-00021500-00022160",
+    "kope75-00-00037550-00037860",
+    "kope75-00-00062200-00062500"
+  ],
+  "calibration_frame_count": 6568,
+  "calibration_sequence_frame_counts": {
+    "kope67-00-00004500-00005050": 551,
+    "kope67-00-00025200-00025670": 471,
+    "kope67-00-00027400-00027650": 251,
+    "kope67-00-00040950-00041190": 241,
+    "kope67-00-00060561-00061461": 901,
+    "kope67-00-00061851-00062671": 821,
+    "kope67-00-00062671-00063461": 791,
+    "kope67-00-00067272-00067942": 671,
+    "kope67-00-00074432-00074612": 181,
+    "kope75-00-00013780-00014195": 416,
+    "kope75-00-00021500-00022160": 661,
+    "kope75-00-00037550-00037860": 311,
+    "kope75-00-00062200-00062500": 301
+  },
+  "max_false_alarm_rate": 0.05,
+  "require_complete_perturbation_set": true,
+  "label_policy": {
+    "id": "horizon-modd2-bbox-zero-obstacle-pixel-proxy-v1",
+    "annotation_semantics": "MODD2 RAW MATLAB one-based inclusive bounding boxes",
+    "miss_definition": "a frame is missed when any finite annotated obstacle box contains zero predicted class-0 pixels after source-to-mask coordinate projection",
+    "empty_annotation_definition": "not missed",
+    "official_metric": false,
+    "known_bias": "any obstacle pixel inside a box counts as detection, so this proxy can undercount misses"
+  },
+  "controlled_perturbations": [
+    {"id": "blur-v1", "seed": 4101, "parameters": {"gaussian_sigma_px": 1.5}},
+    {"id": "underexposure-v1", "seed": 4102, "parameters": {"linear_gain": 0.4}},
+    {"id": "occlusion-v1", "seed": 4103, "parameters": {"area_fraction": 0.2, "placement": "seeded_uniform"}},
+    {"id": "jpeg-v1", "seed": 4104, "parameters": {"quality": 35}},
+    {"id": "temporal-drop-v1", "seed": 4105, "parameters": {"drop_every_n": 5}}
+  ],
+  "h4_claim_gate": {
+    "minimum_pairs": 12,
+    "minimum_sequences": 3,
+    "minimum_seeds": 3,
+    "minimum_win_fraction": 0.75,
+    "maximum_sign_test_p": 0.05
+  },
+  "heldout": {
+    "collection_groups": ["kope71", "kope82"],
+    "status": "sealed_until_runtime_references_calibration_artifacts_overlap_audit_and_selection_rule_are_frozen"
+  }
+}
