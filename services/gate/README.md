@@ -6,6 +6,9 @@ decision submission but does not make it safe: the gate independently checks
 schema/identity, run and branch, monotonic tick sequence, origin snapshot,
 expiry, finite numerics, decision deadline, solver status, authority, and the
 final issued command against collision, boundary, depth, and actuator limits.
+Decision flags use their exact schema types; strings such as `"false"` are
+rejected rather than interpreted by Python truthiness. Malformed authenticated
+submissions produce a rejection receipt and never reach the plant.
 The gate revalidates the command over its 400 ms plant-command validity window;
 the supervisor owns the declared 60 second predictive envelope. A complete
 60 second recovery-library check is cached asynchronously so plant I/O and the
@@ -76,3 +79,11 @@ eligibility. It is distinct from the command expiry enforced by the gate and
 plant receiver. The current 40 ms decision budget is therefore not a claim
 that plant actuation completes within 40 ms; end-to-end timing is reported from
 the actual gate receipt and plant actuation timestamps.
+
+A decision cannot extend the lifetime of its evidence. Its expiry must be no
+later than the snapshot and proposal expiry, and no later than its recovery
+certificate when one is present. A `recover` action requires that certificate.
+The gate checks the immutable ceiling on
+arrival, after command assessment, and immediately before plant dispatch using
+the same injected host monotonic clock. These checks never remap or renew an
+expired source timestamp.
