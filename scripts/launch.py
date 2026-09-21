@@ -271,6 +271,10 @@ def verify_public_slice(
     decision: dict[str, object] = {}
     receipt: dict[str, object] = {}
     response_snapshot: dict[str, object] = {}
+    evidence_by_command: dict[
+        str, tuple[dict[str, object], dict[str, object], dict[str, object]]
+    ] = {}
+    snapshots_by_command: dict[str, dict[str, object]] = {}
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         try:
@@ -300,18 +304,36 @@ def verify_public_slice(
             or not isinstance(receipt.get("actual_command"), dict)
         ):
             raise RuntimeError("joined evidence was not an accepted, identity-matched plant command")
+        command_id = str(receipt.get("command_id", ""))
+        if command_id:
+            evidence_by_command[command_id] = (accepted_input, decision, receipt)
         with urlopen(
             f"http://{host}:{ports['simulator']}/v1/public/snapshot?branch=protected",
             timeout=0.5,
         ) as response:
             response_snapshot = json.load(response)
-        if (
-            response_snapshot.get("active_command_id") == receipt.get("command_id")
-            and int(response_snapshot.get("tick_index", -1))
-            > int(accepted_input.get("tick_index", -1))
-        ):
+        active_command_id = response_snapshot.get("active_command_id")
+        if isinstance(active_command_id, str):
+            snapshots_by_command[active_command_id] = response_snapshot
+        matching_ids = evidence_by_command.keys() & snapshots_by_command.keys()
+        for matching_id in reversed(evidence_by_command):
+            if matching_id not in matching_ids:
+                continue
+            candidate_input, candidate_decision, candidate_receipt = evidence_by_command[matching_id]
+            candidate_snapshot = snapshots_by_command[matching_id]
+            if int(candidate_snapshot.get("tick_index", -1)) <= int(
+                candidate_input.get("tick_index", -1)
+            ):
+                continue
+            accepted_input = candidate_input
+            decision = candidate_decision
+            receipt = candidate_receipt
+            response_snapshot = candidate_snapshot
             break
-        time.sleep(0.02)
+        else:
+            time.sleep(0.02)
+            continue
+        break
     else:
         raise RuntimeError("no joined receipt matched the subsequent simulator command state")
     command_id = receipt["command_id"]
