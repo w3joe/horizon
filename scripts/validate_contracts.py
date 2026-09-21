@@ -14,13 +14,32 @@ FIXTURES = ROOT / "packages/contracts/fixtures"
 
 
 def semantic_checks(value: dict) -> None:
-    if value["contract_type"] == "GovernorInput":
-        assert value["decision_deadline_monotonic_ns"] > value["monotonic_time_ns"]
-        assert value["proposal"]["expires_monotonic_ns"] > value["proposal"]["issued_monotonic_ns"]
+    if value["contract_type"] in {"GovernorInput", "RecoveryInput"}:
         for target in [value["snapshot"]["ownship"], *value["snapshot"]["contacts"]]:
             matrix = target["uncertainty"]["covariance"]
             if matrix is not None:
                 assert len(matrix["data"]) == matrix["rows"] * matrix["cols"]
+    if value["contract_type"] == "GovernorInput":
+        assert value["decision_deadline_monotonic_ns"] > value["monotonic_time_ns"]
+        assert value["proposal"]["expires_monotonic_ns"] > value["proposal"]["issued_monotonic_ns"]
+    if value["contract_type"] == "RecoveryInput":
+        assert "proposal" not in value, "independent recovery must not synthesize AI lineage"
+        now = value["monotonic_time_ns"]
+        deadline = value["recovery_deadline_monotonic_ns"]
+        source_expiries = [
+            value["snapshot"]["valid_until_monotonic_ns"],
+            *(item["valid_until_monotonic_ns"] for item in value["health"]["summaries"]),
+            *(item["valid_until_monotonic_ns"] for item in value["recovery_options"]),
+        ]
+        assert deadline > now
+        assert source_expiries and min(source_expiries) > now
+        assert deadline <= min(source_expiries)
+        source_ids = {item["source_id"] for item in value["health"]["summaries"]}
+        assert {
+            "navigation_environment",
+            "obstacle_perception:radar",
+            "ship_actuator_feedback",
+        } <= source_ids
     if value["contract_type"] == "AssuranceDecision":
         assert value["expires_monotonic_ns"] >= value["decided_monotonic_ns"]
         assert value["valid"] or value["issued_command"] is None
