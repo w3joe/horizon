@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DataFlowView } from "./components/DataFlowView";
+import { DemoExperience } from "./components/DemoExperience";
 import { EvidencePanel } from "./components/EvidencePanel";
 import { MaritimeScene } from "./components/MaritimeScene";
 import { NeuralView } from "./components/NeuralView";
@@ -10,6 +11,7 @@ import { useOperatorControls } from "./hooks/useOperatorControls";
 import { usePerceptionArtifact } from "./hooks/usePerceptionArtifact";
 import { SCENARIOS } from "./lib/fixtures";
 import type { CameraMode, ScenarioId, Workspace } from "./types";
+import "./styles/demo.css";
 
 const DURATION_S = 60;
 
@@ -18,6 +20,20 @@ function HorizonMark() {
 }
 
 export function App() {
+  const [experience, setExperience] = useState<"demo" | "live">("demo");
+
+  return (
+    <>
+      <nav className="experience-switcher" aria-label="Console experience">
+        <button type="button" aria-pressed={experience === "demo"} onClick={() => setExperience("demo")}>Guided demo</button>
+        <button type="button" aria-pressed={experience === "live"} onClick={() => setExperience("live")}>Live console</button>
+      </nav>
+      {experience === "demo" ? <DemoExperience /> : <LiveConsole />}
+    </>
+  );
+}
+
+function LiveConsole() {
   const [workspace, setWorkspace] = useState<Workspace>("navigation");
   const [scenarioId, setScenarioId] = useState<ScenarioId>("camera");
   const [cameraMode, setCameraMode] = useState<CameraMode>("oblique");
