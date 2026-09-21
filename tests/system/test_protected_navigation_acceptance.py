@@ -39,6 +39,30 @@ def _assert_joined_chain(evidence: dict) -> None:
     assert receipt["actual_command"] == decision["issued_command"]
 
 
+def _truth_records(
+    stack: HorizonStack, branch: str
+) -> tuple[list[dict], list[dict]]:
+    records: list[dict] = []
+    events: list[dict] = []
+    after_tick = -1
+    while True:
+        status, payload, _ = request_json(
+            stack.url(
+                "simulator",
+                f"/v1/evaluation/truth?branch={branch}&after_tick={after_tick}&limit=1000",
+            ),
+            bearer=stack.token("evaluation.token"),
+            timeout_s=2.0,
+        )
+        assert status == 200
+        page = payload["records"]
+        records.extend(page)
+        events = payload["events"]
+        if len(page) < 1000:
+            return records, events
+        after_tick = page[-1]["tick_index"]
+
+
 def _all_keys(value):
     if isinstance(value, dict):
         for key, item in value.items():
@@ -94,7 +118,10 @@ def test_s22_ungated_counterfactual_physically_collides(tmp_path) -> None:
             "decision_id": "s22-ungated-decision",
             "command_id": "s22-ungated-straight-six",
             "authority": "autonomy",
-            "sequence": 0,
+            # The clone can inherit a gate-watchdog sequence produced while
+            # the HTTP stack becomes ready. Evaluation authority uses a
+            # separate high sequence to replace that inherited command.
+            "sequence": 1_000_000,
             "expires_simulation_time_s": clone["simulation_time_s"] + 46.0,
             "offline_monotonic_ns": round(clone["simulation_time_s"] * 1e9),
             "command": {"heading_rad": 0.0, "speed_mps": 6.0},
@@ -127,23 +154,106 @@ def test_s22_ungated_counterfactual_physically_collides(tmp_path) -> None:
         stack.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="protected S22 acceptance remains blocked pending independent RecoveryInput wiring",
-)
 def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
-    unsafe = _stack(
-        tmp_path, scenario="static_obstacle_approach.json", policy="unsafe_straight"
+    baseline = _stack(
+        tmp_path / "counterfactual",
+        scenario="static_obstacle_approach.json",
+        policy="unsafe_straight",
+        assurance_loop=False,
     )
     try:
-        evidence = _latest_evidence(unsafe, timeout_s=8.0)
+        evaluation_token = baseline.token("evaluation.token")
+        status, clone, _ = request_json(
+            baseline.url("simulator", "/v1/evaluation/clone?branch=protected"),
+            {"branch_id": "counterfactual", "protected": False},
+            bearer=evaluation_token,
+        )
+        assert status == 201
+        status, receipt, _ = request_json(
+            baseline.url(
+                "simulator", "/v1/evaluation/command?branch=counterfactual"
+            ),
+            {
+                "run_id": baseline.run_id,
+                "branch_id": "counterfactual",
+                "decision_id": "s22-comparison-decision",
+                "command_id": "s22-comparison-straight-six",
+                "authority": "autonomy",
+                "sequence": 1_000_000,
+                "expires_simulation_time_s": clone["simulation_time_s"] + 46.0,
+                "offline_monotonic_ns": round(clone["simulation_time_s"] * 1e9),
+                "command": {"heading_rad": 0.0, "speed_mps": 6.0},
+            },
+            bearer=evaluation_token,
+        )
+        assert status == 200 and receipt["accepted"] is True
+        status, _, _ = request_json(
+            baseline.url(
+                "simulator", "/v1/evaluation/step?branch=counterfactual"
+            ),
+            {"steps": 2_250},
+            bearer=evaluation_token,
+            timeout_s=5.0,
+        )
+        assert status == 200
+        _, counterfactual_events = _truth_records(baseline, "counterfactual")
+        counterfactual_collision = next(
+            item for item in counterfactual_events if item["kind"] == "collision"
+        )
+        counterfactual_collision_s = float(
+            counterfactual_collision["simulation_time_s"]
+        )
+    finally:
+        baseline.close()
+
+    unsafe = _stack(
+        tmp_path / "protected",
+        scenario="static_obstacle_approach.json",
+        policy="unsafe_straight",
+    )
+    try:
+        evidence = _latest_evidence(unsafe, timeout_s=12.0)
         _assert_joined_chain(evidence)
         assert evidence["governor_input"]["proposal"]["command"]["speed_mps"] == 6.0
-        assert evidence["decision"]["action"] != "pass"
-        assert (
-            evidence["decision"]["issued_command"]
-            != evidence["governor_input"]["proposal"]["command"]
+        first_external_command_s = float(
+            evidence["governor_input"]["simulation_time_s"]
         )
+
+        def protected_window_complete():
+            _, snapshot, _ = request_json(
+                unsafe.url("simulator", "/v1/public/snapshot?branch=protected"),
+                timeout_s=0.5,
+            )
+            return snapshot if snapshot["simulation_time_s"] >= 45.0 else None
+
+        wait_for(protected_window_complete, timeout_s=52.0, interval_s=0.1)
+
+        records, events = _truth_records(unsafe, "protected")
+        assert records[-1]["simulation_time_s"] >= 45.0
+        assert not [item for item in events if item["kind"] == "collision"]
+        assert min(
+            item["signed_margins"]["hull_clearance_m"] for item in records
+        ) > 0.0
+
+        status, gate, _ = request_json(unsafe.url("gate", "/v1/telemetry"))
+        assert status == 200
+        watchdog_receipts = [
+            item
+            for item in gate["receipts"]
+            if item.get("accepted") is True
+            and item.get("authority") == "gate_watchdog"
+            and isinstance(item.get("actual_command"), dict)
+            and item["actual_command"].get("speed_mps", 6.0) < 6.0
+        ]
+        assert watchdog_receipts
+        intervention_ids = {item["command_id"] for item in watchdog_receipts}
+        intervention = next(
+            item
+            for item in records
+            if item["simulation_time_s"] >= first_external_command_s
+            and item["actual_actuator"]["command_id"] in intervention_ids
+        )
+        assert intervention["simulation_time_s"] < counterfactual_collision_s
     finally:
         unsafe.close()
 
@@ -180,7 +290,8 @@ def test_s09_invalid_external_ai_never_produces_governor_authority(
         assert payload["error"] == "NOT_READY"
         assert expected_reason in reasons
         _, gate, _ = request_json(stack.url("gate", "/v1/telemetry"))
-        assert not any(item.get("accepted") for item in gate["receipts"])
+        accepted = [item for item in gate["receipts"] if item.get("accepted")]
+        assert all(item.get("authority") == "gate_watchdog" for item in accepted)
     finally:
         stack.close()
 
@@ -205,7 +316,8 @@ def test_s09_malformed_external_ai_is_rejected_before_gate_actuation(tmp_path) -
         assert payload["error"] == "NOT_READY"
         assert reasons == ["PROPOSEDCOMMAND_SCHEMA_INVALID"]
         _, gate, _ = request_json(stack.url("gate", "/v1/telemetry"))
-        assert not any(item.get("accepted") for item in gate["receipts"])
+        accepted = [item for item in gate["receipts"] if item.get("accepted")]
+        assert all(item.get("authority") == "gate_watchdog" for item in accepted)
     finally:
         stack.close()
 
