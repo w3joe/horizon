@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1.0",
+  "safety_gate": {
+    "preventable_violations_allowed": 0,
+    "unsafe_or_stale_gate_acceptances_allowed": 0,
+    "undefined_timeout_or_infeasibility_behavior_allowed": false
+  },
+  "runtime_gate": {
+    "deadline_misses_allowed_in_declared_acceptance_load": 0
+  },
+  "ranking": {
+    "method": "pareto",
+    "axes": ["mission_cost", "false_intervention_rate", "safety_margin", "intervention_lead_time"],
+    "tie_break": "simplest_surviving_architecture"
+  },
+  "health_rule": {
+    "matched_false_alarm_rate_required": true,
+    "H4_requires_heldout_improvement_over": ["H1", "H2", "H3"],
+    "include_compute_and_false_alarm_cost": true
+  }
+}

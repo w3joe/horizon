@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1.0",
+  "provider": "modal",
+  "pricing_snapshot_date": "2026-09-21",
+  "rates_usd_per_hour": {
+    "l4_gpu": 0.8,
+    "cpu_core": 0.0473,
+    "memory_gib": 0.008
+  },
+  "total_budget_usd": 100.0,
+  "protected_reserve_usd": 20.0,
+  "maximum_usable_budget_usd": 80.0,
+  "maximum_concurrent_l4": 10,
+  "status": "not_launched",
+  "spent_usd": 0.0,
+  "required_job_limits": ["wall_clock", "attempt_count", "container_count", "dollar_estimate"],
+  "notes": [
+    "GPU-only arithmetic gives at most 100 usable L4-hours, but every launch cap must use all-in GPU, CPU, and memory cost.",
+    "Preserve the USD 20 reserve until the complete pipeline has run once.",
+    "No provisioning or spend is authorized by this manifest."
+  ]
+}
