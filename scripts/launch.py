@@ -154,6 +154,100 @@ def post_json(url: str, value: dict[str, object]) -> tuple[int, dict[str, object
         return exc.code, json.loads(exc.read())
 
 
+def _increment(counter: dict[str, int], value: object) -> None:
+    key = str(value) if value not in (None, "") else "unknown"
+    counter[key] = counter.get(key, 0) + 1
+
+
+def summarize_smoke_diagnostics(
+    snapshot: dict[str, object],
+    gate: dict[str, object],
+    assurance: dict[str, object],
+) -> dict[str, object]:
+    receipt_authorities: dict[str, int] = {}
+    receipt_reasons: dict[str, int] = {}
+    receipts = gate.get("receipts", [])
+    accepted_receipts = 0
+    for receipt in receipts[-200:] if isinstance(receipts, list) else []:
+        if not isinstance(receipt, dict):
+            continue
+        if receipt.get("accepted") is True:
+            accepted_receipts += 1
+        _increment(receipt_authorities, receipt.get("authority"))
+        for reason in receipt.get("reason_codes", []):
+            _increment(receipt_reasons, reason)
+
+    event_types: dict[str, int] = {}
+    event_reasons: dict[str, int] = {}
+    decision_actions: dict[str, int] = {}
+    events = assurance.get("control_events", [])
+    for event in events[-200:] if isinstance(events, list) else []:
+        if not isinstance(event, dict):
+            continue
+        _increment(event_types, event.get("event_type"))
+        for reason in event.get("reason_codes", []):
+            _increment(event_reasons, reason)
+        decision = event.get("decision")
+        if isinstance(decision, dict):
+            _increment(
+                decision_actions,
+                f"{decision.get('action', 'unknown')}:{decision.get('authority', 'unknown')}",
+            )
+            for reason in decision.get("reason_codes", []):
+                _increment(event_reasons, reason)
+
+    return {
+        "simulator": {
+            "run_id": snapshot.get("run_id"),
+            "branch_id": snapshot.get("branch_id"),
+            "tick_index": snapshot.get("tick_index"),
+            "active_command_id": snapshot.get("active_command_id"),
+        },
+        "gate": {
+            "epoch": gate.get("epoch"),
+            "last_tick": gate.get("last_tick"),
+            "quarantined": gate.get("quarantined"),
+            "startup_recovery_ready": gate.get("startup_recovery_ready"),
+            "receipt_count": len(receipts) if isinstance(receipts, list) else 0,
+            "accepted_receipt_count": accepted_receipts,
+            "receipt_authorities": receipt_authorities,
+            "receipt_reason_counts": receipt_reasons,
+        },
+        "assurance": {
+            "event_count": len(events) if isinstance(events, list) else 0,
+            "event_type_counts": event_types,
+            "event_reason_counts": event_reasons,
+            "decision_action_counts": decision_actions,
+        },
+    }
+
+
+def collect_smoke_diagnostics(host: str, ports: dict[str, int]) -> dict[str, object]:
+    payloads: dict[str, dict[str, object]] = {}
+    urls = {
+        "snapshot": f"http://{host}:{ports['simulator']}/v1/public/snapshot?branch=protected",
+        "gate": f"http://{host}:{ports['gate']}/v1/telemetry",
+        "assurance": f"http://{host}:{ports['assurance']}/v1/telemetry",
+    }
+    errors: dict[str, str] = {}
+    for name, url in urls.items():
+        try:
+            with urlopen(url, timeout=1.0) as response:
+                value = json.load(response)
+            if isinstance(value, dict):
+                payloads[name] = value
+        except (HTTPError, URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as exc:
+            errors[name] = type(exc).__name__
+    summary = summarize_smoke_diagnostics(
+        payloads.get("snapshot", {}),
+        payloads.get("gate", {}),
+        payloads.get("assurance", {}),
+    )
+    if errors:
+        summary["collection_errors"] = errors
+    return summary
+
+
 def verify_operator_reset(host: str, ports: dict[str, int]) -> dict[str, object]:
     console = f"http://{host}:{ports['console']}"
     with urlopen(f"{console}/api/operator/capabilities", timeout=2.0) as response:
@@ -346,7 +440,11 @@ def verify_public_slice(
             continue
         break
     else:
-        raise RuntimeError("no joined receipt matched the subsequent simulator command state")
+        diagnostics = collect_smoke_diagnostics(host, ports)
+        raise RuntimeError(
+            "no joined receipt matched the subsequent simulator command state; "
+            f"public_diagnostics={json.dumps(diagnostics, sort_keys=True)}"
+        )
     command_id = receipt["command_id"]
     actuator_after: dict[str, object] = {}
     deadline = time.monotonic() + 2.0
