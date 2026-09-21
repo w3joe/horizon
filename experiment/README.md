@@ -21,8 +21,10 @@ PYTHONPATH=.:packages/contracts/python:services/assurance:services/gate:services
 ```
 
 `plan` refuses methods until the relevant production entrypoint is registered in
-`configs/capabilities.json`. A missing algorithm is never substituted or aliased. A1/A3 and the
-H0-H4 entrypoint scaffolds are registered; A2/A4/A5 remain unsupported in this packet. Generated
+`configs/capabilities.json`. A missing algorithm is never substituted or aliased. A1-A5 and H0-H4
+are registered as distinct implementations. A2 remains an uncalibrated analytic Gaussian trigger;
+A4 remains a provisional kinematic velocity-space QP followed by full 3-DOF rollout validation.
+Neither label is upgraded by registration. Generated
 runs belong under the external sibling `horizon-runs/`; datasets, weights, activation caches, and
 raw traces belong under `horizon-data/`.
 
@@ -33,8 +35,17 @@ The held-out template declares 1,200 final episodes and at least 30 paired seeds
 The harness consumes the shared `GovernorInput`, `AssuranceDecision`, `RunManifest`, and `EvaluationRecord` contracts from `packages/contracts`. Evaluation truth and fault labels go only to the independent scorer. Production simulation is supplied by A03 through a run adapter; this directory contains no parallel vessel dynamics.
 
 `experiment.harness.closed_loop:run_assured_episode` joins A03 simulation, A05 collection/fusion,
-A04 A1/A3 evaluation, and the A04 gate. It builds control input only from public observations.
-Private simulator truth is read after the run for scoring and separate assumption audits.
+A04 A1-A5 evaluation, and the A04 gate. It builds control input only from public observations and
+consumes live fusion source health. `H_FIXED` fixes the experimental neural-health input for
+controller isolation; it does not turn stale or unavailable required sources healthy. Private
+simulator truth is read after the run for scoring and separate assumption audits.
+
+The offline runner injects one manual monotonic clock into simulation, decision AI, and gate. AI
+time is a declared deterministic model; candidate, recovery-prime, gate, and watchdog work advances
+the same clock by measured host duration. The recovery cache is synchronous and joined at episode
+exit. AI proposals and governor evaluations currently run at 5 Hz while the plant and watchdog run
+at 50 Hz. No 20 Hz fresh-state assurance claim is made, and old proposals are never reissued with
+new timestamps.
 `harness.runner.run_adapter_jobs` checks complete response identity and provenance, refuses duplicate
 or overwritten jobs, and routes replay to response-only scoring or closed loop to truth scoring.
 
