@@ -5,18 +5,21 @@ This service implements the common
 fixed CPA/TCPA and operating-limit monitor with Simplex switching. A2 uses a
 projected Gaussian collision-risk approximation and Simplex recovery. A3 is a
 finite, bounded engineering rollout with a complete checked recovery
-continuation. A4 is a provisional kinematic velocity filter followed by full
-3DOF rollout validation. A5 conditions explicit engineering bounds and speed
+continuation. A4 is a nonlinear discrete plant-map barrier search followed by
+full 3DOF rollout validation. `A4-VQP` preserves the earlier provisional
+kinematic velocity-QP baseline under its original version. A5 conditions explicit engineering bounds and speed
 limits on required health evidence, then combines predictive recoverability
 with the A4 filter. The implementations are distinct plugins.
 
-A4 does not yet have a validated plant-to-kinematic tracking-error bound. Its
-QP residuals establish only that the selected velocity satisfies the finite
-kinematic optimization to numerical tolerance. The QP is not a control
-barrier certificate for the 3DOF plant. Every selected command is therefore
-checked again with the full plant rollout, and A4 remains a provisional
-engineering candidate. A finite rollout is not exact reachability and does
-not prove a formal safety property.
+A4 propagates target heading and speed through the eight-state plant, low-level
+PID, actuator lag, saturation, and live actuator limits. Its finite lattice
+enforces a discrete endpoint barrier inequality with declared state bounds and
+a configured model-residual reserve. Every selected command is checked again
+with the full plant rollout. The residual reserve has not been validated as a
+physical worst-case bound, the endpoint condition is not a sampled-data
+invariance proof, and a finite rollout is not exact reachability. The complete
+derivation, solver semantics, research differences, and claim limits are in
+[`docs/a4-discrete-plant-barrier.md`](docs/a4-discrete-plant-barrier.md).
 
 The service consumes only estimated state, declared uncertainty, actuator
 feedback, health summaries, and a versioned public navigation reference.  It

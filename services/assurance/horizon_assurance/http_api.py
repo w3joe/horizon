@@ -29,7 +29,7 @@ class AssuranceRuntime:
         self.config = config or AssuranceConfig()
         self.candidates: dict[str, Candidate] = {
             candidate_id: candidate(candidate_id, reference, self.config)
-            for candidate_id in ("A1", "A2", "A3", "A4", "A5")
+            for candidate_id in ("A1", "A2", "A3", "A4", "A4-VQP", "A5")
         }
         self.decisions: deque[dict[str, Any]] = deque(maxlen=2_000)
         self.control_events: deque[dict[str, Any]] = deque(maxlen=2_000)
@@ -215,7 +215,9 @@ def main() -> None:
     parser.add_argument("--fusion-url")
     parser.add_argument("--gate-url", default="http://127.0.0.1:8102")
     parser.add_argument(
-        "--candidate", choices=("A1", "A2", "A3", "A4", "A5"), default="A1"
+        "--candidate",
+        choices=("A1", "A2", "A3", "A4", "A4-VQP", "A5"),
+        default="A1",
     )
     parser.add_argument("--gate-decision-token-file")
     parser.add_argument("--gate-operator-token-file")
