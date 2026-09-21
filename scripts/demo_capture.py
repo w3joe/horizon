@@ -28,7 +28,7 @@ from tests.system.horizon_stack import HorizonStack, request_json, wait_for  # n
 
 MANIFEST_SCHEMA = "horizon.demo-manifest.v1"
 REPLAY_SCHEMA = "horizon.demo-replay.v1"
-RUN_ID = "unsafe-route-v1"
+RUN_ID = "unsafe-route-v2"
 TITLE = "Unsafe course · safety takeover"
 SCENARIO_FILE = "static_obstacle_approach.json"
 SCENARIO_VERSION = "1.1.0"
@@ -176,6 +176,7 @@ def extract_public_evidence(
     command_observations: dict[str, float],
     host_samples: list[tuple[int, float]],
     duration_s: float,
+    plant_epoch: int,
 ) -> dict[str, list[dict[str, Any]]]:
     proposals: list[dict[str, Any]] = []
     seen_proposals: set[str] = set()
@@ -193,6 +194,10 @@ def extract_public_evidence(
         if not isinstance(event, dict):
             continue
         summary = event.get("input_summary")
+        if isinstance(summary, dict) and f":epoch-{plant_epoch}:" not in str(
+            summary.get("snapshot_id", "")
+        ):
+            continue
         relative_s = None
         if isinstance(summary, dict) and isinstance(summary.get("simulation_time_s"), (int, float)):
             relative_s = float(summary["simulation_time_s"])
@@ -250,7 +255,6 @@ def identify_intervention(
     gate_events: list[dict[str, Any]],
     command_observations: dict[str, float],
 ) -> dict[str, Any]:
-    accepted_external_s: float | None = None
     candidates: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
     for wrapped in gate_events:
         event = wrapped["record"]
@@ -264,20 +268,24 @@ def identify_intervention(
             continue
         authority = str(receipt.get("authority", ""))
         speed = float(command.get("speed_mps", math.nan))
-        if authority != "gate_watchdog" and speed >= 5.9:
-            accepted_external_s = observed_s if accepted_external_s is None else min(accepted_external_s, observed_s)
-        if authority == "gate_watchdog" and speed < 5.9:
+        changed_unsafe_course = speed < 5.9 or abs(float(command.get("heading_rad", 0.0))) > 0.05
+        if authority in {"filtered_autonomy", "recovery", "gate_watchdog"} and changed_unsafe_course:
             candidates.append((observed_s, event, receipt))
-    eligible = [item for item in candidates if accepted_external_s is None or item[0] >= accepted_external_s]
-    if not eligible:
+    if not candidates:
         raise RuntimeError("no accepted recovery command was observed active at the plant")
-    observed_s, event, receipt = min(eligible, key=lambda item: item[0])
+    observed_s, event, receipt = min(candidates, key=lambda item: item[0])
     command = receipt["actual_command"]
+    mechanism = (
+        "gate_watchdog"
+        if receipt.get("authority") == "gate_watchdog"
+        else "assurance_decision"
+    )
     return {
         "occurred": True,
         "time_s": round(observed_s, 3),
-        "mechanism": "gate_watchdog",
+        "mechanism": mechanism,
         "reason_codes": list(event.get("reason_codes", receipt.get("reason_codes", []))),
+        "source_decision_id": receipt["decision_id"],
         "command_id": receipt["command_id"],
         "actual_command": command,
         "source_receipt_id": receipt["receipt_id"],
@@ -394,6 +402,24 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
             captured_inputs: list[tuple[float, dict[str, Any]]] = []
             seen_input_ids: set[str] = set()
             last_governor_poll = 0.0
+            last_telemetry_poll = 0.0
+            gate_receipts: dict[str, dict[str, Any]] = {}
+            gate_events: dict[str, dict[str, Any]] = {}
+
+            def collect_gate_telemetry() -> None:
+                telemetry = _get(stack, "gate", "/v1/telemetry")
+                epoch_marker = f":epoch-{epoch}:"
+                for receipt in telemetry.get("receipts", []):
+                    receipt_id = receipt.get("receipt_id") if isinstance(receipt, dict) else None
+                    if isinstance(receipt_id, str) and epoch_marker in receipt_id:
+                        gate_receipts[receipt_id] = receipt
+                for event in telemetry.get("events", []):
+                    event_id = event.get("event_id") if isinstance(event, dict) else None
+                    if (
+                        isinstance(event_id, str)
+                        and event.get("epoch") == epoch
+                    ):
+                        gate_events[event_id] = event
 
             while next_target < len(targets):
                 snapshot = _get(
@@ -427,11 +453,18 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
                             seen_input_ids.add(proposal_id)
                             captured_inputs.append((relative_s, governor))
                     last_governor_poll = now
+                if now - last_telemetry_poll >= 0.1:
+                    collect_gate_telemetry()
+                    last_telemetry_poll = now
                 time.sleep(0.01)
 
             _post(stack, "/v1/operator/pause?branch=protected", {}, token_name=operator)
             assurance = _get(stack, "assurance", "/v1/telemetry")
-            gate = _get(stack, "gate", "/v1/telemetry")
+            collect_gate_telemetry()
+            gate = {
+                "receipts": list(gate_receipts.values()),
+                "events": list(gate_events.values()),
+            }
             protected_truth, protected_truth_events = _truth_records(stack, "protected")
             counter_truth, counter_truth_events = _truth_records(stack, "counterfactual")
         finally:
@@ -444,6 +477,7 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
         command_observations=command_observations,
         host_samples=host_samples,
         duration_s=duration_s,
+        plant_epoch=epoch,
     )
     intervention = identify_intervention(evidence["gate_events"], command_observations)
     receipts_by_command = {

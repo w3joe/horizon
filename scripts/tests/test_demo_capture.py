@@ -47,6 +47,7 @@ def test_intervention_requires_an_accepted_command_observed_at_the_plant() -> No
         "reason_codes": ["A1_PASS"],
         "receipt": {
             "receipt_id": "receipt-external",
+            "decision_id": "decision-external",
             "command_id": "external-command",
             "authority": "autonomy",
             "accepted": True,
@@ -58,6 +59,7 @@ def test_intervention_requires_an_accepted_command_observed_at_the_plant() -> No
         "reason_codes": ["SUPERVISOR_WATCHDOG", "STORED_VALIDATED_RECOVERY_CONTINUED"],
         "receipt": {
             "receipt_id": "receipt-recovery",
+            "decision_id": "decision-watchdog",
             "command_id": "recovery-command",
             "authority": "gate_watchdog",
             "accepted": True,
@@ -74,6 +76,32 @@ def test_intervention_requires_an_accepted_command_observed_at_the_plant() -> No
     assert result["time_s"] == 1.24
     assert result["source_receipt_id"] == "receipt-recovery"
     assert result["plant_match"] == "public snapshot active_command_id"
+
+
+def test_assurance_recovery_is_reported_from_its_plant_matched_receipt() -> None:
+    event = {
+        "event_type": "gate_decision",
+        "reason_codes": ["CPA_THRESHOLD_CROSSED", "VALIDATED_RECOVERY_SELECTED"],
+        "receipt": {
+            "receipt_id": "receipt-recovery",
+            "decision_id": "decision-recovery",
+            "command_id": "recovery-command",
+            "authority": "recovery",
+            "accepted": True,
+            "actual_command": {"heading_rad": 0.6, "speed_mps": 1.0},
+        },
+    }
+
+    result = identify_intervention(
+        [{"time_s": 0.2, "record": event}], {"recovery-command": 0.22}
+    )
+
+    assert result["mechanism"] == "assurance_decision"
+    assert result["source_decision_id"] == "decision-recovery"
+    assert result["reason_codes"] == [
+        "CPA_THRESHOLD_CROSSED",
+        "VALIDATED_RECOVERY_SELECTED",
+    ]
 
 
 def test_frozen_artifact_is_hashed_bounded_and_not_overwritten(tmp_path: Path) -> None:
