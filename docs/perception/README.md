@@ -22,13 +22,27 @@ All methods return the bounded `PerceptionHealth` record described in `configs/p
 - H1 adds exposure, blur, occlusion, frozen-frame, timestamp, horizon, and temporal-output checks.
 - H2 adds a regularized diagonal-covariance Mahalanobis distance on a fixed pooled embedding.
 - H3 adds PCA reconstruction error and activation novelty.
-- H4 adds a small sparse autoencoder. Its reference cannot be built unless matched, random-feature, and equal-norm intervention controls are recorded as completed.
+- H4 adds a small sparse autoencoder. Fitting may precede causal controls, but runtime H4 remains `unknown` until matched, random-direction, and equal-norm controls pass a separate claim gate.
 
 H2-H4 use cached real hook outputs. The cache reader applies a deterministic fixed grouped projection, normally to 64 dimensions, before fitting so covariance/PCA work stays bounded. The projection dimension, selected layer, source groups, fit split, model pin, and reference hash belong in the immutable artifact.
 
 References may be fitted only on `development` or `nominal_reference` partitions. Threshold artifacts require the calibration split and a frozen hash. A health status may be calibrated for alerting while `missed_obstacle_risk` remains `unknown`: the current builder deliberately marks empirical calibration risk bins as unvalidated until a frozen held-out evaluation validates their coverage. Missing artifacts, mismatched hashes, features of the wrong dimension, and observations outside scope return `unknown`; they never silently become healthy.
 
 Runtime health never outputs steering, obstacle-free truth, or metre-valued uncertainty. It can only select a separately defined, frozen uncertainty/mode policy. Representation novelty is not converted directly to distance. H4 intervention code is offline-only, requires `offline=True`, and is absent from runtime entrypoints.
+
+## Frozen MODD2 development protocol
+
+`configs/perception/modd2-splits.json` freezes whole `kopeNN` collection groups before evaluation. `kope81` is development because root had already inspected one schema-only label there; `kope67` and `kope75` are calibration; `kope71` and `kope82` are held out. Neither calibration nor held-out labels have been evaluated. The upstream WaSR-T example stays integration-only, and MaSTr1325 stays nominal/reference-only because of checkpoint training-family overlap.
+
+The first bounded development extraction uses all 296 left-camera frames from `kope81-00-00006800-00007095`. It records full-frame pixelwise softmax entropy before logits are discarded, conventional checks with missing capabilities exposed, all-channel pooled encoder features, raw class masks, and unlabeled spatial maps at five evenly spaced frames. The fixed channel indices and frame rule are selected before inference. Display heatmaps use per-map min/max normalization and carry no semantic label.
+
+Measured development results, provenance digests, timing interpretation, and
+the offline causal-control outcome are recorded in
+[`development-results.md`](development-results.md).
+
+H2 and H3 fit a frozen 64-dimensional contiguous-group projection of all 4,096 encoder mean/standard-deviation summary values. H4 fits all 2,048 encoder spatial means without truncation. Standardization is fitted on the development reference only. The H4 fitting record includes loss, epoch-cap status, constant inputs, and dead features.
+
+The MODD2 parser follows RAW annotation conventions: MATLAB 1-based coordinates and inclusive `x:x+w`, `y:y+h` extents, finite sea-edge filtering, and singleton obstacle handling. The development report's fraction of class-0 mask pixels inside an obstacle bounding box is explicitly a Horizon proxy. It does not reproduce official MODD2 water-edge, own-vessel-mask, shoreline-dent, small/large obstacle, or detection metrics.
 
 ## Dataset boundary
 
@@ -62,8 +76,8 @@ The recorded repository commit in its environment file was captured at run
 completion; perception source did not change during that run.
 
 Local Apple M1 Max MPS also passed a four-frame WaSR-T compatibility check
-with exact hooked/unhooked output agreement. Timing used explicit MPS
-synchronization, unlike the current generic runner's CUDA-only timing hook.
+with exact hooked/unhooked output agreement. The generic runner now explicitly
+synchronizes both MPS and CUDA before reading forward timing.
 `horizon-runs/compute/local-mps-compatibility.json` records this small check;
 it does not establish CPU/MPS numerical equivalence or sustained throughput.
 

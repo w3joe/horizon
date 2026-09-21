@@ -6,6 +6,7 @@ import math
 from typing import Any
 
 from .artifact import canonical_hash
+from .artifact import REQUIRED_PROVENANCE, require_finite
 from .models import fit_h2, fit_h3, fit_h4
 
 
@@ -17,19 +18,22 @@ def build_reference(
     version: str,
     fit_split: str = "nominal_reference",
     intervention_validation: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
     **options: Any,
 ) -> dict[str, Any]:
     if fit_split not in {"development", "nominal_reference"}:
         raise ValueError("references may use development/nominal_reference data only")
     if not source_groups:
         raise ValueError("source provenance groups are required")
+    if not isinstance(provenance, dict) or not REQUIRED_PROVENANCE.issubset(provenance):
+        raise ValueError("complete reference provenance is required")
+    if provenance["layer"] != layer or list(provenance["source_groups"]) != source_groups:
+        raise ValueError("reference provenance does not match layer/source groups")
     if method_id == "H2":
         parameters = fit_h2(rows, float(options.get("regularization", 1e-3)))
     elif method_id == "H3":
         parameters = fit_h3(rows, int(options.get("components", min(8, len(rows[0])))))
     elif method_id == "H4":
-        if not intervention_validation or not intervention_validation.get("completed_controls"):
-            raise ValueError("H4 requires completed matched/random/equal-norm offline controls")
         parameters = fit_h4(
             rows,
             hidden=int(options.get("hidden", min(8, len(rows[0])))),
@@ -38,7 +42,10 @@ def build_reference(
             l1=float(options.get("l1", 1e-3)),
             seed=int(options.get("seed", 0)),
         )
-        parameters["offline_intervention_validation"] = intervention_validation
+        parameters["offline_intervention_validation"] = intervention_validation or {
+            "completed_controls": False,
+            "status": "pending",
+        }
     else:
         raise ValueError("reference artifacts exist only for H2-H4")
     body = {
@@ -49,7 +56,9 @@ def build_reference(
         "fit_split": fit_split,
         "source_groups": source_groups,
         "parameters": parameters,
+        "provenance": provenance,
     }
+    require_finite(body)
     return {**body, "artifact_hash": canonical_hash(body)}
 
 
@@ -60,6 +69,7 @@ def build_calibration(
     version: str,
     max_false_alarm_rate: float,
     reference_hash: str | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fit a threshold and empirical miss-risk bands using calibration labels."""
     if not 0 <= max_false_alarm_rate < 1:
@@ -68,12 +78,13 @@ def build_calibration(
     fault = [float(row["score"]) for row in samples if bool(row["missed_obstacle"])]
     if not benign or not fault:
         raise ValueError("calibration requires benign and missed-obstacle samples")
+    if not isinstance(provenance, dict) or not REQUIRED_PROVENANCE.issubset(provenance):
+        raise ValueError("complete calibration provenance is required")
+    require_finite(samples)
     allowed_false = math.floor(max_false_alarm_rate * len(benign))
-    threshold = (
-        math.nextafter(benign[-1], math.inf)
-        if allowed_false == 0
-        else benign[len(benign) - allowed_false]
-    )
+    candidates = sorted({*benign, *fault, math.nextafter(max(benign + fault), math.inf)})
+    valid = [candidate for candidate in candidates if sum(score >= candidate for score in benign) <= allowed_false]
+    threshold = valid[0]
     all_scores = sorted(float(row["score"]) for row in samples)
     edges = [
         math.nextafter(all_scores[0], -math.inf),
@@ -90,8 +101,13 @@ def build_calibration(
         rate = misses / len(members)
         interval = _wilson(misses, len(members))
         bins.append({
-            "lower": lower, "upper": upper, "label": ("low", "medium", "high")[index],
-            "empirical_rate": rate, "interval": list(interval), "samples": len(members),
+            "lower": lower,
+            "upper": upper,
+            "label": f"calibration_score_bin_{index + 1}",
+            "miss_count": misses,
+            "empirical_rate": rate,
+            "interval": list(interval),
+            "samples": len(members),
         })
     body = {
         "method_id": method_id,
@@ -102,6 +118,7 @@ def build_calibration(
         "risk_bins": bins,
         "sample_count": len(samples),
         "risk_validated_on_heldout": False,
+        "provenance": provenance,
         "split": "calibration",
         "frozen": True,
     }

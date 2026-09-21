@@ -63,7 +63,7 @@ def reproduce() -> dict:
         architecture="wasr_temporal_resnet101",
     )
     try:
-        result = run_sequence(spec, sequence, output, "cuda", True)
+        result = run_sequence(spec, sequence, output, "cuda", True, evidence_partition="integration")
         output_bytes = sum(path.stat().st_size for path in output.rglob("*") if path.is_file())
         if output_bytes > OUTPUT_CAP_BYTES:
             raise RuntimeError(f"artifact cap exceeded: {output_bytes} > {OUTPUT_CAP_BYTES}")
