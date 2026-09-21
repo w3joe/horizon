@@ -11,7 +11,10 @@ from pathlib import Path
 import socket
 from socketserver import TCPServer
 import threading
+import time
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from horizon_assurance.configuration import NavigationReference
@@ -45,18 +48,47 @@ def _bearer(handler: BaseHTTPRequestHandler) -> str:
 
 
 class GateRuntime:
-    def __init__(self, gate: ActuatorGate, decision_token_file: str):
+    def __init__(
+        self,
+        gate: ActuatorGate,
+        decision_token_file: str,
+        *,
+        fusion_url: str | None = None,
+        branch_id: str = "protected",
+    ):
         self.gate = gate
         self.decision_token_file = decision_token_file
+        self.fusion_url = fusion_url.rstrip("/") if fusion_url else None
+        self.branch_id = branch_id
         self.stop_event = threading.Event()
         self.watchdog = threading.Thread(target=self._watchdog, name="gate-watchdog", daemon=True)
+        self.recovery_poller = (
+            threading.Thread(
+                target=self._recovery_loop,
+                name="gate-independent-recovery",
+                daemon=True,
+            )
+            if self.fusion_url is not None
+            else None
+        )
+        self.recovery_status_lock = threading.Lock()
+        self._recovery_status: dict[str, Any] = {
+            "state": "starting" if self.fusion_url is not None else "disabled",
+            "last_input_id": None,
+            "last_reason_codes": [],
+            "last_elapsed_ns": None,
+        }
 
     def start(self) -> None:
         self.watchdog.start()
+        if self.recovery_poller is not None:
+            self.recovery_poller.start()
 
     def stop(self) -> None:
         self.stop_event.set()
         self.watchdog.join(timeout=1.0)
+        if self.recovery_poller is not None:
+            self.recovery_poller.join(timeout=1.0)
         self.gate.close(timeout_s=1.0)
 
     def _watchdog(self) -> None:
@@ -66,6 +98,55 @@ class GateRuntime:
                 self.gate.watchdog_tick()
             except Exception as exc:
                 self.gate.report_watchdog_error(exc)
+
+    def recovery_status(self) -> dict[str, Any]:
+        with self.recovery_status_lock:
+            return dict(self._recovery_status)
+
+    def _record_recovery_status(self, **updates: Any) -> None:
+        with self.recovery_status_lock:
+            self._recovery_status = {**self._recovery_status, **updates}
+
+    def _recovery_loop(self) -> None:
+        while not self.stop_event.is_set():
+            started = time.monotonic_ns()
+            try:
+                query = urlencode({"branch": self.branch_id})
+                with urlopen(
+                    f"{self.fusion_url}/v1/recovery-input?{query}",
+                    timeout=0.2,
+                ) as response:  # noqa: S310 - configured local fusion endpoint
+                    recovery_input = json.load(response)
+                input_id = str(recovery_input.get("recovery_input_id", ""))
+                if input_id and input_id == self.gate.last_recovery_input_id:
+                    self._record_recovery_status(
+                        state="current",
+                        last_elapsed_ns=time.monotonic_ns() - started,
+                    )
+                else:
+                    accepted, reasons = self.gate.refresh_recovery(
+                        recovery_input,
+                        token=self.gate.recovery_token,
+                    )
+                    self._record_recovery_status(
+                        state="ready" if accepted else "rejected",
+                        last_input_id=input_id or None,
+                        last_reason_codes=reasons,
+                        last_elapsed_ns=time.monotonic_ns() - started,
+                    )
+            except HTTPError as exc:
+                self._record_recovery_status(
+                    state="unavailable",
+                    last_reason_codes=[f"FUSION_HTTP_{exc.code}"],
+                    last_elapsed_ns=time.monotonic_ns() - started,
+                )
+            except (KeyError, TypeError, ValueError, OSError, URLError, TimeoutError) as exc:
+                self._record_recovery_status(
+                    state="unavailable",
+                    last_reason_codes=[type(exc).__name__],
+                    last_elapsed_ns=time.monotonic_ns() - started,
+                )
+            self.stop_event.wait(0.05)
 
     def reset(self, operator_token: str) -> bool:
         try:
@@ -104,13 +185,16 @@ class GateHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
             status = self.server.runtime.gate.status()
+            status["independent_recovery"] = self.server.runtime.recovery_status()
             status["status"] = "degraded" if status["quarantined"] else "ok"
             status.pop("receipts")
             status.pop("events")
             self._json(HTTPStatus.OK, status)
             return
         if self.path.startswith("/v1/telemetry"):
-            self._json(HTTPStatus.OK, self.server.runtime.gate.status())
+            status = self.server.runtime.gate.status()
+            status["independent_recovery"] = self.server.runtime.recovery_status()
+            self._json(HTTPStatus.OK, status)
             return
         self._json(HTTPStatus.NOT_FOUND, {"error": "NOT_FOUND"})
 
@@ -134,6 +218,20 @@ class GateHandler(BaseHTTPRequestHandler):
                 governor_input = json.loads(self.rfile.read(length))
                 accepted, reasons = self.server.runtime.gate.prime_recovery(
                     governor_input, token=_bearer(self)
+                )
+                self._json(
+                    HTTPStatus.OK if accepted else HTTPStatus.CONFLICT,
+                    {"accepted": accepted, "reason_codes": reasons},
+                )
+                return
+            if self.path == "/v1/recovery/refresh":
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > MAX_BODY_BYTES:
+                    raise ValueError("invalid request size")
+                recovery_input = json.loads(self.rfile.read(length))
+                accepted, reasons = self.server.runtime.gate.refresh_recovery(
+                    recovery_input,
+                    token=_bearer(self),
                 )
                 self._json(
                     HTTPStatus.OK if accepted else HTTPStatus.CONFLICT,
@@ -186,15 +284,19 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--branch-id", default="protected")
     parser.add_argument("--plant-url", default="http://127.0.0.1:8100")
+    parser.add_argument("--fusion-url", default="http://127.0.0.1:8104")
     parser.add_argument("--plant-token-file", required=True)
     parser.add_argument("--decision-token-file", required=True)
+    parser.add_argument("--recovery-token-file", required=True)
     parser.add_argument("--operator-token-file", required=True)
     args = parser.parse_args()
 
     plant_token = _read_secret(args.plant_token_file)
     decision_token = os.environ.get("HORIZON_GATE_DECISION_TOKEN") or __import__("secrets").token_urlsafe(32)
+    recovery_token = os.environ.get("HORIZON_GATE_RECOVERY_TOKEN") or __import__("secrets").token_urlsafe(32)
     operator_token = os.environ.get("HORIZON_GATE_OPERATOR_TOKEN") or __import__("secrets").token_urlsafe(32)
     _write_secret(args.decision_token_file, decision_token)
+    _write_secret(args.recovery_token_file, recovery_token)
     _write_secret(args.operator_token_file, operator_token)
     reference_url = f"{args.plant_url.rstrip('/')}/v1/reference?branch={args.branch_id}"
     reference = _public_reference(reference_url)
@@ -205,9 +307,15 @@ def main() -> None:
         plant=plant,
         reference=reference,
         decision_token=decision_token,
+        recovery_token=recovery_token,
         operator_token=operator_token,
     )
-    runtime = GateRuntime(gate, args.decision_token_file)
+    runtime = GateRuntime(
+        gate,
+        args.decision_token_file,
+        fusion_url=args.fusion_url,
+        branch_id=args.branch_id,
+    )
     server = GateHTTPServer((args.host, args.port), runtime)
     runtime.start()
     try:

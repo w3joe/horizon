@@ -82,3 +82,29 @@ def governor_input(reference: NavigationReference) -> dict:
         }
     )
     return copy.deepcopy(message)
+
+
+@pytest.fixture
+def recovery_input(reference: NavigationReference) -> dict:
+    message = json.loads((ROOT / "packages/contracts/fixtures/recovery-input.json").read_text())
+    message["configuration_hash"] = reference.digest()
+    message["snapshot"]["contacts"][0]["position_ne_m"] = [400.0, 400.0]
+    message["snapshot"]["contacts"][0]["velocity_ne_mps"] = [0.0, 0.0]
+    message["snapshot"]["environment"]["current_bounded_error_ne_mps"] = [0.02, 0.02]
+    message["snapshot"]["actuator"]["thrust_limits"] = [-1.0, 1.0]
+    message["snapshot"]["ownship"]["uncertainty"]["bounded_error"]["position_radius_m"] = 0.5
+    message["snapshot"]["ownship"]["uncertainty"]["bounded_error"]["speed_mps"] = 0.02
+    message["snapshot"]["contacts"][0]["uncertainty"]["bounded_error"]["position_radius_m"] = 1.0
+    message["snapshot"]["contacts"][0]["uncertainty"]["bounded_error"]["speed_mps"] = 0.05
+    message["constraints"].append(
+        {
+            "constraint_id": "depth-v1",
+            "kind": "depth",
+            "geometry_ref": "harbor-depth-v1",
+            "minimum_margin": 0.5,
+            "units": "m",
+            "assumption_id": "chart-depth-v1",
+            "configuration_version": "constraints-v1",
+        }
+    )
+    return copy.deepcopy(message)

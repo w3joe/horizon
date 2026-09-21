@@ -390,6 +390,124 @@ class BoundedPredictiveChecker:
         sample_indexes = list(range(0, len(rollout), stride))
         if sample_indexes[-1] != len(rollout) - 1:
             sample_indexes.append(len(rollout) - 1)
+
+        # A circumscribed-circle proof can certify well-separated contacts
+        # without constructing every rotated hull polygon.  For each geometry
+        # chunk, the convex hull of the predicted ownship centers contains the
+        # piecewise-linear rollout path, while the contact-center segment
+        # contains its constant-velocity path.  Expanding those sets by both
+        # hull circumradii and the same bounded-error terms used below is more
+        # conservative than the full rectangular-hull calculation.  A
+        # negative or incomplete proof falls through to the detailed check.
+        certified_contact_ids: set[str] = set()
+        if len(sample_indexes) > 1:
+            for contact in snapshot["contacts"]:
+                contact_id = str(contact["contact_id"])
+                if contact_id not in active_contact_ids:
+                    continue
+                contact_hull_radius = math.hypot(
+                    float(contact["hull"]["length_m"]),
+                    float(contact["hull"]["beam_m"]),
+                ) / 2.0
+                velocity = contact["velocity_ne_mps"]
+                contact_position = contact["position_ne_m"]
+                previous_fast_index = sample_indexes[0]
+                fast_margin = math.inf
+                fast_assumption = ""
+                complete = True
+                for sample_index in sample_indexes[1:]:
+                    if (
+                        host_deadline_ns is not None
+                        and time.monotonic_ns() >= host_deadline_ns
+                    ):
+                        complete = False
+                        break
+                    center_hull = convex_hull(
+                        (
+                            float(item["north_m"]),
+                            float(item["east_m"]),
+                        )
+                        for item in rollout[previous_fast_index : sample_index + 1]
+                    )
+                    start_elapsed = (
+                        time_offset_s + rollout[previous_fast_index]["time_s"]
+                    )
+                    elapsed = time_offset_s + rollout[sample_index]["time_s"]
+                    contact_start = (
+                        float(contact_position[0])
+                        + float(velocity[0]) * start_elapsed,
+                        float(contact_position[1])
+                        + float(velocity[1]) * start_elapsed,
+                    )
+                    contact_end = (
+                        float(contact_position[0]) + float(velocity[0]) * elapsed,
+                        float(contact_position[1]) + float(velocity[1]) * elapsed,
+                    )
+                    center_clearance = signed_polygon_clearance(
+                        center_hull,
+                        (contact_start, contact_end),
+                    )
+                    own_radius, own_assumption = _bounded_radius(
+                        own_uncertainty,
+                        elapsed,
+                        hull_radius_m=own_hull_radius,
+                        heading_coupled_speed_mps=self.config.maximum_command_speed_mps,
+                        configured_bound=(
+                            self.config.ownship_odd_bound
+                            if self.declared_bound(own_uncertainty, ownship=True)
+                            is not None
+                            else None
+                        ),
+                    )
+                    contact_radius, contact_assumption = _bounded_radius(
+                        contact["uncertainty"],
+                        elapsed + float(contact["age_s"]),
+                        hull_radius_m=contact_hull_radius,
+                        configured_bound=(
+                            self.config.contact_odd_bound
+                            if self.declared_bound(
+                                contact["uncertainty"],
+                                ownship=False,
+                                source_ids=contact.get("source_ids"),
+                            )
+                            is not None
+                            else None
+                        ),
+                    )
+                    margin = (
+                        center_clearance
+                        - own_hull_radius
+                        - contact_hull_radius
+                        - own_radius
+                        - current_rate * elapsed
+                        - contact_radius
+                        - collision_required
+                    )
+                    fast_margin = min(fast_margin, margin)
+                    fast_assumption = "+".join(
+                        item
+                        for item in (
+                            collision_assumption,
+                            own_assumption,
+                            contact_assumption,
+                        )
+                        if item
+                    )
+                    if not math.isfinite(margin) or margin < 0.0:
+                        complete = False
+                        break
+                    previous_fast_index = sample_index
+                if complete and math.isfinite(fast_margin):
+                    constraint_id = f"collision:{contact_id}"
+                    record = collision_evidence[constraint_id]
+                    record["assumption_id"] = fast_assumption
+                    record["minimum_margin"] = min(
+                        float(record["minimum_margin"]), fast_margin
+                    )
+                    minimum_margin = min(minimum_margin, fast_margin)
+                    certified_contact_ids.add(contact_id)
+            active_contact_ids.difference_update(certified_contact_ids)
+
         previous_index = 0
         needs_geometry = bool(active_boundary_ids or active_depth_ids or active_contact_ids)
         deadline_exhausted = False

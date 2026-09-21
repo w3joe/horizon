@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import copy
 from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import math
 import socket
 import threading
 import time
+from urllib.error import HTTPError
+from urllib.request import Request
 from urllib.request import urlopen
 
 import pytest
@@ -88,6 +92,7 @@ def gate(reference, plant):
         plant=plant,
         reference=reference,
         decision_token="decision-secret",
+        recovery_token="recovery-secret",
         operator_token="operator-secret",
         config=GateConfig(
             supervisor_timeout_s=0.01,
@@ -109,6 +114,23 @@ def retime_live(message):
     updated["recovery_options"][0]["valid_until_monotonic_ns"] = now + 3_000_000_000
     for summary in updated["health"]["summaries"]:
         summary["valid_until_monotonic_ns"] = now + 3_000_000_000
+    return updated
+
+
+def retime_recovery(message, *, tick: int = 42, epoch: int = 0):
+    updated = copy.deepcopy(message)
+    now = time.monotonic_ns()
+    updated["plant_epoch"] = epoch
+    updated["tick_index"] = tick
+    updated["recovery_input_id"] = f"recovery:{epoch}:{tick}"
+    updated["monotonic_time_ns"] = now
+    updated["recovery_deadline_monotonic_ns"] = now + 1_000_000_000
+    updated["snapshot"]["snapshot_id"] = f"snapshot:{epoch}:{tick}"
+    updated["snapshot"]["valid_until_monotonic_ns"] = now + 2_000_000_000
+    for option in updated["recovery_options"]:
+        option["valid_until_monotonic_ns"] = now + 2_000_000_000
+    for summary in updated["health"]["summaries"]:
+        summary["valid_until_monotonic_ns"] = now + 2_000_000_000
     return updated
 
 
@@ -174,6 +196,207 @@ def test_recovery_uses_sensor_health_without_primary_ai_health(reference, govern
     runtime.close()
 
 
+def test_sensor_only_recovery_refresh_ignores_expired_ai_health_and_records_lineage(
+    reference, recovery_input
+) -> None:
+    runtime = gate(reference, FakePlant())
+    message = retime_recovery(recovery_input)
+    message["health"]["source_health_ids"].append("health-decision-ai")
+    message["health"]["summaries"].append(
+        {
+            "health_id": "health-decision-ai",
+            "source_id": "decision_ai_telemetry",
+            "status": "invalid",
+            "age_s": 60.0,
+            "capability": "unavailable",
+            "reason_codes": ["PRIMARY_AI_STOPPED"],
+            "valid_until_monotonic_ns": message["monotonic_time_ns"] - 1,
+        }
+    )
+
+    accepted, reasons = runtime.refresh_recovery(message, token="recovery-secret")
+
+    assert accepted, reasons
+    assert runtime.stored_recovery is not None
+    assert runtime.stored_recovery.input_kind == "RecoveryInput"
+    assert runtime.stored_recovery.input_id == message["recovery_input_id"]
+    assert runtime.stored_recovery.proposal_id is None
+    certificate = runtime.status()["startup_recovery_certificate"]
+    assert certificate["input_kind"] == "RecoveryInput"
+    assert certificate["input_id"] == message["recovery_input_id"]
+    assert certificate["proposal_id"] is None
+    assert certificate["input_snapshot_id"] == message["snapshot"]["snapshot_id"]
+
+
+def test_recovery_refresh_requires_dedicated_capability_and_rejects_replay(
+    reference, recovery_input
+) -> None:
+    runtime = gate(reference, FakePlant())
+    message = retime_recovery(recovery_input)
+
+    rejected, reasons = runtime.refresh_recovery(message, token="decision-secret")
+    assert not rejected
+    assert reasons == ["UNAUTHORIZED_RECOVERY_SOURCE"]
+    accepted, reasons = runtime.refresh_recovery(message, token="recovery-secret")
+    assert accepted, reasons
+    replayed, reasons = runtime.refresh_recovery(message, token="recovery-secret")
+    assert not replayed
+    assert reasons == ["RECOVERY_INPUT_REPLAY"]
+
+
+def test_recovery_refresh_coalesces_concurrent_validation(
+    reference, recovery_input
+) -> None:
+    runtime = gate(reference, FakePlant())
+    message = retime_recovery(recovery_input)
+    entered = threading.Event()
+    release = threading.Event()
+    original = runtime.checker.recovery_from_current
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(1.0)
+        return original(*args, **kwargs)
+
+    runtime.checker.recovery_from_current = blocked
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(
+            runtime.refresh_recovery(message, token="recovery-secret")
+        )
+    )
+    worker.start()
+    assert entered.wait(1.0)
+    accepted, reasons = runtime.refresh_recovery(
+        retime_recovery(recovery_input, tick=43),
+        token="recovery-secret",
+    )
+    assert not accepted
+    assert reasons == ["RECOVERY_VALIDATION_IN_PROGRESS"]
+    release.set()
+    worker.join(timeout=2.0)
+    assert not worker.is_alive()
+    assert result[0][0] is True
+
+
+def test_gate_poller_refreshes_recovery_without_any_decision_ai_process(
+    reference, recovery_input, tmp_path
+) -> None:
+    message = retime_recovery(recovery_input)
+
+    class RecoveryHandler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            del format, args
+
+        def do_GET(self):  # noqa: N802
+            assert self.path == "/v1/recovery-input?branch=protected"
+            body = json.dumps(message).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    fusion = ThreadingHTTPServer(("127.0.0.1", 0), RecoveryHandler)
+    fusion_thread = threading.Thread(target=fusion.serve_forever, daemon=True)
+    fusion_thread.start()
+    actuator_gate = gate(reference, FakePlant())
+    runtime = GateRuntime(
+        actuator_gate,
+        str(tmp_path / "decision.token"),
+        fusion_url=f"http://127.0.0.1:{fusion.server_port}",
+    )
+    runtime.start()
+    try:
+        deadline = time.monotonic() + 1.0
+        while actuator_gate.last_recovery_input_id is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert actuator_gate.last_recovery_input_id == message["recovery_input_id"]
+        assert runtime.recovery_status()["state"] in {"ready", "current"}
+    finally:
+        runtime.stop()
+        fusion.shutdown()
+        fusion.server_close()
+        fusion_thread.join(timeout=1.0)
+
+
+def test_recovery_refresh_http_route_rejects_decision_capability(
+    reference, recovery_input, tmp_path
+) -> None:
+    actuator_gate = gate(reference, FakePlant())
+    runtime = GateRuntime(actuator_gate, str(tmp_path / "decision.token"))
+    server = GateHTTPServer(("127.0.0.1", 0), runtime)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    message = retime_recovery(recovery_input)
+
+    def post(token):
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/recovery/refresh",
+            data=json.dumps(message).encode(),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        try:
+            with urlopen(request, timeout=1) as response:
+                return response.status, json.load(response)
+        except HTTPError as exc:
+            return exc.code, json.load(exc)
+
+    try:
+        status, result = post("decision-secret")
+        assert status == 409
+        assert result["reason_codes"] == ["UNAUTHORIZED_RECOVERY_SOURCE"]
+        status, result = post("recovery-secret")
+        assert status == 200
+        assert result == {
+            "accepted": True,
+            "reason_codes": ["INDEPENDENT_RECOVERY_VALIDATED"],
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=1.0)
+
+
+def test_legacy_prime_coalesces_and_honors_input_deadline(
+    reference, governor_input
+) -> None:
+    runtime = gate(reference, FakePlant())
+    message = retime_live(governor_input)
+    message["decision_deadline_monotonic_ns"] = time.monotonic_ns() + 20_000_000
+    entered = threading.Event()
+    release = threading.Event()
+    original = runtime.checker.recovery_from_current
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(1.0)
+        return original(*args, **kwargs)
+
+    runtime.checker.recovery_from_current = blocked
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(
+            runtime.prime_recovery(message, token="decision-secret")
+        )
+    )
+    worker.start()
+    assert entered.wait(1.0)
+    accepted, reasons = runtime.prime_recovery(message, token="decision-secret")
+    assert not accepted
+    assert reasons == ["RECOVERY_VALIDATION_IN_PROGRESS"]
+    time.sleep(0.025)
+    release.set()
+    worker.join(timeout=2.0)
+    assert not worker.is_alive()
+    assert result[0][0] is False
+    assert result[0][1] == ["RECOVERY_INPUT_DEADLINE_MISSED"]
+
+
 def test_startup_interlock_requires_recovery_before_autonomy(reference, governor_input) -> None:
     plant = FakePlant()
     governor_input = retime_live(governor_input)
@@ -223,9 +446,11 @@ def test_status_exposes_only_current_immutable_startup_recovery_certificate(
     expected = {
         "run_id": message["run_id"],
         "branch_id": message["branch_id"],
-        "decision_id": "startup-recovery-prime",
-        "input_snapshot_id": message["snapshot"]["snapshot_id"],
-        "proposal_id": message["proposal"]["command_id"],
+            "decision_id": "startup-recovery-prime",
+            "input_snapshot_id": message["snapshot"]["snapshot_id"],
+            "input_kind": "GovernorInput",
+            "input_id": message["snapshot"]["snapshot_id"],
+            "proposal_id": message["proposal"]["command_id"],
         "plant_epoch": 0,
         "original_host_valid_until_ns": original_expiry,
     }
@@ -565,7 +790,10 @@ def test_recovery_substitution_is_revalidated_as_actual_command(reference, gover
         command={"heading_rad": 0.0, "speed_mps": 99.0},
         host_valid_until_ns=decision["expires_monotonic_ns"],
         source_decision_id="old-recovery",
-        governor_input=copy.deepcopy(governor_input),
+        source_input=copy.deepcopy(governor_input),
+        input_kind="GovernorInput",
+        input_id=governor_input["snapshot"]["snapshot_id"],
+        proposal_id=governor_input["proposal"]["command_id"],
         plant_epoch=runtime.epoch,
     )
     receipt = runtime.submit(
@@ -706,7 +934,10 @@ def test_watchdog_rechecks_certificate_after_slow_snapshot(reference, governor_i
         command={"heading_rad": 0.5, "speed_mps": 1.0},
         host_valid_until_ns=time.monotonic_ns() + 5_000_000,
         source_decision_id="recovery-before-slow-snapshot",
-        governor_input=copy.deepcopy(governor_input),
+        source_input=copy.deepcopy(governor_input),
+        input_kind="GovernorInput",
+        input_id=governor_input["snapshot"]["snapshot_id"],
+        proposal_id=governor_input["proposal"]["command_id"],
         plant_epoch=runtime.epoch,
     )
     receipt = runtime.watchdog_tick()
@@ -724,7 +955,10 @@ def test_watchdog_recovers_after_one_transport_timeout(reference, governor_input
         command={"heading_rad": 0.5, "speed_mps": 1.0},
         host_valid_until_ns=time.monotonic_ns() + 2_000_000_000,
         source_decision_id="timeout-recovery",
-        governor_input=copy.deepcopy(governor_input),
+        source_input=copy.deepcopy(governor_input),
+        input_kind="GovernorInput",
+        input_id=governor_input["snapshot"]["snapshot_id"],
+        proposal_id=governor_input["proposal"]["command_id"],
         plant_epoch=runtime.epoch,
     )
     first = runtime.watchdog_tick()

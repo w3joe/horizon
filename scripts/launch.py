@@ -180,11 +180,26 @@ def summarize_smoke_diagnostics(
     event_types: dict[str, int] = {}
     event_reasons: dict[str, int] = {}
     decision_actions: dict[str, int] = {}
+    gate_operation_failures: dict[str, int] = {}
+    gate_error_counts: dict[str, int] = {}
+    gate_operation_max_elapsed_ns: dict[str, int] = {}
     events = assurance.get("control_events", [])
     for event in events[-200:] if isinstance(events, list) else []:
         if not isinstance(event, dict):
             continue
         _increment(event_types, event.get("event_type"))
+        if event.get("event_type") == "gate_unavailable":
+            detail = event.get("detail", {})
+            if isinstance(detail, dict):
+                operation = str(detail.get("operation", "unknown"))
+                _increment(gate_operation_failures, operation)
+                _increment(gate_error_counts, detail.get("error"))
+                elapsed = detail.get("elapsed_ns")
+                if type(elapsed) is int and elapsed >= 0:
+                    gate_operation_max_elapsed_ns[operation] = max(
+                        elapsed,
+                        gate_operation_max_elapsed_ns.get(operation, 0),
+                    )
         for reason in event.get("reason_codes", []):
             _increment(event_reasons, reason)
         decision = event.get("decision")
@@ -208,6 +223,8 @@ def summarize_smoke_diagnostics(
             "last_tick": gate.get("last_tick"),
             "quarantined": gate.get("quarantined"),
             "startup_recovery_ready": gate.get("startup_recovery_ready"),
+            "recovery_validation_inflight": gate.get("recovery_validation_inflight"),
+            "independent_recovery": gate.get("independent_recovery"),
             "receipt_count": len(receipts) if isinstance(receipts, list) else 0,
             "accepted_receipt_count": accepted_receipts,
             "receipt_authorities": receipt_authorities,
@@ -218,6 +235,9 @@ def summarize_smoke_diagnostics(
             "event_type_counts": event_types,
             "event_reason_counts": event_reasons,
             "decision_action_counts": decision_actions,
+            "gate_operation_failure_counts": gate_operation_failures,
+            "gate_error_counts": gate_error_counts,
+            "gate_operation_max_elapsed_ns": gate_operation_max_elapsed_ns,
         },
     }
 
@@ -500,14 +520,7 @@ def verify_public_slice(
     if verify_reset:
         result.update(verify_operator_reset(host, ports))
     else:
-        result.update(
-            {
-                "operator_reset": "not_exercised",
-                "operator_reset_limitation": (
-                    "paused simulator does not yet deliver fresh reset sensor observations"
-                ),
-            }
-        )
+        result["operator_reset"] = "not_exercised"
     return result
 
 
@@ -519,7 +532,7 @@ def main() -> int:
     parser.add_argument(
         "--verify-reset",
         action="store_true",
-        help="also require paused reset recovery and explicit resume (pending simulator support)",
+        help="also require paused reset recovery and an atomic explicit resume",
     )
     args = parser.parse_args()
     if args.smoke_seconds < 0:
@@ -569,8 +582,10 @@ def main() -> int:
             "--host", host, "--port", str(ports["gate"]),
             "--run-id", run_id, "--branch-id", "protected",
             "--plant-url", f"http://{host}:{ports['simulator']}",
+            "--fusion-url", f"http://{host}:{ports['fusion']}",
             "--plant-token-file", str(secrets_dir / "gate.token"),
             "--decision-token-file", str(secrets_dir / "gate-decision.token"),
+            "--recovery-token-file", str(secrets_dir / "gate-recovery.token"),
             "--operator-token-file", str(secrets_dir / "gate-operator.token"),
         ],
         "assurance": [
