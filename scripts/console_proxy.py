@@ -9,6 +9,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import os
 from pathlib import Path
 import re
 from socketserver import TCPServer
@@ -32,6 +33,11 @@ PUBLIC_GET_ROUTES = {
     "gate": frozenset({"/health", "/v1/telemetry"}),
 }
 FRAME_ID = re.compile(r"^[0-9]{5}$")
+DEMO_RUN_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+DEMO_MANIFEST_SCHEMA = "horizon.demo-manifest.v1"
+DEMO_REPLAY_SCHEMA = "horizon.demo-replay.v1"
+DEMO_CATALOG_SCHEMA = "horizon.demo-catalog.v1"
+MAX_DEMO_REPLAY_BYTES = 10 * 1024 * 1024
 
 
 def copy_upstream_body(response: Any, destination: Any) -> None:
@@ -107,6 +113,57 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def load_demo_run(
+    demo_root: Path | None, run_id: str
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Load one exact, hashed replay directory without exposing arbitrary files."""
+
+    if demo_root is None or DEMO_RUN_ID.fullmatch(run_id) is None:
+        return None
+    directory = demo_root / run_id
+    manifest_path = directory / "manifest.json"
+    replay_path = directory / "replay.json"
+    try:
+        if (
+            directory.is_symlink()
+            or manifest_path.is_symlink()
+            or replay_path.is_symlink()
+            or not manifest_path.is_file()
+            or not replay_path.is_file()
+        ):
+            return None
+        if replay_path.stat().st_size > MAX_DEMO_REPLAY_BYTES:
+            return None
+        manifest = json.loads(manifest_path.read_text())
+        replay = json.loads(replay_path.read_text())
+        if (
+            not isinstance(manifest, dict)
+            or not isinstance(replay, dict)
+            or manifest.get("schema_version") != DEMO_MANIFEST_SCHEMA
+            or replay.get("schema_version") != DEMO_REPLAY_SCHEMA
+            or manifest.get("run_id") != run_id
+            or replay.get("run_id") != run_id
+            or manifest.get("source_dirty") is not False
+            or manifest.get("replay_sha256") != sha256_file(replay_path)
+        ):
+            return None
+        return manifest, replay
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def load_demo_catalog(demo_root: Path | None) -> dict[str, Any]:
+    runs: list[dict[str, Any]] = []
+    if demo_root is not None and demo_root.is_dir():
+        for directory in sorted(demo_root.iterdir(), key=lambda item: item.name):
+            loaded = load_demo_run(demo_root, directory.name)
+            if loaded is None:
+                continue
+            manifest, _ = loaded
+            runs.append({**manifest, "replay_url": f"/api/demo/runs/{directory.name}"})
+    return {"schema_version": DEMO_CATALOG_SCHEMA, "runs": runs}
+
+
 def validate_artifact(
     output: Path | None, source: Path | None
 ) -> tuple[dict[str, Any] | None, dict[str, dict[str, Any]], str | None]:
@@ -171,6 +228,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     artifact_manifest: ClassVar[dict[str, Any] | None]
     artifact_frames: ClassVar[dict[str, dict[str, Any]]]
     artifact_error: ClassVar[str | None]
+    demo_root: ClassVar[Path | None] = None
     simulator_operator_token_file: ClassVar[Path | None] = None
     gate_operator_token_file: ClassVar[Path | None] = None
     declared_fault_ids: ClassVar[frozenset[str]] = frozenset()
@@ -199,6 +257,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         if urlsplit(self.path).path.startswith("/api/artifacts/perception"):
             self._artifact_get(urlsplit(self.path).path)
+            return
+        if urlsplit(self.path).path.startswith("/api/demo"):
+            self._demo_get(urlsplit(self.path).path)
             return
         if self.path.startswith("/api/"):
             resolved = resolve_public_route(self.path)
@@ -436,6 +497,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             f"{self.upstreams[service]}{path}",
             headers={"Accept": self.headers.get("Accept", "*/*")},
         )
+        headers_sent = False
         try:
             with urlopen(request, timeout=5) as response:
                 self.send_response(response.status)
@@ -445,11 +507,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                         self.send_header(header, value)
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
+                headers_sent = True
                 copy_upstream_body(response, self.wfile)
         except HTTPError as error:
-            self._json(HTTPStatus(error.code), {"error": "UPSTREAM_HTTP_ERROR"})
+            if not headers_sent:
+                self._json(HTTPStatus(error.code), {"error": "UPSTREAM_HTTP_ERROR"})
         except (URLError, TimeoutError, BrokenPipeError, ConnectionResetError):
-            if not self.wfile.closed:
+            if not headers_sent and not self.wfile.closed:
                 try:
                     self._json(
                         HTTPStatus.BAD_GATEWAY,
@@ -457,6 +521,22 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     )
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+            elif headers_sent:
+                self.close_connection = True
+
+    def _demo_get(self, path: str) -> None:
+        if path.rstrip("/") == "/api/demo/catalog":
+            self._json(HTTPStatus.OK, load_demo_catalog(self.demo_root))
+            return
+        prefix = "/api/demo/runs/"
+        if path.startswith(prefix):
+            run_id = path.removeprefix(prefix)
+            loaded = load_demo_run(self.demo_root, run_id)
+            if loaded is not None:
+                manifest, replay = loaded
+                self._json(HTTPStatus.OK, {"manifest": manifest, **replay})
+                return
+        self._json(HTTPStatus.NOT_FOUND, {"error": "DEMO_RUN_NOT_FOUND"})
 
     def _artifact_get(self, path: str) -> None:
         base = "/api/artifacts/perception"
@@ -544,6 +624,15 @@ def main() -> None:
     parser.add_argument("--gate-url", default="http://127.0.0.1:8102")
     parser.add_argument("--artifact-output", type=Path)
     parser.add_argument("--artifact-source", type=Path)
+    parser.add_argument(
+        "--demo-root",
+        type=Path,
+        default=(
+            Path(value)
+            if (value := os.environ.get("HORIZON_DEMO_ROOT"))
+            else None
+        ),
+    )
     parser.add_argument("--simulator-operator-token-file", type=Path)
     parser.add_argument("--gate-operator-token-file", type=Path)
     parser.add_argument("--fault-id", action="append", default=[])
@@ -559,6 +648,7 @@ def main() -> None:
     }
     ConsoleHandler.artifact_output = args.artifact_output
     ConsoleHandler.artifact_source = args.artifact_source
+    ConsoleHandler.demo_root = args.demo_root
     ConsoleHandler.simulator_operator_token_file = args.simulator_operator_token_file
     ConsoleHandler.gate_operator_token_file = args.gate_operator_token_file
     ConsoleHandler.declared_fault_ids = frozenset(args.fault_id)
