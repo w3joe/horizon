@@ -374,6 +374,31 @@ class HorizonStack:
         item.log.close()
 
     def close(self) -> None:
+        diagnostic_root = os.environ.get("HORIZON_SYSTEM_DIAGNOSTICS_DIR")
+        if diagnostic_root and self.processes:
+            # Public fixture telemetry only: never capabilities or evaluator data.
+            diagnostics: dict[str, Any] = {"run_id": self.run_id, "scenario": self.scenario}
+            for service, endpoint in (
+                ("assurance", "/v1/telemetry"),
+                ("gate", "/v1/telemetry"),
+                ("fusion", "/v1/diagnostics"),
+                ("fusion", "/v1/governor-input"),
+                ("fusion", "/v1/recovery-input"),
+            ):
+                try:
+                    status, payload, _ = request_json(self.url(service, endpoint), timeout_s=0.7)
+                    diagnostics[service + endpoint] = {
+                        "status": status,
+                        "payload": {
+                            key: value[-12:] if isinstance(value, list) else value
+                            for key, value in payload.items()
+                        },
+                    }
+                except Exception as error:
+                    diagnostics[service + endpoint] = {"error": type(error).__name__}
+            destination = Path(diagnostic_root)
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / f"{self.run_id}.json").write_text(json.dumps(diagnostics, indent=2))
         for name in reversed(tuple(self.processes)):
             self.stop_process(name)
         if self.link is not None:

@@ -30,6 +30,7 @@ jobs:
         run: |
           echo "HORIZON_RUNS_DIR=$RUNNER_TEMP/horizon-runs" >> "$GITHUB_ENV"
           echo "HORIZON_COMPUTE_LEDGER=$RUNNER_TEMP/horizon-compute-ledger.json" >> "$GITHUB_ENV"
+          echo "HORIZON_SYSTEM_DIAGNOSTICS_DIR=$RUNNER_TEMP/horizon-system-diagnostics" >> "$GITHUB_ENV"
       - name: Bootstrap pinned dependencies
         env:
           HORIZON_PYTHON: python
@@ -52,6 +53,7 @@ jobs:
           path: |
             ${{ runner.temp }}/horizon-runs/**/run.json
             ${{ runner.temp }}/horizon-runs/**/logs/*.log
+            ${{ runner.temp }}/horizon-system-diagnostics/*.json
           if-no-files-found: warn
           include-hidden-files: false
           retention-days: 7
