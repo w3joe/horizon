@@ -147,6 +147,9 @@ function PathLine({ points, color, dashed = false, opacity = 1 }: { points: Path
 function SceneContents({ packet, selectedContactId, onSelectContact, showBranch }: Omit<Props, "cameraMode">) {
   const contact = packet.snapshot.traffic[0];
   const own = packet.snapshot.ownship;
+  const branchGhost = showBranch && packet.branchPath.length > 0
+    ? packet.branchPath[Math.min(3, packet.branchPath.length - 1)]
+    : null;
   const selected = contact ? selectedContactId === contact.vessel_id : false;
   const uncertaintyRef = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
@@ -168,7 +171,7 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
       <Harbor />
       {packet.proposedPath.length > 1 && <PathLine points={packet.proposedPath} color="#fb6674" dashed />}
       {packet.acceptedPath.length > 1 && <PathLine points={packet.acceptedPath} color="#4ce1de" />}
-      {showBranch && <PathLine points={packet.branchPath} color="#f2bb64" dashed opacity={0.72} />}
+      {showBranch && packet.branchPath.length > 1 && <PathLine points={packet.branchPath} color="#f2bb64" dashed opacity={0.72} />}
       <Vessel position={nedToScene({ north: own.position_ne_m[0], east: own.position_ne_m[1] }, 0.42)} heading={own.heading_rad} ownship />
       {contact && <Vessel position={contactPosition} heading={contact.heading_rad} selected={selected} onClick={() => onSelectContact(contact.vessel_id)} scale={1.45} />}
       {contact && uncertaintyRadius !== null && uncertaintyRadius > 0 && <mesh ref={uncertaintyRef} position={[contactPosition[0], 0.08, contactPosition[2]]} rotation-x={-Math.PI / 2}>
@@ -178,7 +181,7 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
       {packet.snapshot.traffic.slice(1).map((vessel) => (
         <Vessel key={vessel.vessel_id} position={nedToScene({ north: vessel.position_ne_m[0], east: vessel.position_ne_m[1] }, 0.35)} heading={vessel.heading_rad} scale={1.65} />
       ))}
-      {showBranch && <Vessel position={nedToScene(packet.branchPath[3], 0.42)} heading={0.08} ownship ghost />}
+      {branchGhost && <Vessel position={nedToScene(branchGhost, 0.42)} heading={0.08} ownship ghost />}
     </>
   );
 }
