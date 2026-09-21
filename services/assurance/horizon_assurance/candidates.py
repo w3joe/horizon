@@ -14,7 +14,9 @@ from .predictive import (
     BoundedPredictiveChecker,
     RecoverySelection,
     UNKNOWN_MARGIN,
+    _bounded_radius,
     _collision_margin_constraint,
+    _state_from_sample,
 )
 from .validation import InputRejected, validate_governor_input
 
@@ -184,6 +186,7 @@ def _recovery_decision(
     start_ns: int,
     reasons: list[str],
     prior_constraints: tuple[dict[str, Any], ...] = (),
+    solver: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     constraints = tuple((*prior_constraints, *selection.assessment.constraints))
     reasons.extend(selection.assessment.reason_codes)
@@ -203,6 +206,7 @@ def _recovery_decision(
             constraints=constraints,
             recovery=selection.option,
             start_host_ns=start_ns,
+            solver=solver,
         )
     reasons.extend(("NO_VALIDATED_RECOVERY", "MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE"))
     ownship = governor_input["snapshot"]["ownship"]
@@ -222,6 +226,7 @@ def _recovery_decision(
         constraints=constraints,
         recovery=None,
         start_host_ns=start_ns,
+        solver=solver,
     )
 
 
@@ -562,8 +567,10 @@ class A2ProbabilisticRisk(Candidate):
         )
 
 
-class A4RobustBarrierFilter(Candidate):
-    candidate_id = "A4"
+class A4VelocityQPBaseline(Candidate):
+    """Archived point-velocity QP baseline; it is not a plant CBF."""
+
+    candidate_id = "A4-VQP"
     candidate_version = "a4-provisional-kinematic-filter-full-plant-validation-v1"
     alpha = 0.20
     speed_polygon_sides = 16
@@ -757,6 +764,372 @@ class A4RobustBarrierFilter(Candidate):
             start_ns=start,
             reasons=reasons,
             prior_constraints=(),
+            solver=solver,
+        )
+
+
+class A4RobustBarrierFilter(Candidate):
+    """Finite nonlinear discrete plant-map barrier search.
+
+    The decision variables remain target heading and speed. Every lattice point
+    is propagated through the same eight-state plant, PID, actuator lags,
+    saturation, and live actuator capability used by final validation. This is
+    an engineering safety filter: the configured model residual is a declared
+    reserve, not a validated disturbance theorem.
+    """
+
+    candidate_id = "A4"
+    candidate_version = "a4-discrete-plant-map-barrier-search-v1"
+
+    def __init__(
+        self, reference: NavigationReference, config: AssuranceConfig | None = None
+    ):
+        super().__init__(reference, config)
+        values = (
+            self.config.barrier_step_s,
+            self.config.barrier_decay_rate_per_s,
+            self.config.barrier_model_residual_m,
+            self.config.barrier_feasibility_tolerance_m,
+            self.config.barrier_heading_cost_weight,
+            *self.config.barrier_heading_offsets_rad,
+            *self.config.barrier_speed_levels_mps,
+        )
+        if not all(math.isfinite(float(value)) for value in values):
+            raise ValueError("A4 barrier configuration must be finite")
+        if self.config.barrier_step_s <= 0.0:
+            raise ValueError("A4 barrier step must be positive")
+        if not 0.0 <= self.config.barrier_decay_rate_per_s * self.config.barrier_step_s <= 1.0:
+            raise ValueError("A4 discrete decay must be in [0, 1]")
+        if self.config.barrier_model_residual_m < 0.0:
+            raise ValueError("A4 model residual reserve must be nonnegative")
+        if self.config.barrier_feasibility_tolerance_m < 0.0:
+            raise ValueError("A4 feasibility tolerance must be nonnegative")
+        if self.config.barrier_heading_cost_weight <= 0.0:
+            raise ValueError("A4 heading cost weight must be positive")
+        if not self.config.barrier_heading_offsets_rad or not self.config.barrier_speed_levels_mps:
+            raise ValueError("A4 command lattice must be nonempty")
+        if any(speed < 0.0 for speed in self.config.barrier_speed_levels_mps):
+            raise ValueError("A4 command speeds must be nonnegative")
+
+    @staticmethod
+    def _angle_delta(left: float, right: float) -> float:
+        return (left - right + math.pi) % (2.0 * math.pi) - math.pi
+
+    def _command_lattice(
+        self, governor_input: dict[str, Any], requested: dict[str, Any]
+    ) -> tuple[dict[str, float], ...]:
+        own_heading = float(governor_input["snapshot"]["ownship"]["heading_rad"])
+        requested_heading = float(requested["heading_rad"])
+        requested_speed = float(requested["speed_mps"])
+        headings = [
+            requested_heading + offset
+            for offset in self.config.barrier_heading_offsets_rad
+        ]
+        headings.extend(
+            own_heading + offset for offset in self.config.recovery_turns_rad
+        )
+        speeds = [requested_speed, *self.config.barrier_speed_levels_mps]
+        unique: dict[tuple[int, int], dict[str, float]] = {}
+        for heading in headings:
+            wrapped = (heading + math.pi) % (2.0 * math.pi) - math.pi
+            for speed in speeds:
+                bounded_speed = min(
+                    self.config.maximum_command_speed_mps, max(0.0, float(speed))
+                )
+                key = (round(wrapped * 1e9), round(bounded_speed * 1e9))
+                unique[key] = {
+                    "heading_rad": wrapped,
+                    "speed_mps": bounded_speed,
+                }
+        return tuple(
+            sorted(
+                unique.values(),
+                key=lambda command: (
+                    (
+                        self._angle_delta(command["heading_rad"], requested_heading)
+                        / math.pi
+                    )
+                    ** 2
+                    * self.config.barrier_heading_cost_weight
+                    + (
+                        (command["speed_mps"] - requested_speed)
+                        / self.config.maximum_command_speed_mps
+                    )
+                    ** 2,
+                    command["speed_mps"],
+                    abs(self._angle_delta(command["heading_rad"], requested_heading)),
+                ),
+            )
+        )
+
+    def _plant_map_margins(
+        self,
+        governor_input: dict[str, Any],
+        command: dict[str, float],
+        *,
+        elapsed_s: float,
+    ) -> dict[str, float] | None:
+        """Evaluate endpoint barriers after the exact nonlinear plant map."""
+
+        from horizon_sim.geometry import (
+            hull_polygon,
+            signed_boundary_margin,
+            signed_polygon_clearance,
+        )
+        from horizon_sim.model import Hull
+
+        snapshot = governor_input["snapshot"]
+        own = snapshot["ownship"]
+        capability = snapshot["actuator"]
+        rollout = self.checker.rollout(
+            governor_input, command, horizon_s=elapsed_s
+        )
+        terminal = _state_from_sample(rollout[-1])
+        own_hull = Hull(
+            float(own["hull"]["length_m"]),
+            float(own["hull"]["beam_m"]),
+            self.config.ownship_draft_m,
+        )
+        own_radius = math.hypot(own_hull.length_m, own_hull.beam_m) / 2.0
+        own_bound = self.checker.declared_bound(
+            own["uncertainty"], ownship=True
+        )
+        if own_bound is None:
+            return None
+        own_inflation, _ = _bounded_radius(
+            own["uncertainty"],
+            elapsed_s,
+            hull_radius_m=own_radius,
+            heading_coupled_speed_mps=self.config.maximum_command_speed_mps,
+            configured_bound=self.config.ownship_odd_bound,
+        )
+        if not math.isfinite(own_inflation):
+            return None
+        current_bound = snapshot["environment"]["current_bounded_error_ne_mps"]
+        own_inflation += elapsed_s * math.hypot(
+            float(current_bound[0]), float(current_bound[1])
+        )
+        terminal_polygon = hull_polygon(terminal, own_hull)
+        margins: dict[str, float] = {}
+
+        collision_required, _ = _collision_margin_constraint(governor_input)
+        for contact in snapshot["contacts"]:
+            contact_bound = self.checker.declared_bound(
+                contact["uncertainty"],
+                ownship=False,
+                source_ids=contact.get("source_ids"),
+            )
+            if contact_bound is None:
+                return None
+            contact_hull = Hull(
+                float(contact["hull"]["length_m"]),
+                float(contact["hull"]["beam_m"]),
+            )
+            contact_radius = math.hypot(
+                contact_hull.length_m, contact_hull.beam_m
+            ) / 2.0
+            contact_inflation, _ = _bounded_radius(
+                contact["uncertainty"],
+                elapsed_s + float(contact["age_s"]),
+                hull_radius_m=contact_radius,
+                configured_bound=self.config.contact_odd_bound,
+            )
+            if not math.isfinite(contact_inflation):
+                return None
+            contact_n = float(contact["position_ne_m"][0]) + elapsed_s * float(
+                contact["velocity_ne_mps"][0]
+            )
+            contact_e = float(contact["position_ne_m"][1]) + elapsed_s * float(
+                contact["velocity_ne_mps"][1]
+            )
+            margins[f"collision:{contact['contact_id']}"] = (
+                math.hypot(terminal.north_m - contact_n, terminal.east_m - contact_e)
+                - own_radius
+                - contact_radius
+                - own_inflation
+                - contact_inflation
+                - collision_required
+            )
+
+        for constraint in governor_input["constraints"]:
+            kind = str(constraint["kind"])
+            constraint_id = str(constraint["constraint_id"])
+            required = float(constraint["minimum_margin"])
+            if kind in {"water_boundary", "corridor"}:
+                boundary = self.reference.water_boundaries.get(
+                    str(constraint.get("geometry_ref"))
+                )
+                if boundary is None:
+                    return None
+                margins[constraint_id] = (
+                    signed_boundary_margin(terminal_polygon, boundary)
+                    - own_inflation
+                    - required
+                )
+            elif kind == "depth":
+                reference_id = str(constraint.get("geometry_ref"))
+                if reference_id not in self.reference.depth_fields_m:
+                    return None
+                depth_m = self.reference.depth_fields_m[reference_id]
+                for _, polygon, zone_depth_m in self.reference.depth_zones.get(
+                    reference_id, ()
+                ):
+                    if signed_polygon_clearance(terminal_polygon, polygon) <= own_inflation:
+                        depth_m = min(depth_m, zone_depth_m)
+                margins[constraint_id] = (
+                    depth_m
+                    - self.reference.depth_uncertainty_m.get(reference_id, 0.0)
+                    - own_hull.draft_m
+                    - required
+                )
+
+        rudder_low, rudder_high = map(float, capability["rudder_limits_rad"])
+        thrust_low, thrust_high = map(float, capability["thrust_limits"])
+        if not (
+            rudder_low <= terminal.rudder_rad <= rudder_high
+            and thrust_low <= terminal.thrust_fraction <= thrust_high
+        ):
+            return None
+        return margins
+
+    def _filter_command(
+        self,
+        governor_input: dict[str, Any],
+        requested: dict[str, Any],
+        *,
+        host_deadline_ns: int | None = None,
+    ) -> tuple[dict[str, float] | None, float, float | None, str]:
+        if host_deadline_ns is None:
+            host_deadline_ns = time.monotonic_ns() + round(
+                self.config.candidate_work_budget_s * 1e9
+            )
+        initial_margins = self._plant_map_margins(
+            governor_input, requested, elapsed_s=0.0
+        )
+        if initial_margins is None or any(
+            margin < 0.0 for margin in initial_margins.values()
+        ):
+            minimum = min(initial_margins.values(), default=UNKNOWN_MARGIN) if initial_margins else UNKNOWN_MARGIN
+            return None, abs(min(0.0, minimum)), None, "invalid"
+        decay = max(
+            0.0,
+            1.0
+            - self.config.barrier_decay_rate_per_s * self.config.barrier_step_s,
+        )
+        tolerance = self.config.barrier_feasibility_tolerance_m
+        residual_reserve = self.config.barrier_model_residual_m
+        best_violation = math.inf
+
+        for command in self._command_lattice(governor_input, requested):
+            if time.monotonic_ns() >= host_deadline_ns:
+                return None, best_violation, None, "timeout"
+            terminal_margins = self._plant_map_margins(
+                governor_input, command, elapsed_s=self.config.barrier_step_s
+            )
+            if terminal_margins is None:
+                continue
+            violations: list[float] = []
+            for constraint_id, initial_margin in initial_margins.items():
+                observed = terminal_margins.get(constraint_id, UNKNOWN_MARGIN)
+                required = max(0.0, decay * initial_margin)
+                violations.append(required - (observed - residual_reserve))
+            primal = max((0.0, *violations))
+            best_violation = min(best_violation, primal)
+            if primal <= tolerance:
+                # The lattice is sorted by intervention cost, so the first
+                # feasible point is the exact finite-set optimum.
+                return command, primal, None, "optimal"
+
+        return None, best_violation, None, "infeasible"
+
+    def evaluate(self, governor_input: dict[str, Any]) -> dict[str, Any]:
+        start = time.monotonic_ns()
+        self._validate(governor_input)
+        work_deadline = self._work_deadline_ns(governor_input, start)
+        health_status, health_reasons = self._health_mode(governor_input)
+        requested = governor_input["proposal"]["command"]
+        filtered, primal, dual, status = self._filter_command(
+            governor_input, requested, host_deadline_ns=work_deadline
+        )
+        solver = {
+            "status": status,
+            "primal_residual": primal if math.isfinite(primal) else None,
+            # This is a complete finite lattice search, not a differentiable
+            # QP/NLP, so no dual residual exists.
+            "dual_residual": dual,
+        }
+        if filtered is not None and health_status == "healthy":
+            assessment = self.checker.assess(
+                governor_input, filtered, host_deadline_ns=work_deadline
+            )
+            changed = (
+                abs(
+                    self._angle_delta(
+                        filtered["heading_rad"], float(requested["heading_rad"])
+                    )
+                )
+                > 1e-6
+                or abs(filtered["speed_mps"] - float(requested["speed_mps"]))
+                > 1e-6
+            )
+            if time.monotonic_ns() >= work_deadline:
+                solver["status"] = "timeout"
+            elif assessment.safe:
+                barrier_evidence = {
+                    "constraint_id": "discrete-plant-barrier-residual",
+                    "kind": "recoverability",
+                    "minimum_margin": max(
+                        0.0,
+                        self.config.barrier_feasibility_tolerance_m - primal,
+                    ),
+                    "units": "m",
+                    "assumption_id": (
+                        f"{self.reference.model_version}+nonlinear-plant-map+"
+                        f"configured-residual-{self.config.barrier_model_residual_m:g}m"
+                    ),
+                    "representation": "bounded",
+                    "coverage": None,
+                }
+                return _decision(
+                    governor_input,
+                    candidate_id=self.candidate_id,
+                    candidate_version=self.candidate_version,
+                    health_config=self.config,
+                    action="modify" if changed else "pass",
+                    authority="filtered_autonomy" if changed else "autonomy",
+                    command=filtered,
+                    reasons=[
+                        "DISCRETE_PLANT_MAP_FILTER_APPLIED"
+                        if changed
+                        else "DISCRETE_PLANT_MAP_BARRIER_CLEAR",
+                        "FINITE_MODEL_RESIDUAL_RESERVE_APPLIED",
+                        "FINAL_3DOF_ROLLOUT_VALIDATED",
+                    ],
+                    constraints=tuple((*assessment.constraints, barrier_evidence)),
+                    recovery=None,
+                    start_host_ns=start,
+                    solver=solver,
+                )
+            else:
+                solver["status"] = (
+                    "timeout"
+                    if "PREDICTION_DEADLINE_EXHAUSTED" in assessment.reason_codes
+                    else "invalid"
+                )
+        selection = self.checker.recovery_from_current(
+            governor_input, host_deadline_ns=work_deadline
+        )
+        reasons = [f"DISCRETE_PLANT_MAP_FILTER_{solver['status'].upper()}"]
+        if health_status != "healthy":
+            reasons.extend((*health_reasons, "REQUIRED_INPUT_HEALTH_NOT_ASSURED"))
+        return _recovery_decision(
+            governor_input,
+            self,
+            selection,
+            start_ns=start,
+            reasons=reasons,
+            prior_constraints=(),
+            solver=solver,
         )
 
 
@@ -848,7 +1221,9 @@ class A5EvidenceHybrid(Candidate):
                         start_host_ns=start,
                     )
             barrier = A4RobustBarrierFilter(self.reference, self.config)
-            filtered, primal, dual, status = barrier._filter_command(conditioned, requested)
+            filtered, primal, dual, status = barrier._filter_command(
+                conditioned, requested, host_deadline_ns=work_deadline
+            )
             if filtered is not None and status == "optimal":
                 final = self.checker.assess(
                     conditioned, filtered, host_deadline_ns=work_deadline
@@ -884,6 +1259,7 @@ _CANDIDATES: dict[str, type[Candidate]] = {
     "A2": A2ProbabilisticRisk,
     "A3": A3PredictiveBounded,
     "A4": A4RobustBarrierFilter,
+    "A4-VQP": A4VelocityQPBaseline,
     "A5": A5EvidenceHybrid,
 }
 

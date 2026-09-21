@@ -84,6 +84,7 @@ class StoredRecovery:
     host_valid_until_ns: int
     source_decision_id: str
     governor_input: dict[str, Any]
+    plant_epoch: int
 
 
 @dataclass(frozen=True)
@@ -220,6 +221,7 @@ class ActuatorGate:
                         host_valid_until_ns=valid_until,
                         source_decision_id=str(decision["decision_id"]),
                         governor_input=source,
+                        plant_epoch=epoch,
                     )
             finally:
                 with self.lock:
@@ -297,6 +299,7 @@ class ActuatorGate:
                 host_valid_until_ns=valid_until,
                 source_decision_id="startup-recovery-prime",
                 governor_input=copy.deepcopy(governor_input),
+                plant_epoch=epoch,
             )
         return True, ["STARTUP_RECOVERY_VALIDATED"]
 
@@ -698,6 +701,7 @@ class ActuatorGate:
                     ),
                     source_decision_id=str(decision["decision_id"]),
                     governor_input=copy.deepcopy(governor_input),
+                    plant_epoch=self.epoch,
                 )
                 self.recovery_latched = True
                 self.clear_decisions = 0
@@ -853,6 +857,33 @@ class ActuatorGate:
     def status(self) -> dict[str, Any]:
         with self.lock:
             observed_monotonic_ns = self._monotonic_ns()
+            stored = self.stored_recovery
+            certificate = None
+            if (
+                stored is not None
+                and stored.plant_epoch == self.epoch
+                and observed_monotonic_ns < stored.host_valid_until_ns
+            ):
+                source = stored.governor_input
+                snapshot = source.get("snapshot", {})
+                proposal = source.get("proposal", {})
+                identity = {
+                    "run_id": source.get("run_id"),
+                    "branch_id": source.get("branch_id"),
+                    "decision_id": stored.source_decision_id,
+                    "input_snapshot_id": snapshot.get("snapshot_id"),
+                    "proposal_id": proposal.get("command_id"),
+                }
+                if (
+                    all(isinstance(value, str) and bool(value) for value in identity.values())
+                    and identity["run_id"] == self.run_id
+                    and identity["branch_id"] == self.branch_id
+                ):
+                    certificate = {
+                        **identity,
+                        "plant_epoch": stored.plant_epoch,
+                        "original_host_valid_until_ns": stored.host_valid_until_ns,
+                    }
             return {
                 "service": "horizon-gate",
                 "observed_monotonic_ns": observed_monotonic_ns,
@@ -867,9 +898,9 @@ class ActuatorGate:
                 "transport_failures": self.transport_failures,
                 "last_transport_error": self.last_transport_error,
                 "startup_recovery_ready": bool(
-                    self.stored_recovery
-                    and observed_monotonic_ns < self.stored_recovery.host_valid_until_ns
+                    certificate is not None
                 ),
+                "startup_recovery_certificate": certificate,
                 "retained_receipt_count": len(self.receipts),
                 "retained_snapshot_id_count": len(self.seen_snapshot_ids),
                 "local_receipt_sequence": self.local_receipt_sequence,

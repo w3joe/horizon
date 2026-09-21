@@ -38,7 +38,7 @@
       "required_input_representations": ["declared_dynamics_abstraction", "bounded_disturbance"],
       "required_failure_behavior": ["infeasible_recovery", "invalid_residual_recovery", "timeout_recovery"],
       "required_method_disclosures": ["barrier_geometry", "relative_degree", "qp_convexity", "sampled_data_margin", "final_command_revalidation"],
-      "research_status": "pinned development implementation a4-provisional-kinematic-filter-full-plant-validation-v1; provisional kinematic velocity-space QP with final 3-DOF rollout validation"
+      "research_status": "current implementation a4-discrete-plant-map-barrier-search-v1; finite nonlinear eight-state plant-map search with configured residual reserve and final rollout revalidation; no formal invariance claim; earlier velocity QP retained separately as A4-VQP and earlier results do not transfer"
     },
     {
       "id": "A5",
