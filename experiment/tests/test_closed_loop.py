@@ -37,7 +37,10 @@ def test_real_a1_a5_adapter_preserves_deadlines_authority_and_truth_separation()
         assert bundle["health_policy"]["label"] == (
             "synthetic fixed-health controller-isolation"
         )
-        assert bundle["source_health_audit"]
+        assert len(bundle["source_health_audit"]) == len(bundle["decisions"])
+        assert len(bundle["proposals"]) == len(bundle["decisions"])
+        assert len(bundle["gate_receipts"]) == len(bundle["decisions"])
+        assert bundle["cadence"]["fresh_proposals"] == len(bundle["decisions"])
         for decision, health_record in zip(
             bundle["decisions"], bundle["source_health_audit"]
         ):
@@ -73,7 +76,10 @@ def test_real_a1_a5_adapter_preserves_deadlines_authority_and_truth_separation()
         assert bundle["assumption_audit"]["configured_assumptions"]["contact"][
             "assumption_id"
         ] == "synthetic-harbor-radar-contact-odd-bound-v1"
-        assert bundle["decisions"]
+        if not bundle["decisions"]:
+            assert bundle["cadence"]["post_prime_expired_inputs"] > 0
+            assert bundle["proposals"] == []
+            assert bundle["gate_receipts"] == []
         for decision, receipt in zip(bundle["decisions"], bundle["gate_receipts"]):
             if not decision["deadline_met"]:
                 assert decision["action"] == "invalid"
@@ -92,6 +98,46 @@ def test_fixed_health_metadata_is_derived_from_assurance_configuration() -> None
     assert fixture["policy_label"] == "synthetic fixed-health controller-isolation"
     assert fixture["required_source_ids"] == list(config.required_health_sources)
     assert fixture["optional_source_ids"] == list(config.optional_health_sources)
+
+
+def test_expired_input_after_slow_recovery_prime_is_dropped_and_gate_closes(
+    monkeypatch,
+) -> None:
+    from horizon_gate.core import ActuatorGate
+
+    def slow_prime(
+        gate: ActuatorGate, governor_input: dict, *, token: str
+    ) -> tuple[bool, list[str]]:
+        del governor_input, token
+        gate._monotonic_ns.advance_ns(10_000_000_000)
+        return False, ["RECOVERY_CERTIFICATE_STALE"]
+
+    monkeypatch.setattr(ActuatorGate, "prime_recovery", slow_prime)
+    request = _request("A1")
+    request["max_simulation_time_s"] = 0.25
+
+    bundle = run_assured_episode(request)
+
+    assert bundle["cadence"]["planner_opportunities"] == 2
+    assert bundle["cadence"]["fresh_proposals"] == 0
+    assert bundle["cadence"]["post_prime_expired_inputs"] == 1
+    assert bundle["cadence"]["no_fresh_input_ticks"] == 13
+    assert bundle["cadence"]["watchdog_opportunities"] >= 13
+    assert bundle["decisions"] == []
+    assert bundle["gate_receipts"] == []
+    assert len(bundle["gate_recovery"]["prime_attempts"]) == 1
+    prime = bundle["gate_recovery"]["prime_attempts"][0]
+    assert prime["tick_index"] == 10
+    assert prime["accepted"] is False
+    assert prime["reason_codes"] == ["RECOVERY_CERTIFICATE_STALE"]
+    assert prime["compute_time_ns"] >= 0
+    assert len(bundle["truth_frames"]) >= 13
+    assert all(
+        frame["writer_channel"] in {"plant_startup_passive", "plant_expiry_fallback"}
+        for frame in bundle["truth_frames"]
+    )
+    assert bundle["gate_recovery"]["closed_and_joined"] is True
+    assert bundle["gate_recovery"]["remaining_worker_count"] == 0
 
 
 def test_odd_audit_uses_configured_bounds_and_truth_only_contact_association() -> None:

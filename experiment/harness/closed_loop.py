@@ -482,7 +482,9 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     saved_snapshots: list[tuple[int, dict[str, Any]]] = []
     planner_opportunities = 0
     fresh_proposal_count = 0
+    post_prime_expired_input_count = 0
     no_fresh_input_ticks = 0
+    watchdog_opportunities = 0
     fixed = fixed_health_summary(epoch_ns, assurance_config)
     gate_closed = False
     try:
@@ -557,77 +559,89 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                     "compute_time_ns": prime_compute_ns,
                                 }
                             )
-                            governor_input = fusion.assemble(
-                                proposal,
-                                trace,
-                                request_monotonic_ns=request_started_ns,
+                            try:
+                                governor_input = fusion.assemble(
+                                    proposal,
+                                    trace,
+                                    request_monotonic_ns=request_started_ns,
+                                    now_ns=clock(),
+                                )
+                            except NotReady:
+                                # Recovery priming performs the complete finite
+                                # validation and advances the experiment clock by
+                                # measured work. If its source data expires, the
+                                # proposal is not renewed or evaluated; the plant
+                                # still steps and the watchdog still runs below.
+                                governor_input = None
+                                post_prime_expired_input_count += 1
+                            if governor_input is not None:
+                                governor_input["episode_id"] = request["episode_id"]
+                                live_health = copy.deepcopy(governor_input["health"])
+                                governor_input["health"]["source_health_ids"].extend(
+                                    fixed["source_health_ids"]
+                                )
+                                governor_input["health"]["summaries"].extend(
+                                    copy.deepcopy(fixed["summaries"])
+                                )
+                        if governor_input is not None:
+                            source_health_audit.append(
+                                {
+                                    "tick_index": int(governor_input["tick_index"]),
+                                    "simulation_time_s": simulator.simulation_time_s,
+                                    "health": live_health,
+                                }
+                            )
+                            snapshot = governor_input["snapshot"]
+                            saved_snapshots.append((simulator.tick_index, snapshot))
+                            decision = governor.evaluate(governor_input)
+                            clock.set_ns(
+                                max(clock(), int(decision["decided_monotonic_ns"]))
+                            )
+                            clock.advance_ns(gate_dispatch_ns)
+                            gate_started = time.monotonic_ns()
+                            receipt = gate.submit(
+                                decision,
+                                governor_input,
+                                token=gate.decision_token,
                                 now_ns=clock(),
                             )
-                            governor_input["episode_id"] = request["episode_id"]
-                            live_health = copy.deepcopy(governor_input["health"])
-                            governor_input["health"]["source_health_ids"].extend(
-                                fixed["source_health_ids"]
+                            gate_compute_ns = max(0, time.monotonic_ns() - gate_started)
+                            clock.advance_ns(gate_compute_ns)
+                            proposals.append(
+                                {
+                                    "proposal_id": governor_input["proposal"]["command_id"],
+                                    "source_id": governor_input["proposal"]["source_id"],
+                                    "issued_monotonic_ns": governor_input["proposal"][
+                                        "issued_monotonic_ns"
+                                    ],
+                                    "expires_monotonic_ns": governor_input["proposal"][
+                                        "expires_monotonic_ns"
+                                    ],
+                                }
                             )
-                            governor_input["health"]["summaries"].extend(
-                                copy.deepcopy(fixed["summaries"])
+                            decisions.append(
+                                {
+                                    **decision,
+                                    "proposal_id": proposal["command_id"],
+                                    "simulation_time_s": simulator.simulation_time_s,
+                                    "gate_compute_time_ns": gate_compute_ns,
+                                }
                             )
-                        source_health_audit.append(
-                            {
-                                "tick_index": int(governor_input["tick_index"]),
-                                "simulation_time_s": simulator.simulation_time_s,
-                                "health": live_health,
-                            }
-                        )
-                        snapshot = governor_input["snapshot"]
-                        saved_snapshots.append((simulator.tick_index, snapshot))
-                        decision = governor.evaluate(governor_input)
-                        clock.set_ns(
-                            max(clock(), int(decision["decided_monotonic_ns"]))
-                        )
-                        clock.advance_ns(gate_dispatch_ns)
-                        gate_started = time.monotonic_ns()
-                        receipt = gate.submit(
-                            decision,
-                            governor_input,
-                            token=gate.decision_token,
-                            now_ns=clock(),
-                        )
-                        gate_compute_ns = max(0, time.monotonic_ns() - gate_started)
-                        clock.advance_ns(gate_compute_ns)
-                        proposals.append(
-                            {
-                                "proposal_id": governor_input["proposal"]["command_id"],
-                                "source_id": governor_input["proposal"]["source_id"],
-                                "issued_monotonic_ns": governor_input["proposal"][
-                                    "issued_monotonic_ns"
-                                ],
-                                "expires_monotonic_ns": governor_input["proposal"][
-                                    "expires_monotonic_ns"
-                                ],
-                            }
-                        )
-                        decisions.append(
-                            {
-                                **decision,
-                                "proposal_id": proposal["command_id"],
-                                "simulation_time_s": simulator.simulation_time_s,
-                                "gate_compute_time_ns": gate_compute_ns,
-                            }
-                        )
-                        gate_receipts.append(
-                            _receipt_record(
-                                receipt,
-                                simulation_time_s=simulator.simulation_time_s,
-                                source="supervisor",
+                            gate_receipts.append(
+                                _receipt_record(
+                                    receipt,
+                                    simulation_time_s=simulator.simulation_time_s,
+                                    source="supervisor",
+                                )
                             )
-                        )
-                        fresh_proposal_count += 1
-                        fresh_this_tick = True
+                            fresh_proposal_count += 1
+                            fresh_this_tick = True
                 if not fresh_this_tick:
                     no_fresh_input_ticks += 1
             else:
                 no_fresh_input_ticks += 1
 
+            watchdog_opportunities += 1
             watchdog_started = time.monotonic_ns()
             watchdog_receipt = gate.watchdog_tick(now_ns=clock())
             clock.advance_ns(max(0, time.monotonic_ns() - watchdog_started))
@@ -674,7 +688,9 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
             "watchdog_period_s": simulator.parameters.fixed_step_s,
             "planner_opportunities": planner_opportunities,
             "fresh_proposals": fresh_proposal_count,
+            "post_prime_expired_inputs": post_prime_expired_input_count,
             "no_fresh_input_ticks": no_fresh_input_ticks,
+            "watchdog_opportunities": watchdog_opportunities,
             "independent_20hz_fresh_state_reassessment": False,
             "held_proposal_reissued": False,
         },
