@@ -78,6 +78,7 @@ export function useOperatorControls(enabled: boolean, onResetStarted: () => void
             ? [...new Set([...activeFaults, body.fault_id])]
             : activeFaults.filter((fault) => fault !== body.fault_id);
         }
+        if (accepted && action === "reset") activeFaults = [];
         return {
           ...current,
           capabilities: payload.control ?? current.capabilities,
