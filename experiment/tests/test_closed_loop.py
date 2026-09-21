@@ -94,6 +94,46 @@ def test_fixed_health_metadata_is_derived_from_assurance_configuration() -> None
     assert fixture["optional_source_ids"] == list(config.optional_health_sources)
 
 
+def test_expired_input_after_slow_recovery_prime_is_dropped_and_gate_closes(
+    monkeypatch,
+) -> None:
+    from horizon_gate.core import ActuatorGate
+
+    def slow_prime(
+        gate: ActuatorGate, governor_input: dict, *, token: str
+    ) -> tuple[bool, list[str]]:
+        del governor_input, token
+        gate._monotonic_ns.advance_ns(10_000_000_000)
+        return False, ["RECOVERY_CERTIFICATE_STALE"]
+
+    monkeypatch.setattr(ActuatorGate, "prime_recovery", slow_prime)
+    request = _request("A1")
+    request["max_simulation_time_s"] = 0.25
+
+    bundle = run_assured_episode(request)
+
+    assert bundle["cadence"]["planner_opportunities"] == 2
+    assert bundle["cadence"]["fresh_proposals"] == 0
+    assert bundle["cadence"]["post_prime_expired_inputs"] == 1
+    assert bundle["cadence"]["no_fresh_input_ticks"] == 13
+    assert bundle["cadence"]["watchdog_opportunities"] >= 13
+    assert bundle["decisions"] == []
+    assert bundle["gate_receipts"] == []
+    assert len(bundle["gate_recovery"]["prime_attempts"]) == 1
+    prime = bundle["gate_recovery"]["prime_attempts"][0]
+    assert prime["tick_index"] == 10
+    assert prime["accepted"] is False
+    assert prime["reason_codes"] == ["RECOVERY_CERTIFICATE_STALE"]
+    assert prime["compute_time_ns"] >= 0
+    assert len(bundle["truth_frames"]) >= 13
+    assert all(
+        frame["writer_channel"] in {"plant_startup_passive", "plant_expiry_fallback"}
+        for frame in bundle["truth_frames"]
+    )
+    assert bundle["gate_recovery"]["closed_and_joined"] is True
+    assert bundle["gate_recovery"]["remaining_worker_count"] == 0
+
+
 def test_odd_audit_uses_configured_bounds_and_truth_only_contact_association() -> None:
     from horizon_assurance.configuration import AssuranceConfig
 
