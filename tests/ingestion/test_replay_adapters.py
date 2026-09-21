@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import struct
+import subprocess
 
 import jsonschema
 import pytest
@@ -13,9 +16,31 @@ import pcap
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_ROOT = ROOT.parents[1]
+
+
+def _workspace_root() -> Path:
+    configured = os.environ.get("HORIZON_WORKSPACE_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    common = subprocess.check_output(
+        ["git", "rev-parse", "--git-common-dir"], cwd=ROOT, text=True
+    ).strip()
+    repository = (ROOT / common).resolve().parent
+    return repository.parent
+
+
+WORKSPACE_ROOT = _workspace_root()
+DATA_ROOT = Path(
+    os.environ.get("HORIZON_DATA_ROOT", WORKSPACE_ROOT / "horizon-data")
+).expanduser().resolve()
 SCHEMA = json.loads((ROOT / "packages/contracts/schema/horizon.schema.json").read_text())
 VALIDATOR = jsonschema.Draft202012Validator(SCHEMA)
+
+
+def require_external(path: Path) -> Path:
+    if not path.is_file():
+        pytest.skip(f"external integration fixture unavailable: {path}")
+    return path
 
 
 def test_nmea_checksum_and_si_units() -> None:
@@ -30,7 +55,9 @@ def test_nmea_checksum_and_si_units() -> None:
 
 
 def test_all_recorded_nmea_sentences_validate_and_replay() -> None:
-    path = DATA_ROOT / "output/runtime-assurance/data-samples/signalk-nmea0183.log"
+    path = require_external(
+        WORKSPACE_ROOT / "output/runtime-assurance/data-samples/signalk-nmea0183.log"
+    )
     records = list(nmea.replay(path, run_id="recorded", branch_id="offline"))
     assert len(records) == 541
     assert {item["payload"]["sentence_type"] for item in records} == {"MWV", "HDG", "HDM", "DBS", "DBT"}
@@ -39,7 +66,9 @@ def test_all_recorded_nmea_sentences_validate_and_replay() -> None:
 
 
 def test_martts_is_synthetic_claim_text_not_observed_motion() -> None:
-    path = DATA_ROOT / "output/runtime-assurance/data-samples/martts-scenarios.jsonl"
+    path = require_external(
+        WORKSPACE_ROOT / "output/runtime-assurance/data-samples/martts-scenarios.jsonl"
+    )
     first = next(iter(martts.replay(path, run_id="recorded", branch_id="offline")))
     VALIDATOR.validate(first)
     assert first["provenance"]["kind"] == "synthetic"
@@ -49,7 +78,9 @@ def test_martts_is_synthetic_claim_text_not_observed_motion() -> None:
 
 
 def test_marsim_pcap_replay_omits_evaluation_labels() -> None:
-    path = DATA_ROOT / "horizon-data/datasets/marsim/sample/A3-spoofed-8-shift_angle-60-shift_speed-16.pcap"
+    path = require_external(
+        DATA_ROOT / "datasets/marsim/sample/A3-spoofed-8-shift_angle-60-shift_speed-16.pcap"
+    )
     records = list(pcap.replay(path, run_id="recorded", branch_id="offline", maximum_packets=3))
     assert records
     for item in records:
@@ -62,7 +93,7 @@ def test_marsim_pcap_replay_omits_evaluation_labels() -> None:
 
 
 def test_canoe_manifest_replay_is_raw_and_partial_aware() -> None:
-    path = DATA_ROOT / "horizon-data/datasets/canoe/acquisition.json"
+    path = require_external(DATA_ROOT / "datasets/canoe/acquisition.json")
     records = list(canoe.replay_manifest(path, run_id="recorded", branch_id="offline"))
     assert len(records) == 22
     for item in records:
@@ -71,3 +102,66 @@ def test_canoe_manifest_replay_is_raw_and_partial_aware() -> None:
     radar = next(item for item in records if item["source_id"] == "canoe/radar-image")
     assert radar["capability"] == "output_only"
     assert radar["payload"]["calibration_required_for_metric_tracks"] is True
+
+
+def test_hermetic_pcap_parser(tmp_path: Path) -> None:
+    packet = bytearray(34)
+    packet[12:14] = b"\x08\x00"
+    packet[14] = 0x45
+    packet[26:30] = bytes((10, 0, 0, 1))
+    packet[30:34] = bytes((10, 0, 0, 2))
+    body = (
+        b"\xd4\xc3\xb2\xa1"
+        + struct.pack("<HHIIII", 2, 4, 0, 0, 65535, 1)
+        + struct.pack("<IIII", 1, 250_000, len(packet), len(packet))
+        + packet
+    )
+    path = tmp_path / "tiny.pcap"
+    path.write_bytes(body)
+    records = list(pcap.replay(path, run_id="hermetic", branch_id="offline"))
+    assert len(records) == 1
+    assert records[0]["source_id"] == "10.0.0.1"
+    assert records[0]["destination_id"] == "10.0.0.2"
+    VALIDATOR.validate(records[0])
+
+
+def test_hermetic_martts_parser(tmp_path: Path) -> None:
+    path = tmp_path / "martts.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "dialog_id": "dialog-1",
+                "topic": "crossing",
+                "utterances": [{"speaker_id": "alpha", "turn": 1, "text": "Altering course."}],
+            }
+        )
+        + "\n"
+    )
+    records = list(martts.replay(path, run_id="hermetic", branch_id="offline"))
+    assert len(records) == 1
+    assert records[0]["payload"]["claim_only"] is True
+    VALIDATOR.validate(records[0])
+
+
+def test_hermetic_canoe_manifest_parser(tmp_path: Path) -> None:
+    path = tmp_path / "acquisition.json"
+    path.write_text(
+        json.dumps(
+            {
+                "artifacts": [
+                    {"key": "run/imu/1000.csv", "sha256": "a" * 64, "bytes": 12, "partial": True},
+                    {"key": "run/motor/2000.csv", "sha256": "b" * 64, "bytes": 8},
+                    {"key": "run/radar/3000.png", "sha256": "c" * 64, "bytes": 16},
+                ]
+            }
+        )
+    )
+    records = list(canoe.replay_manifest(path, run_id="hermetic", branch_id="offline"))
+    assert [item["source_id"] for item in records] == [
+        "canoe/imu",
+        "canoe/motor-power",
+        "canoe/radar-image",
+    ]
+    assert records[0]["capability"] == "degraded"
+    for item in records:
+        VALIDATOR.validate(item)
