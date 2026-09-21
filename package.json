@@ -1,0 +1,16 @@
+{
+  "name": "horizon",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "node": ">=22 <27", "npm": ">=10 <12" },
+  "workspaces": ["apps/*", "packages/contracts/typescript"],
+  "scripts": {
+    "contracts:validate": "npm --workspace @horizon/contracts run validate",
+    "contracts:typecheck": "npm --workspace @horizon/contracts run typecheck",
+    "console:build": "npm --workspace @horizon/console run build",
+    "check": "npm run contracts:validate && npm run contracts:typecheck && npm run console:build"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
+  }
+}

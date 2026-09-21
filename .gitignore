@@ -1,0 +1,46 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*.json
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+*.tsbuildinfo
+apps/console/dist/
+
+# Data, model weights, captures, caches and generated runs
+data/raw/
+data/cache/
+datasets/
+weights/
+models/
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.pcap
+*.pcapng
+feature-cache/
+runs/
+artifacts/generated/
+horizon-data/
+horizon-runs/
+
+# Local tooling
+.DS_Store
+.idea/
+.vscode/
+coverage/

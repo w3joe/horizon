@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "horizon-workspace"
+version = "0.1.0"
+description = "Maritime runtime assurance research and simulation workspace"
+requires-python = ">=3.11,<3.14"
+dependencies = ["jsonschema[format]==4.23.0"]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.5", "ruff==0.9.10"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["packages/contracts/python/horizon_contracts"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/contracts/python/tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

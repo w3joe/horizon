@@ -1,0 +1,102 @@
+{
+  "contract_type": "GovernorInput",
+  "schema_version": "0.1.0",
+  "run_id": "fixture-run-001",
+  "episode_id": "crossing-001",
+  "branch_id": "protected",
+  "tick_index": 42,
+  "simulation_time_s": 4.2,
+  "monotonic_time_ns": 4200000000,
+  "decision_deadline_monotonic_ns": 4250000000,
+  "configuration_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "snapshot": {
+    "snapshot_id": "snapshot-0042",
+    "frame": "NED",
+    "valid_until_monotonic_ns": 4260000000,
+    "ownship": {
+      "position_ne_m": [0.0, 0.0],
+      "heading_rad": 0.0,
+      "velocity_body_mps": [3.0, 0.0],
+      "yaw_rate_rps": 0.0,
+      "hull": { "length_m": 12.0, "beam_m": 3.0 },
+      "uncertainty": {
+        "kind": "covariance+bounded_set",
+        "covariance": { "rows": 2, "cols": 2, "data": [1.0, 0.0, 0.0, 1.0] },
+        "covariance_coverage": 0.95,
+        "bounded_error": { "position_radius_m": 2.5, "heading_rad": 0.03, "speed_mps": 0.2, "assumption_id": "nav-bound-v1" }
+      }
+    },
+    "contacts": [
+      {
+        "contact_id": "contact-01",
+        "position_ne_m": [75.0, 20.0],
+        "velocity_ne_mps": [-1.0, -0.5],
+        "heading_rad": 3.6,
+        "hull": { "length_m": 20.0, "beam_m": 6.0 },
+        "hull_orientation_source": "measured",
+        "age_s": 0.1,
+        "uncertainty": {
+          "kind": "covariance+bounded_set",
+          "covariance": { "rows": 2, "cols": 2, "data": [4.0, 0.0, 0.0, 4.0] },
+          "covariance_coverage": 0.95,
+          "bounded_error": { "position_radius_m": 5.0, "heading_rad": 0.08, "speed_mps": 0.4, "assumption_id": "radar-bound-v1" }
+        },
+        "source_ids": ["radar-track-01", "ais-123456789"]
+      }
+    ],
+    "environment": {
+      "water_boundary_id": "harbor-water-v1",
+      "depth_field_id": "harbor-depth-v1",
+      "current_estimate_ne_mps": [0.2, 0.0],
+      "current_bounded_error_ne_mps": [0.2, 0.2],
+      "current_assumption_id": "current-bound-v1"
+    },
+    "actuator": {
+      "contract_type": "ActuatorCapability",
+      "schema_version": "0.1.0",
+      "capability_version": "plant-cap-v1",
+      "rudder_rad": 0.0,
+      "thrust_fraction": 0.55,
+      "rudder_limits_rad": [-0.6, 0.6],
+      "rudder_rate_limit_rps": 0.25,
+      "thrust_limits": [0.0, 1.0],
+      "steering_lag_s": 0.8,
+      "propulsion_lag_s": 1.5,
+      "status": "nominal",
+      "degradation_reasons": []
+    }
+  },
+  "proposal": {
+    "contract_type": "ProposedCommand",
+    "schema_version": "0.1.0",
+    "run_id": "fixture-run-001",
+    "branch_id": "protected",
+    "command_id": "proposal-0042",
+    "source_id": "decision-ai-fixture",
+    "authority": "replay_fixture",
+    "sequence": 42,
+    "origin_snapshot_id": "snapshot-0042",
+    "issued_monotonic_ns": 4200000000,
+    "expires_monotonic_ns": 4250000000,
+    "issued_simulation_time_s": 4.2,
+    "expires_simulation_time_s": 4.25,
+    "command": { "heading_rad": 0.0, "speed_mps": 3.0, "trajectory_ne_m": [[0.0, 0.0], [30.0, 0.0]] },
+    "inference_trace_id": "ai-trace-0042"
+  },
+  "health": {
+    "source_health_ids": ["health-radar-0042", "health-gnss-0042"],
+    "perception_health_id": null,
+    "summaries": [
+      { "health_id": "health-radar-0042", "source_id": "radar", "status": "healthy", "age_s": 0.1, "capability": "available", "reason_codes": [], "valid_until_monotonic_ns": 4300000000 },
+      { "health_id": "health-camera-0042", "source_id": "camera", "status": "unknown", "age_s": 0.2, "capability": "output_only", "reason_codes": ["INTERNALS_UNAVAILABLE"], "valid_until_monotonic_ns": 4300000000 }
+    ],
+    "status": "unknown"
+  },
+  "constraints": [
+    { "constraint_id": "collision-margin-v1", "kind": "collision", "geometry_ref": null, "minimum_margin": 10.0, "units": "m", "assumption_id": "swept-hull-v1", "configuration_version": "constraints-v1" },
+    { "constraint_id": "water-boundary-v1", "kind": "water_boundary", "geometry_ref": "harbor-water-v1", "minimum_margin": 5.0, "units": "m", "assumption_id": "chart-bound-v1", "configuration_version": "constraints-v1" }
+  ],
+  "recovery_options": [
+    { "recovery_id": "turn-starboard-v1", "valid_until_monotonic_ns": 4300000000, "assumption_id": "recovery-envelope-v1" }
+  ]
+}

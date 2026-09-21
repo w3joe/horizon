@@ -1,0 +1,27 @@
+{
+  "contract_type": "AssuranceDecision",
+  "schema_version": "0.1.0",
+  "run_id": "fixture-run-001",
+  "episode_id": "crossing-001",
+  "branch_id": "protected",
+  "tick_index": 42,
+  "input_snapshot_id": "snapshot-0042",
+  "proposal_id": "proposal-0042",
+  "decision_id": "decision-0042",
+  "candidate_id": "STUB",
+  "candidate_version": "fixture-v1",
+  "action": "modify",
+  "authority": "filtered_autonomy",
+  "issued_command": { "heading_rad": 0.2, "speed_mps": 2.0, "trajectory_ne_m": [[0.0, 0.0], [20.0, 4.0]] },
+  "decided_monotonic_ns": 4220000000,
+  "expires_monotonic_ns": 4250000000,
+  "compute_time_ns": 20000000,
+  "deadline_met": true,
+  "reason_codes": ["COLLISION_MARGIN_LOW"],
+  "constraints": [
+    { "constraint_id": "contact-01", "kind": "collision", "minimum_margin": 8.2, "units": "m", "assumption_id": "radar-bound-v1", "representation": "bounded", "coverage": null }
+  ],
+  "recovery": { "recovery_id": "turn-starboard-v1", "valid_until_monotonic_ns": 4300000000, "assumption_id": "recovery-envelope-v1" },
+  "solver": { "status": "not_used", "primal_residual": null, "dual_residual": null },
+  "valid": true
+}

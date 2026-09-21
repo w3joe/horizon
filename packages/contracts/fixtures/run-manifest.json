@@ -1,0 +1,24 @@
+{
+  "contract_type": "RunManifest",
+  "schema_version": "0.1.0",
+  "study_id": "bootstrap-smoke",
+  "run_id": "fixture-run-001",
+  "experiment_mode": "controller_isolation_replay",
+  "split": "development",
+  "frozen": false,
+  "created_utc": "2026-09-21T12:00:00Z",
+  "scenario_id": "crossing-fixture-v1",
+  "scenario_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "seed": 20260921,
+  "candidate_ids": ["STUB"],
+  "health_ids": ["H0"],
+  "config_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "contracts_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "simulator_version": "fixture-v1",
+  "governor_versions": { "STUB": "fixture-v1" },
+  "health_versions": { "H0": "fixture-v1" },
+  "data_artifacts": [
+    { "artifact_id": "crossing-tape-v1", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "uri": "fixture://crossing-v1", "provenance": "synthetic", "rights": "Repository fixture" }
+  ],
+  "output_uri": "run://fixture-run-001"
+}

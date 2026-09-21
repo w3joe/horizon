@@ -1,0 +1,16 @@
+{
+  "contract_type": "Observation",
+  "schema_version": "0.1.0",
+  "observation_id": "obs-gnss-0042",
+  "run_id": "fixture-run-001",
+  "branch_id": "protected",
+  "input_group": "navigation_environment",
+  "source_id": "gnss-fixture",
+  "sequence": 42,
+  "time": { "event_time_s": 4.18, "received_monotonic_ns": 4190000000, "valid_until_monotonic_ns": 4290000000, "clock_uncertainty_ms": 2.0 },
+  "units": "m,m",
+  "frame": "NED",
+  "capability": "available",
+  "provenance": { "kind": "synthetic", "source_id": "fixture-generator-v1", "artifact_uri": null, "sha256": null, "rights": "Repository fixture" },
+  "payload": { "position_ne_m": [0.0, 0.0] }
+}
