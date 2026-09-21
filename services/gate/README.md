@@ -21,6 +21,12 @@ expiry it emits an explicit `unknown` minimum-risk command; it does not claim
 that stopping is universally safe.  Recovery release requires hysteresis and
 an authenticated operator acknowledgement.
 
+`minimum_risk` is a constrained action, not a label that bypasses validation.
+The canonical command holds the estimated current heading and limits requested
+speed to the range from zero through the lesser of 1 m/s and estimated surge
+speed. The gate derives this command independently and rejects a supervisor
+decision that marks any other command as `minimum_risk`.
+
 A live plant reset reuses tick numbers, so it cannot silently reuse old
 decisions.  A tick/snapshot regression quarantines the gate.  The operator
 must call the reset handshake, which clears cached recovery and rotates the
@@ -58,3 +64,9 @@ simulation-time expiry is still ahead. It must also keep the gate sequence
 strictly increasing across a live reset or rotate the run/epoch identity in an
 explicit reset handshake. Gate-side queue checks reduce the race window but
 cannot revoke bytes after the HTTP request reaches the plant process.
+
+The GovernorInput decision deadline bounds candidate computation and dispatch
+eligibility. It is distinct from the command expiry enforced by the gate and
+plant receiver. The current 40 ms decision budget is therefore not a claim
+that plant actuation completes within 40 ms; end-to-end timing is reported from
+the actual gate receipt and plant actuation timestamps.

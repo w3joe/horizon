@@ -192,13 +192,18 @@ def _recovery_decision(
             start_host_ns=start_ns,
         )
     reasons.extend(("NO_VALIDATED_RECOVERY", "MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE"))
+    ownship = governor_input["snapshot"]["ownship"]
+    minimum_risk_command = {
+        "heading_rad": float(ownship["heading_rad"]),
+        "speed_mps": min(1.0, max(0.0, float(ownship["velocity_body_mps"][0]))),
+    }
     return _decision(
         governor_input,
         candidate_id=candidate.candidate_id,
         candidate_version=candidate.candidate_version,
         action="minimum_risk",
         authority="recovery",
-        command=selection.command,
+        command=minimum_risk_command,
         reasons=reasons,
         constraints=constraints,
         recovery=None,

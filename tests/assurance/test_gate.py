@@ -8,6 +8,7 @@ import time
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
 from horizon_gate.core import ActuatorGate, GateConfig, StoredRecovery
+from horizon_gate.http_api import GateHTTPServer, GateRuntime
 from horizon_sim.clock import ManualMonotonicClock
 
 
@@ -181,6 +182,47 @@ def test_delayed_self_consistent_packet_does_not_regain_lifetime(reference, gove
     assert not delayed["accepted"]
     assert "DECISION_EXPIRED_AT_GATE" in delayed["reason_codes"]
     assert not plant.envelopes
+
+
+def test_minimum_risk_label_cannot_authorize_arbitrary_unsafe_command(
+    reference, governor_input
+) -> None:
+    plant = FakePlant()
+    runtime = gate(reference, plant)
+    message = retime_live(governor_input)
+    decision = A1ThresholdSimplex(
+        reference, AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    ).evaluate(message)
+    message["snapshot"]["contacts"][0]["position_ne_m"] = [0.0, 0.0]
+    decision["action"] = "minimum_risk"
+    decision["authority"] = "recovery"
+    decision["issued_command"] = {"heading_rad": 1.5, "speed_mps": 4.0}
+
+    rejected = runtime.submit(decision, message, token="decision-secret")
+    assert not rejected["accepted"]
+    assert "NON_CANONICAL_MINIMUM_RISK_COMMAND" in rejected["reason_codes"]
+    assert not plant.envelopes
+
+    ownship = message["snapshot"]["ownship"]
+    decision["issued_command"] = {
+        "heading_rad": ownship["heading_rad"],
+        "speed_mps": min(1.0, max(0.0, ownship["velocity_body_mps"][0])),
+    }
+    accepted = runtime.submit(decision, message, token="decision-secret")
+    assert accepted["accepted"]
+    assert accepted["actual_command"] == decision["issued_command"]
+
+
+def test_gate_server_binds_numeric_loopback_without_name_lookup(
+    reference, tmp_path
+) -> None:
+    runtime = GateRuntime(gate(reference, FakePlant()), str(tmp_path / "decision.token"))
+    server = GateHTTPServer(("127.0.0.1", 0), runtime)
+    try:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1]
+    finally:
+        server.server_close()
 
 
 def test_watchdog_takeover_invalidates_slow_validation(reference, governor_input) -> None:

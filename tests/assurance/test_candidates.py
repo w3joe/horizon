@@ -211,6 +211,11 @@ def test_missing_hard_bound_is_explicit_unknown_with_finite_evidence(
     decision = A3PredictiveBounded(reference, config).evaluate(message)
     assert decision["action"] == "minimum_risk"
     assert "OWNSHIP_BOUND_UNAVAILABLE" in decision["reason_codes"]
+    ownship = message["snapshot"]["ownship"]
+    assert decision["issued_command"] == {
+        "heading_rad": ownship["heading_rad"],
+        "speed_mps": min(1.0, max(0.0, ownship["velocity_body_mps"][0])),
+    }
     json.dumps(decision, allow_nan=False)
     assert all(math.isfinite(item["minimum_margin"]) for item in decision["constraints"])
 
