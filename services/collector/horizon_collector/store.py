@@ -54,6 +54,7 @@ class CollectorStore:
         self._snapshot: dict[str, dict[str, Any]] = {}
         self._reference: dict[str, dict[str, Any]] = {}
         self._plant_epoch: dict[str, int] = {}
+        self._upstream: dict[str, dict[str, Any]] = {}
         self._epoch: dict[tuple[str, str], int] = {}
         self._last_event: dict[tuple[str, str], float] = {}
         self._drops = 0
@@ -356,6 +357,32 @@ class CollectorStore:
         with self._lock:
             self._reference[branch] = copy.deepcopy(reference)
 
+    def ingest_simulator_page(self, branch: str, page: dict[str, Any], *, received_ns: int) -> None:
+        """Publish a bounded page and its context atomically to fusion."""
+        with self._lock:
+            snapshot = page["snapshot"]
+            self.update_plant_epoch(branch, str(snapshot["run_id"]), int(page["plant_epoch"]))
+            previous = self._upstream.get(branch, {})
+            gap_count = int(previous.get("gap_count", 0)) + int(bool(page["cursor_lost"]))
+            dropped = int(previous.get("dropped_observations", 0)) + int(page["dropped_observations"])
+            if page["cursor_lost"]:
+                # Discard pre-gap buffered inputs, without inventing a plant epoch.
+                self._records = deque(
+                    ((cursor, row) for cursor, row in self._records if row["branch_id"] != branch),
+                    maxlen=self.maximum_records,
+                )
+                self._latest = {key: row for key, row in self._latest.items() if key[1] != branch}
+                self._cursor += 1
+            self._upstream[branch] = {
+                "gap_count": gap_count,
+                "dropped_observations": dropped,
+                "has_more": bool(page["has_more"]),
+            }
+            self.update_reference(branch, page["reference"])
+            self.update_snapshot(branch, snapshot)
+            for item in page["observations"]:
+                self.ingest(item, received_ns=received_ns, simulation_time_s=float(snapshot["simulation_time_s"]))
+
     def batch(self, *, branch: str, after_cursor: int = 0, limit: int = 512) -> dict[str, Any]:
         limit = min(1024, max(1, limit))
         if after_cursor < 0:
@@ -389,6 +416,7 @@ class CollectorStore:
                 "snapshot": copy.deepcopy(self._snapshot.get(branch)),
                 "reference": copy.deepcopy(self._reference.get(branch)),
                 "plant_epoch": self._plant_epoch.get(branch),
+                "upstream": copy.deepcopy(self._upstream.get(branch, {})),
             }
 
     def diagnostics(self, *, now_ns: int | None = None) -> dict[str, Any]:
@@ -475,6 +503,7 @@ class CollectorStore:
             return {
                 "status": "ok",
                 "service": "horizon-collector",
+                "upstream": copy.deepcopy(self._upstream),
                 "queue": {
                     "capacity": self.maximum_records,
                     "size": len(self._records),

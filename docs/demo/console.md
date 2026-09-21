@@ -13,11 +13,13 @@
 
 Run the A01 console proxy and open its same origin. The console consumes the public SSE snapshot stream, collector observations and diagnostics, A04 assurance telemetry/joined evidence, A05 fused evidence, gate telemetry, and the allowlisted perception artifact API. A production build switches to **LIVE PUBLIC MODE** after receiving a schema `0.1.0` `SimulationSnapshot`.
 
-The authority panel treats only an accepted receipt as an issued command. It preserves unknown, invalid, rejected, and incomplete states and checks snapshot, proposal, decision, and receipt identifiers before joining them. It displays only backend trajectory samples; a command without samples produces an explicit unavailable legend. The latest timeline marker and all workspaces use the same bounded control event. Historical replay awaits recorded evidence bundles rather than combining an older marker with current state.
+The authority panel requires a complete, identity-matched governor input, decision, and receipt. An accepted receipt is shown as current authority only while its command ID matches the public plant's active command, its run and branch match, its decision has not expired against the gate's sampled monotonic clock, and the snapshot, evidence, and gate services are fresh. Otherwise it is labeled historical. Each upstream has its own freshness indicator, so a healthy snapshot stream cannot hide stale assurance or collector evidence. A command without backend trajectory samples produces an explicit unavailable legend.
 
 The Neural sensor workspace shows the completed 85-frame local CPU WaSR-T reproduction through A01's artifact routes. The raw source image and mask preview are recorded data, independent from the simulator camera. Timing is local CPU reproduction timing, the three layer rows are measured summaries, and the equality/reset result is limited to the measured three-frame validation prefix. No GPU or live 20 Hz claim is made.
 
-Operator controls remain disabled until A01 exposes the coordinated reset/pause/resume/fault capability. Reset must advance the simulator epoch, clear and rebuild fusion, synchronize assurance with the gate, and report recovery primed before control is available. Capability tokens never enter browser JavaScript.
+The live control strip calls only the same-origin mediated actions returned by `GET /api/operator/capabilities`. Each POST includes `X-Horizon-Operator: 1`; bearer tokens remain in the proxy and never enter browser JavaScript. Pause, reset, acknowledge, and declared fault actions remain available when the capability endpoint is healthy. Resume is disabled until plant and gate epochs match and `startup_recovery_ready` is true.
+
+Reset clears all browser observation cursors, events, joined lineage, diagnostics, gate state, and the current snapshot before the request is sent. Results from the prior polling generation are discarded. A `reset_in_progress` response is displayed as paused and pending; the console never automatically acknowledges or resumes. The expected sequence is operator reset, fresh new-epoch observations, gate handshake and accepted recovery prime, then a separate operator resume.
 
 ## Component handoff
 
@@ -28,6 +30,6 @@ Operator controls remain disabled until A01 exposes the coordinated reset/pause/
 | Data flow | Eight live collector groups, observations, consumed input, decision, and receipt | Add full observation pagination/history views |
 | Neural inspector | Allowlisted recorded 85-frame WaSR-T reproduction; runtime trace remains separate | Link runtime artifacts only when an explicit trace mapping exists |
 | Timeline | Latest coherent live control event; full fixture replay in development | Recorded common event bundles for historical replay |
-| Controls | Local fixture playback only | A01 mediated operator routes after coordinated reset handshake; never privileged gate or truth routes |
+| Controls | Local fixture playback or A01 mediated pause/resume/reset/acknowledge/declared-fault routes | Add recorded operator audit bundles; never expose privileged gate, plant bearer, or truth routes |
 
 The NED-to-render conversion is centralized in `src/lib/coordinates.ts`: east maps to scene X, north maps to negative scene Z, and clockwise-from-north heading maps to negative scene yaw.

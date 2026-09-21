@@ -6,6 +6,7 @@ from collections import deque
 import copy
 from dataclasses import asdict, dataclass, replace
 import math
+from itertools import islice
 import secrets
 import time
 from collections.abc import Callable
@@ -113,6 +114,7 @@ class AuthoritativeSimulator:
         self.events: list[dict[str, Any]] = []
         self.truth_log: list[dict[str, Any]] = []
         self.observations: deque[dict[str, Any]] = deque(maxlen=20_000)
+        self.observation_cursor = 0
         self.sensors = SensorSuite(self.seed, self.parameters.fixed_step_s)
         self.sensors.initialize_prior(self.ownship)
         self.observation_tick_index = 0
@@ -456,6 +458,7 @@ class AuthoritativeSimulator:
             capture_clock=capture_clock,
         )
         self.observations.extend(delivered)
+        self.observation_cursor += len(delivered)
 
     def _margins(self) -> tuple[float, float, float]:
         own_polygon = hull_polygon(self.ownship, self.parameters.hull)
@@ -603,6 +606,38 @@ class AuthoritativeSimulator:
 
     def observation_batch(self, after_sequence: int = -1) -> list[dict[str, Any]]:
         return [copy.deepcopy(item) for item in self.observations if item["sequence"] > after_sequence]
+
+    def observation_page(
+        self, *, after_cursor: int = 0, plant_epoch: int | None = None, limit: int = 512
+    ) -> dict[str, Any]:
+        """Bound delivery work without confusing independent sensor sequences.
+
+        Caller holds the runtime lock so the public context and page have one
+        epoch. This transport cursor never enters an observation's identity.
+        """
+        if after_cursor < 0 or not 1 <= limit <= 1024:
+            raise ValueError("cursor must be non-negative and page limit between 1 and 1024")
+        reset = plant_epoch is not None and plant_epoch != self.plant_epoch
+        if reset:
+            after_cursor = 0
+        if after_cursor > self.observation_cursor:
+            raise ValueError("cursor is ahead of the current plant epoch")
+        retained_start = self.observation_cursor - len(self.observations)
+        dropped = max(0, retained_start - after_cursor)
+        first = max(after_cursor, retained_start)
+        page = list(islice(self.observations, first - retained_start, first - retained_start + limit))
+        cursor = first + len(page)
+        return {
+            "plant_epoch": self.plant_epoch,
+            "cursor": cursor,
+            "cursor_reset": reset,
+            "cursor_lost": dropped > 0,
+            "dropped_observations": dropped,
+            "has_more": cursor < self.observation_cursor,
+            "observations": copy.deepcopy(page),
+            "snapshot": self.public_snapshot(),
+            "reference": self.public_reference(),
+        }
 
     def private_truth(self, *, token: str, after_tick: int = -1) -> list[dict[str, Any]]:
         self._require_evaluation(token)

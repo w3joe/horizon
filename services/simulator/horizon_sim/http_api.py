@@ -160,6 +160,15 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                 self._stream(branch, int(query.get("events", ["0"])[0]))
                 return
             if path == "/v1/observations":
+                if "after_cursor" in query:
+                    with self.server.runtime.lock:
+                        page = branch.observation_page(
+                            after_cursor=int(query["after_cursor"][0]),
+                            plant_epoch=int(query["plant_epoch"][0]) if "plant_epoch" in query else None,
+                            limit=int(query.get("limit", ["512"])[0]),
+                        )
+                    self._json(HTTPStatus.OK, page)
+                    return
                 with self.server.runtime.lock:
                     observations = branch.observation_batch()
                     plant_epoch = branch.plant_epoch

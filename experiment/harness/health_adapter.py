@@ -12,6 +12,15 @@ _MAX_JSON_NODES = 10_000
 _MAX_MAPPING_ITEMS = 1_024
 _MAX_LIST_ITEMS = 4_096
 _MAX_REASON_CODES = 64
+_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+_MAX_ARTIFACT_JSON_NODES = 500_000
+_DECLARED_CAPABILITIES = {
+    "unavailable",
+    "output_only",
+    "output_and_conventional",
+    "internal_activations",
+}
+_AUTHORIZING_CAPABILITIES = {"output_and_conventional", "internal_activations"}
 
 
 def _finite(
@@ -137,8 +146,16 @@ def _artifact(path: str | None) -> dict[str, Any] | None:
     if not path:
         return None
     try:
-        value = json.loads(Path(path).read_text())
-        if type(value) is not dict or not _finite(value):
+        source = Path(path)
+        if source.stat().st_size > _MAX_ARTIFACT_BYTES:
+            return None
+        contents = source.read_bytes()
+        if len(contents) > _MAX_ARTIFACT_BYTES:
+            return None
+        value = json.loads(contents)
+        if type(value) is not dict or not _finite(
+            value, _budget=[_MAX_ARTIFACT_JSON_NODES]
+        ):
             return None
         body = {key: item for key, item in value.items() if key != "artifact_hash"}
         digest = hashlib.sha256(
@@ -235,6 +252,7 @@ def adapt_health_result(
     reasons = _string_list(raw.get("reasons", []), maximum=_MAX_REASON_CODES)
     risk = raw.get("missed_obstacle_risk")
     statistics = raw.get("statistics")
+    declared_capability = raw.get("capability")
     if (
         reasons is None
         or type(risk) is not dict
@@ -242,7 +260,7 @@ def adapt_health_result(
         or type(statistics) is not dict
         or type(raw.get("camera_free_space_usable")) is not bool
         or type(raw.get("completeness")) is not str
-        or type(raw.get("capability")) is not str
+        or declared_capability not in _DECLARED_CAPABILITIES
         or (
             raw.get("calibration_version") is not None
             and type(raw.get("calibration_version")) is not str
@@ -272,6 +290,7 @@ def adapt_health_result(
         and risk_validated
         and status == "healthy"
         and raw.get("completeness") == "complete"
+        and declared_capability in _AUTHORIZING_CAPABILITIES
     )
     if raw.get("camera_free_space_usable") and not risk_validated:
         reasons.append("unvalidated_risk_cannot_authorize_free_space")
@@ -292,7 +311,15 @@ def adapt_health_result(
         if scope and risk_validated
         else "risk_unvalidated"
     )
-    capability = "available" if raw.get("completeness") == "complete" else "degraded"
+    if declared_capability == "unavailable":
+        capability = "unavailable"
+    elif (
+        raw.get("completeness") == "complete"
+        and declared_capability in _AUTHORIZING_CAPABILITIES
+    ):
+        capability = "available"
+    else:
+        capability = "degraded"
     shared = {
         "contract_type": "PerceptionHealth",
         "schema_version": "0.1.0",
@@ -316,12 +343,18 @@ def adapt_health_result(
         "reason_codes": shared["reason_codes"],
         "valid_until_monotonic_ns": valid_until,
     }
+    if camera_usable:
+        authorization_reason = "heldout_validated_risk_band"
+    elif risk_validated and declared_capability not in _AUTHORIZING_CAPABILITIES:
+        authorization_reason = "declared_capability_not_authorizing"
+    else:
+        authorization_reason = "risk_not_validated"
     return {
         "perception_health": shared,
         "governor_summary": summary,
         "authorization": {
             "camera_free_space_usable": camera_usable,
-            "reason": "heldout_validated_risk_band" if camera_usable else "risk_not_validated",
+            "reason": authorization_reason,
         },
         "raw_health": raw,
     }

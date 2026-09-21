@@ -274,6 +274,7 @@ def test_validated_scoped_artifact_can_authorize_intended_path(tmp_path) -> None
         raw.update(
             {
                 "calibration_version": "cal-v1",
+                "capability": "output_and_conventional",
                 "camera_free_space_usable": True,
                 "missed_obstacle_risk": {"kind": "calibrated_band"},
                 "risk_scope": scope,
@@ -294,3 +295,82 @@ def test_validated_scoped_artifact_can_authorize_intended_path(tmp_path) -> None
     assert result["perception_health"]["status"] == "healthy"
     assert result["authorization"]["camera_free_space_usable"] is True
     assert result["authorization"]["reason"] == "heldout_validated_risk_band"
+
+
+@pytest.mark.parametrize("capability", ["unavailable", "output_only"])
+def test_non_authorizing_declared_capability_fails_closed(tmp_path, capability) -> None:
+    scope = {
+        "model_version": ["wasrt-test"],
+        "preprocessor_version": ["pre-v1"],
+        "geometry_version": ["camera-v1"],
+        "source_group": ["harbor"],
+    }
+    body = {
+        "method_id": "H0",
+        "version": "cal-v1",
+        "split": "calibration",
+        "frozen": True,
+        "risk_validated_on_heldout": True,
+        "scope": scope,
+        "reference_hash": None,
+    }
+    artifact = {
+        **body,
+        "artifact_hash": hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps(artifact))
+
+    def entrypoint(request: dict) -> dict:
+        raw = _raw(request)
+        raw.update(
+            {
+                "calibration_version": "cal-v1",
+                "capability": capability,
+                "camera_free_space_usable": True,
+                "missed_obstacle_risk": {"kind": "calibrated_band"},
+                "risk_scope": scope,
+            }
+        )
+        return raw
+
+    payload = _payload()
+    payload["risk_context"] = {
+        "model_version": "wasrt-test",
+        "preprocessor_version": "pre-v1",
+        "geometry_version": "camera-v1",
+        "source_group": "harbor",
+    }
+    result = evaluate_health("H0", payload, entrypoint, calibration_path=str(path))
+    assert result["perception_health"]["status"] == "healthy"
+    assert result["governor_summary"]["capability"] == (
+        "unavailable" if capability == "unavailable" else "degraded"
+    )
+    assert result["authorization"]["camera_free_space_usable"] is False
+    assert result["authorization"]["reason"] == "declared_capability_not_authorizing"
+
+
+def test_oversized_artifact_cannot_authorize(tmp_path, monkeypatch) -> None:
+    from experiment.harness import health_adapter
+
+    monkeypatch.setattr(health_adapter, "_MAX_ARTIFACT_BYTES", 32)
+    path = tmp_path / "calibration.json"
+    path.write_bytes(b" " * 33)
+
+    def entrypoint(request: dict) -> dict:
+        raw = _raw(request)
+        raw.update(
+            {
+                "calibration_version": "cal-v1",
+                "capability": "output_and_conventional",
+                "camera_free_space_usable": True,
+                "missed_obstacle_risk": {"kind": "calibrated_band"},
+                "risk_scope": {},
+            }
+        )
+        return raw
+
+    result = evaluate_health("H0", _payload(), entrypoint, calibration_path=str(path))
+    assert result["authorization"]["camera_free_space_usable"] is False
