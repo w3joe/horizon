@@ -1,0 +1,81 @@
+{
+  "schema_version": "0.1.0",
+  "status": "central_attempt_002_blocked_billing_remaining_jobs_not_authorized",
+  "working_budget_limit_usd": 80.0,
+  "protected_reserve_usd": 20.0,
+  "known_gpu_outputs_available": false,
+  "reconciled_spend_to_date_usd": 0.00515378,
+  "jobs": [
+    {
+      "id": "a07-wasrt-sequence-001",
+      "purpose": "preserved stopped CPU/RAM preflight history; no GPU evidence",
+      "status": "stopped_reconciled",
+      "maximum_l4": 0,
+      "wall_clock_minutes": 0,
+      "attempt_limit": 1,
+      "container_limit": 1,
+      "reconciled_cost_usd": 0.00515378,
+      "all_in_cost_cap_usd": 0.00515378,
+      "start_gate": "closed"
+    },
+    {
+      "id": "a07-wasrt-sequence-002",
+      "purpose": "bounded reproduction of the 85-frame example sequence; never held-out evidence",
+      "status": "stopped_provider_billing_block_no_gpu_activation",
+      "maximum_l4": 1,
+      "wall_clock_minutes": 45,
+      "attempt_limit": 1,
+      "container_limit": 1,
+      "all_in_cost_cap_usd": 1.5,
+      "start_gate": "passed exact four-frame vanilla/hooked/reset CPU equality",
+      "result": "image build succeeded; provider required a payment method before L4 activation"
+    },
+    {
+      "id": "a07-modd2-development-features",
+      "purpose": "sequence-disjoint MODD2 development feature extraction and fault rehearsal",
+      "maximum_l4": 2,
+      "wall_clock_minutes": 180,
+      "attempt_limit": 1,
+      "container_limit": 2,
+      "all_in_cost_cap_usd": 8.0,
+      "start_gate": "dataset provenance and overlap inventory frozen"
+    },
+    {
+      "id": "a07-calibration-artifacts",
+      "purpose": "fit H0-H4 reference and calibration artifacts on preassigned groups",
+      "maximum_l4": 4,
+      "wall_clock_minutes": 240,
+      "attempt_limit": 1,
+      "container_limit": 4,
+      "all_in_cost_cap_usd": 18.0,
+      "start_gate": "feature payload identities and sequence split audit pass"
+    },
+    {
+      "id": "a07-intervention-validation",
+      "purpose": "bounded H4 offline intervention validation with per-sample state reset",
+      "maximum_l4": 2,
+      "wall_clock_minutes": 180,
+      "attempt_limit": 1,
+      "container_limit": 2,
+      "all_in_cost_cap_usd": 10.0,
+      "start_gate": "H4 reference artifact is frozen"
+    },
+    {
+      "id": "a07-heldout-rehearsal",
+      "purpose": "non-headline end-to-end rehearsal before final freeze",
+      "maximum_l4": 4,
+      "wall_clock_minutes": 240,
+      "attempt_limit": 1,
+      "container_limit": 4,
+      "all_in_cost_cap_usd": 18.0,
+      "start_gate": "all method contracts and calibration lineage checks pass"
+    }
+  ],
+  "planned_cost_cap_usd": 55.50515378,
+  "notes": [
+    "Jobs are sequentially stop-gated; this file grants no launch authority.",
+    "Attempt 002 stopped before L4 activation because the provider requires a payment method; no further launch is pending authorization and billing resolution.",
+    "Costs include GPU, CPU, and memory and leave USD 24 working headroom plus the USD 20 reserve.",
+    "A failed preflight produces no GPU evidence and must not be described as a reproduction result."
+  ]
+}

@@ -7,11 +7,13 @@ from experiment.evaluation.statistics import runtime_summary, wilson_interval
 
 
 def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
-    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in records:
-        grouped[(record["candidate_id"], record["health_id"])].append(record)
+        grouped[
+            (record["candidate_id"], record["health_id"], record["recoverability_class"])
+        ].append(record)
     cells = []
-    for (candidate_id, health_id), cell_records in sorted(grouped.items()):
+    for (candidate_id, health_id, recoverability_class), cell_records in sorted(grouped.items()):
         unsafe = sum(
             any(value > 0 for value in record["violations"].values())
             for record in cell_records
@@ -22,6 +24,7 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "candidate_id": candidate_id,
                 "health_id": health_id,
+                "recoverability_class": recoverability_class,
                 "episode_count": len(cell_records),
                 "unsafe_episode_count": unsafe,
                 "unsafe_episode_rate": unsafe / len(cell_records),
@@ -30,6 +33,13 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "unsafe_or_stale_accepted_count": sum(
                     record["gate"]["unsafe_or_stale_accepted_count"]
                     for record in cell_records
+                ),
+                "unknown_gate_assessment_count": sum(
+                    record["gate"]["assessment_status"] == "unknown"
+                    for record in cell_records
+                ),
+                "censored_mission_count": sum(
+                    bool(record["mission"]["censored"]) for record in cell_records
                 ),
                 "runtime": runtime_summary(runtimes),
                 "all_traces_complete": all(record["trace_complete"] for record in cell_records),

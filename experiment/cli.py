@@ -16,7 +16,7 @@ from experiment.harness.manifests import (
     load_splits,
     require_implemented,
 )
-from experiment.harness.runner import run_fixture_jobs
+from experiment.harness.runner import load_episode_entrypoint, run_adapter_jobs, run_fixture_jobs
 from experiment.io import load_json, write_json
 
 EXPERIMENT_ROOT = Path(__file__).resolve().parent
@@ -59,6 +59,25 @@ def _smoke(args: argparse.Namespace) -> int:
     splits = load_splits(args.splits)
     jobs = expand_jobs(load_json(args.study_plan), splits)
     records = run_fixture_jobs(jobs, args.output)
+    summary = summarize_records(records)
+    write_json(Path(args.output) / "summary.json", summary)
+    print(json.dumps({"status": "ok", "records": len(records), "output": args.output}, indent=2))
+    return 0
+
+
+def _run_adapter(args: argparse.Namespace) -> int:
+    capabilities = load_capabilities(args.capabilities)
+    splits = load_splits(args.splits)
+    plan = load_json(args.study_plan)
+    require_implemented(capabilities, plan["candidate_ids"], plan["health_ids"])
+    jobs = expand_jobs(plan, splits)
+    records = run_adapter_jobs(
+        jobs,
+        load_episode_entrypoint(args.entrypoint),
+        args.output,
+        args.run_id,
+        args.max_simulation_time_s,
+    )
     summary = summarize_records(records)
     write_json(Path(args.output) / "summary.json", summary)
     print(json.dumps({"status": "ok", "records": len(records), "output": args.output}, indent=2))
@@ -108,6 +127,18 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--output", required=True)
     smoke.set_defaults(function=_smoke)
 
+    run_adapter = subparsers.add_parser(
+        "run-adapter", help="run a registered production experiment adapter"
+    )
+    run_adapter.add_argument("--study-plan", required=True)
+    run_adapter.add_argument("--entrypoint", required=True)
+    run_adapter.add_argument("--run-id", required=True)
+    run_adapter.add_argument("--max-simulation-time-s", type=float, required=True)
+    run_adapter.add_argument("--output", required=True)
+    run_adapter.add_argument("--capabilities", default=DEFAULT_CAPABILITIES)
+    run_adapter.add_argument("--splits", default=DEFAULT_SPLITS)
+    run_adapter.set_defaults(function=_run_adapter)
+
     calibrate = subparsers.add_parser("calibrate", help="fit a health threshold on calibration data")
     calibrate.add_argument("--input", required=True)
     calibrate.add_argument("--output", required=True)
@@ -124,6 +155,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return int(args.function(args))
-    except (ExperimentError, KeyError, TypeError, ValueError) as exc:
+    except (ExperimentError, KeyError, TypeError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

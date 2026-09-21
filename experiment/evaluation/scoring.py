@@ -54,10 +54,18 @@ def _last_reference_recovery_time(bundle: dict[str, Any]) -> float | None:
         raise ValueError("recovery reference must be independent of the protected candidate branch")
     if reference.get("source_branch_id") == bundle["branch_id"]:
         raise ValueError("protected branch cannot define its own recovery-opportunity boundary")
+    window_end = reference.get("hazard_window_end_s")
+    if not isinstance(window_end, (int, float)) or not math.isfinite(window_end):
+        return None
+    if reference.get("window_end_reason") not in {
+        "first_unprotected_violation",
+        "unprotected_closest_approach",
+    }:
+        return None
     feasible_times = [
         float(sample["simulation_time_s"])
         for sample in reference["feasible_samples"]
-        if sample["feasible"]
+        if sample["feasible"] and float(sample["simulation_time_s"]) <= float(window_end)
     ]
     return max(feasible_times) if feasible_times else None
 
@@ -83,8 +91,8 @@ def _gate_assessment(bundle: dict[str, Any]) -> tuple[int, str]:
             return violations, "unknown"
         invalid = (
             proposal["source_id"] not in authorized_sources
-            or receipt_time > proposal["expires_monotonic_ns"]
-            or receipt_time > decision["expires_monotonic_ns"]
+            or receipt_time >= proposal["expires_monotonic_ns"]
+            or receipt_time >= decision["expires_monotonic_ns"]
             or decision.get("valid") is not True
             or receipt.get("authority") != decision.get("authority")
         )
@@ -189,6 +197,10 @@ def score_closed_loop(bundle: dict[str, Any]) -> dict[str, Any]:
     if not all(math.isfinite(value) for value in record["margins"].values()):
         raise ValueError("non-finite truth margin")
     record["artifact_hashes"].setdefault("normalized_truth", sha256_json(bundle["truth_frames"]))
+    if "assumption_audit" in bundle:
+        record["artifact_hashes"].setdefault(
+            "assumption_audit", sha256_json(bundle["assumption_audit"])
+        )
     return record
 
 

@@ -20,10 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_capability_matrix_is_complete_and_missing_methods_fail() -> None:
     capabilities = load_capabilities(ROOT / "configs" / "capabilities.json")
-    with pytest.raises(MissingImplementationError, match="A1 is declared missing"):
-        require_implemented(capabilities, ["A1"], [])
-    with pytest.raises(MissingImplementationError, match="H4 is declared missing"):
-        require_implemented(capabilities, [], ["H4"])
+    require_implemented(capabilities, ["A1", "A3"], ["H0", "H1", "H2", "H3", "H4"])
+    with pytest.raises(MissingImplementationError, match="A2 is declared missing"):
+        require_implemented(capabilities, ["A2"], [])
+    with pytest.raises(MissingImplementationError, match="A4 is declared missing"):
+        require_implemented(capabilities, ["A4"], [])
+    with pytest.raises(MissingImplementationError, match="A5 is declared missing"):
+        require_implemented(capabilities, ["A5"], [])
 
 
 def test_split_manifest_has_disjoint_frozen_heldout_plan() -> None:
@@ -57,6 +60,29 @@ def test_headline_stochastic_plan_rejects_fewer_than_30_seeds() -> None:
         validate_study_plan(plan, splits)
 
 
+def test_scenario_seed_interval_must_stay_inside_split_and_not_overlap() -> None:
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+    plan = load_json(ROOT / "manifests" / "smoke-study.json")
+    plan["scenarios"][0].update({"seed_offset": 299, "seed_count": 2})
+    with pytest.raises(ManifestError, match="leave declared split"):
+        validate_study_plan(plan, splits)
+
+
+def test_per_seed_provenance_lists_must_match_seed_count() -> None:
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+    plan = load_json(ROOT / "manifests" / "smoke-study.json")
+    plan["scenarios"][0].pop("observation_tape_hash")
+    plan["scenarios"][0]["observation_tape_hashes"] = ["only-one"]
+    with pytest.raises(ManifestError, match="must match seed_count"):
+        validate_study_plan(plan, splits)
+    plan = load_json(ROOT / "manifests" / "smoke-study.json")
+    overlapping = dict(plan["scenarios"][0])
+    overlapping["scenario_id"] = "fixture-overlap"
+    plan["scenarios"].append(overlapping)
+    with pytest.raises(ManifestError, match="overlaps another"):
+        validate_study_plan(plan, splits)
+
+
 def test_heldout_requires_frozen_protocol_and_calibration_hash() -> None:
     splits = load_splits(ROOT / "manifests" / "splits.json")
     plan = load_json(ROOT / "manifests" / "smoke-study.json")
@@ -72,4 +98,30 @@ def test_heldout_template_has_1200_episodes_but_is_deliberately_blocked() -> Non
     assert plan["execution_status"].startswith("blocked")
     splits = load_splits(ROOT / "manifests" / "splits.json")
     with pytest.raises(ManifestError, match="frozen protocol"):
+        validate_study_plan(plan, splits)
+
+
+def test_heldout_count_uses_distinct_expanded_episode_keys() -> None:
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+    plan = load_json(ROOT / "manifests" / "smoke-study.json")
+    plan.update(
+        {
+            "split": "heldout",
+            "protocol_frozen": True,
+            "calibration_hash": "a" * 64,
+            "code_hash": "b" * 64,
+            "config_hash": "c" * 64,
+            "model_hashes": {"model": "d" * 64},
+            "data_hashes": {"data": "e" * 64},
+        }
+    )
+    plan["scenarios"] = [
+        {
+            **plan["scenarios"][0],
+            "seed_count": 999,
+            "seed_offset": 0,
+            "headline": False,
+        }
+    ]
+    with pytest.raises(ManifestError, match="distinct expanded episode keys"):
         validate_study_plan(plan, splits)
