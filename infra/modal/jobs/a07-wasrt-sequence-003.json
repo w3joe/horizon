@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "job_id": "a07-wasrt-sequence-003",
+  "reservation_id": "a07-wasrt-sequence-003",
+  "owner": "A07",
+  "purpose": "Authorized one-sequence WaSR-T reproduction retry after successful standard-L4 access probe",
+  "code_commit_recording": "Commit and declared source/spec hashes captured before launch into launch-state and reused unchanged in platform-run.json",
+  "modal_entrypoint": "services/perception/modal_wasrt_smoke.py",
+  "modal_app_name": "horizon-a07-wasrt-smoke",
+  "modal_volume_name": "horizon-a07-artifacts-003",
+  "input": {
+    "source_path": "/Users/w3joe/Desktop/2026_sdth/horizon-data/sources/WaSR-T",
+    "source_commit": "1b5360af20408e09bbf0116a0029f7e0c0800e7c",
+    "weights_path": "/Users/w3joe/Desktop/2026_sdth/horizon-data/weights/wasrt_mastr1325.pth",
+    "weights_sha256": "6e70dd6583a984e6a10ceeb5c42ac8f00c6f45d6e3ed41605e4e85a9797954ef",
+    "sequence_path": "/Users/w3joe/Desktop/2026_sdth/horizon-data/sources/WaSR-T/examples/sequence",
+    "ordered_frame_count": 85,
+    "batch_size": 1,
+    "passes": 1,
+    "device": "cuda",
+    "fp16": true,
+    "network_during_gpu_execution": "blocked"
+  },
+  "image": {
+    "python": "3.11",
+    "packages": {
+      "torch": "2.5.1",
+      "torchvision": "0.20.1",
+      "Pillow": "10.4.0"
+    },
+    "checkpoint_delivery": "immutable startup mount using add_local_file(copy=False) after build layers",
+    "network_downloads_during_execution": false
+  },
+  "limits": {
+    "gpu_type": "L4",
+    "gpu_count": 1,
+    "max_total_gpu_count": 10,
+    "physical_cpu": {
+      "request": 4.0,
+      "limit": 4.0
+    },
+    "memory_gib": {
+      "request": 16.0,
+      "limit": 16.0
+    },
+    "startup_timeout_s": 900,
+    "execution_timeout_s": 1200,
+    "retries": 0,
+    "total_attempt_cap": 1,
+    "max_containers": 1,
+    "min_containers": 0,
+    "scaledown_window_s": 60,
+    "controller_wall_timeout_s": 600,
+    "input_frame_cap": 85,
+    "output_bytes_cap": 157286400
+  },
+  "output": {
+    "remote_path": "/a07-wasrt-sequence-003",
+    "local_path": "/Users/w3joe/Desktop/2026_sdth/horizon-runs/compute/a07-wasrt-sequence-003",
+    "required": [
+      "manifest.json",
+      "features.jsonl",
+      "class_masks/",
+      "mask_previews/"
+    ],
+    "expected_class_mask_count": 85,
+    "expected_preview_count": 85,
+    "persistent_storage_policy": "No unbounded persistent volume; retain only for bounded failure recovery, otherwise download and delete."
+  },
+  "acceptance": {
+    "summaries": [
+      "encoder",
+      "temporal",
+      "logits"
+    ],
+    "compare_vanilla_and_hooked_outputs": true,
+    "measure_hook_overhead": true,
+    "sequential_state_reset_check": true,
+    "local_real_model_preflight": "4 frames passed: vanilla/hooked equal, reset replay equal, all three hooks captured"
+  },
+  "cost": {
+    "authorized_upper_bound_usd": 1.5,
+    "conservative_runtime_minutes": 5,
+    "maximum_startup_minutes": 15,
+    "maximum_execution_minutes": 20,
+    "includes": [
+      "GPU",
+      "CPU",
+      "memory",
+      "image build",
+      "temporary storage",
+      "artifact transfer"
+    ]
+  }
+}

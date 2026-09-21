@@ -22,6 +22,26 @@ def spec_with_output(tmp_path: Path) -> dict:
     return spec
 
 
+def test_attempt_003_has_unique_delivery_paths_and_finite_limits() -> None:
+    previous = json.loads(
+        (SCRIPTS.parent / "infra/modal/jobs/a07-wasrt-sequence-002.json").read_text()
+    )
+    spec = json.loads(
+        (SCRIPTS.parent / "infra/modal/jobs/a07-wasrt-sequence-003.json").read_text()
+    )
+
+    job.validate_spec(spec, {"upper_bound_usd": 1.5})
+
+    assert spec["job_id"] == spec["reservation_id"] == "a07-wasrt-sequence-003"
+    assert spec["modal_entrypoint"] == previous["modal_entrypoint"]
+    assert spec["modal_volume_name"] != previous["modal_volume_name"]
+    assert spec["output"]["remote_path"] != previous["output"]["remote_path"]
+    assert spec["output"]["local_path"] != previous["output"]["local_path"]
+    assert spec["limits"]["controller_wall_timeout_s"] == 600
+    assert spec["limits"]["total_attempt_cap"] == 1
+    assert spec["limits"]["retries"] == 0
+
+
 def launch_provenance() -> dict:
     return {
         "captured_utc": "2026-09-21T00:00:00+00:00",
