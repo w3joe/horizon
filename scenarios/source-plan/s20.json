@@ -1,0 +1,38 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S20",
+  "title": "Neural diagnostic worker failure or telemetry flood",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "benign_close_pass.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "external_artifact_required",
+  "orchestrator_steps": [
+    {
+      "at_s": 20.0,
+      "action": "stop_service",
+      "target": "neural_health",
+      "parameters": {
+        "signal": "SIGTERM",
+        "duration_s": 3.0
+      }
+    },
+    {
+      "at_s": 30.0,
+      "action": "flood_diagnostics",
+      "target": "neural_health_to_collector",
+      "parameters": {
+        "bounded_test_profile": "pending_A07_A08"
+      }
+    }
+  ],
+  "dependencies": [
+    "A07 bounded diagnostic worker",
+    "A01/A08 process and load orchestration"
+  ],
+  "acceptance_condition": "Control deadlines remain functional and diagnostic inspection is explicitly incomplete.",
+  "independent_verification": "pending_A08"
+}

@@ -5,10 +5,81 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 from .model import Environment, Hull, VesselState
+
+
+SUPPORTED_FAULT_KINDS = frozenset(
+    {
+        "ais_spoof",
+        "gnss_bias",
+        "gnss_dropout",
+        "peer_intent_conflict",
+        "radar_dropout",
+        "sensor_delay",
+        "slow_rudder",
+        "stuck_rudder",
+        "thrust_reduction",
+    }
+)
+
+
+def _finite_parameter(parameters: dict[str, Any], key: str, default: float) -> float:
+    value = parameters.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"fault parameter {key} must be numeric")
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"fault parameter {key} must be finite")
+    return parsed
+
+
+def _validate_fault_parameters(fault_id: str, kind: str, parameters: dict[str, Any]) -> None:
+    allowed = {
+        "ais_spoof": {"vessel_id", "north_offset_m", "east_offset_m"},
+        "gnss_bias": {"north_m", "east_m"},
+        "gnss_dropout": set(),
+        "peer_intent_conflict": {"vessel_id", "claimed_heading_rad", "claimed_speed_mps"},
+        "radar_dropout": set(),
+        "sensor_delay": {"source_id", "additional_delay_s"},
+        "slow_rudder": {"rate_scale", "limit_scale"},
+        "stuck_rudder": set(),
+        "thrust_reduction": {"scale"},
+    }[kind]
+    extra = set(parameters) - allowed
+    if extra:
+        raise ValueError(f"fault {fault_id} has unsupported parameters: {sorted(extra)}")
+    if kind == "ais_spoof":
+        _finite_parameter(parameters, "north_offset_m", 0.0)
+        _finite_parameter(parameters, "east_offset_m", 0.0)
+    elif kind == "gnss_bias":
+        _finite_parameter(parameters, "north_m", 0.0)
+        _finite_parameter(parameters, "east_m", 0.0)
+    elif kind == "peer_intent_conflict":
+        _finite_parameter(parameters, "claimed_heading_rad", 0.0)
+        if _finite_parameter(parameters, "claimed_speed_mps", 0.0) < 0.0:
+            raise ValueError(f"fault {fault_id} claimed speed must be nonnegative")
+    elif kind == "sensor_delay":
+        if _finite_parameter(parameters, "additional_delay_s", 0.0) < 0.0:
+            raise ValueError(f"fault {fault_id} delay must be nonnegative")
+    elif kind == "slow_rudder":
+        if _finite_parameter(parameters, "rate_scale", 0.3) < 0.0:
+            raise ValueError(f"fault {fault_id} rate scale must be nonnegative")
+        if _finite_parameter(parameters, "limit_scale", 1.0) < 0.0:
+            raise ValueError(f"fault {fault_id} limit scale must be nonnegative")
+    elif kind == "thrust_reduction":
+        scale = _finite_parameter(parameters, "scale", 0.5)
+        if not 0.0 <= scale <= 1.0:
+            raise ValueError(f"fault {fault_id} thrust scale must be in [0, 1]")
+    vessel_id = parameters.get("vessel_id")
+    if vessel_id is not None and (not isinstance(vessel_id, str) or not vessel_id):
+        raise ValueError(f"fault {fault_id} vessel_id must be a nonempty string")
+    source_id = parameters.get("source_id")
+    if source_id is not None and (not isinstance(source_id, str) or not source_id):
+        raise ValueError(f"fault {fault_id} source_id must be a nonempty string")
 
 
 @dataclass(frozen=True)
@@ -106,16 +177,34 @@ def load_scenario(path: str | Path) -> Scenario:
         )
         for item in raw.get("traffic", [])
     )
-    faults = tuple(
-        FaultSpec(
-            fault_id=item["fault_id"],
-            kind=item["kind"],
-            start_s=float(item["start_s"]),
-            end_s=float(item["end_s"]) if item.get("end_s") is not None else None,
-            parameters=dict(item.get("parameters", {})),
+    faults_list: list[FaultSpec] = []
+    fault_ids: set[str] = set()
+    for item in raw.get("faults", []):
+        fault_id = str(item["fault_id"])
+        kind = str(item["kind"])
+        start_s = float(item["start_s"])
+        end_s = float(item["end_s"]) if item.get("end_s") is not None else None
+        if fault_id in fault_ids:
+            raise ValueError(f"duplicate fault_id: {fault_id}")
+        if kind not in SUPPORTED_FAULT_KINDS:
+            raise ValueError(f"unsupported fault kind: {kind}")
+        if not math.isfinite(start_s) or start_s < 0.0:
+            raise ValueError(f"fault {fault_id} start_s must be finite and nonnegative")
+        if end_s is not None and (not math.isfinite(end_s) or end_s <= start_s):
+            raise ValueError(f"fault {fault_id} end_s must be finite and after start_s")
+        parameters = dict(item.get("parameters", {}))
+        _validate_fault_parameters(fault_id, kind, parameters)
+        fault_ids.add(fault_id)
+        faults_list.append(
+            FaultSpec(
+                fault_id=fault_id,
+                kind=kind,
+                start_s=start_s,
+                end_s=end_s,
+                parameters=parameters,
+            )
         )
-        for item in raw.get("faults", [])
-    )
+    faults = tuple(faults_list)
     environment_raw = raw.get("environment", {})
     corridor = tuple(
         (float(p[0]), float(p[1]))

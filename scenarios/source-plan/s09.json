@@ -1,0 +1,39 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S09",
+  "title": "Planner freeze, stale, expired, and malformed command",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "crossing_recoverable.json"
+  ],
+  "decision_ai_policies": [
+    "expired",
+    "stale_lineage",
+    "malformed"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [
+    {
+      "at_s": 20.0,
+      "action": "stop_service",
+      "target": "decision_ai",
+      "parameters": {
+        "duration_s": 2.0
+      }
+    },
+    {
+      "at_s": 22.0,
+      "action": "restart_service",
+      "target": "decision_ai",
+      "parameters": {
+        "policy": "nominal"
+      }
+    }
+  ],
+  "dependencies": [
+    "A01 orchestration",
+    "A04 gate validation"
+  ],
+  "acceptance_condition": "No invalid or expired proposal reaches actuation.",
+  "independent_verification": "pending_A08"
+}

@@ -36,6 +36,9 @@ DEFAULT_SENSORS = (
     SensorDefinition("depth", "navigation_environment", 2.0, 0.08, 1.0, "m", "NED"),
     SensorDefinition("radar", "obstacle_perception", 2.0, 0.12, 1.0, "m,m/s", "NED"),
     SensorDefinition("ais", "obstacle_perception", 1.0, 0.60, 3.0, "m,m/s", "NED"),
+    SensorDefinition(
+        "peer_intent", "inter_ship_communications", 1.0, 0.20, 2.0, "rad,m/s", "NED"
+    ),
     SensorDefinition("actuator", "ship_actuator_feedback", 10.0, 0.04, 0.30, "rad,fraction", "BODY"),
 )
 ACTUATOR_SETPOINT = SensorDefinition(
@@ -179,6 +182,10 @@ class SensorSuite:
                 continue
             if definition.source_id == "radar" and self._active(faults, "radar_dropout", simulation_time_s):
                 continue
+            if definition.source_id == "gnss" and self._active(
+                faults, "gnss_dropout", simulation_time_s
+            ):
+                continue
             sequence = self._sequence[definition.source_id]
             self._sequence[definition.source_id] += 1
             rng = self._random[definition.source_id]
@@ -270,6 +277,28 @@ class SensorSuite:
                 "rudder_rad": ownship.rudder_rad + rng.gauss(0.0, math.radians(0.08)),
                 "thrust_fraction": ownship.thrust_fraction + rng.gauss(0.0, 0.004),
             }
+        if source_id == "peer_intent":
+            claims: list[dict[str, Any]] = []
+            for spec, state in traffic:
+                claimed_heading = state.heading_rad
+                claimed_speed = max(0.0, state.surge_mps)
+                for fault in self._active(faults, "peer_intent_conflict", time_s):
+                    if fault.parameters.get("vessel_id") in {None, spec.vessel_id}:
+                        claimed_heading = float(
+                            fault.parameters.get("claimed_heading_rad", claimed_heading)
+                        )
+                        claimed_speed = float(
+                            fault.parameters.get("claimed_speed_mps", claimed_speed)
+                        )
+                claims.append(
+                    {
+                        "peer_id": spec.vessel_id,
+                        "message_type": "claimed_intent",
+                        "claimed_heading_rad": wrap_angle(claimed_heading),
+                        "claimed_speed_mps": max(0.0, claimed_speed),
+                    }
+                )
+            return {"claims": claims}
         if source_id in {"radar", "ais"}:
             contacts: list[dict[str, Any]] = []
             sigma = 1.2 if source_id == "radar" else 4.0

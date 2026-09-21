@@ -1,0 +1,19 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S15",
+  "title": "Hazard inside stopping or turning limits",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "initially_unrecoverable.json"
+  ],
+  "decision_ai_policies": [
+    "unsafe_straight"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A04 minimum-risk policy"
+  ],
+  "acceptance_condition": "Minimum-risk behavior and the initially-unrecoverable limitation are both reported.",
+  "independent_verification": "pending_A08"
+}
