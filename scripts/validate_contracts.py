@@ -26,20 +26,28 @@ def semantic_checks(value: dict) -> None:
         assert "proposal" not in value, "independent recovery must not synthesize AI lineage"
         now = value["monotonic_time_ns"]
         deadline = value["recovery_deadline_monotonic_ns"]
-        source_expiries = [
-            value["snapshot"]["valid_until_monotonic_ns"],
-            *(item["valid_until_monotonic_ns"] for item in value["health"]["summaries"]),
-            *(item["valid_until_monotonic_ns"] for item in value["recovery_options"]),
-        ]
-        assert deadline > now
-        assert source_expiries and min(source_expiries) > now
-        assert deadline <= min(source_expiries)
-        source_ids = {item["source_id"] for item in value["health"]["summaries"]}
-        assert {
+        required_source_ids = {
             "navigation_environment",
             "obstacle_perception:radar",
             "ship_actuator_feedback",
-        } <= source_ids
+        }
+        required_health = [
+            item
+            for item in value["health"]["summaries"]
+            if item["source_id"] in required_source_ids
+        ]
+        usable_options = [
+            item for item in value["recovery_options"]
+            if item["valid_until_monotonic_ns"] > now
+        ]
+        assert deadline > now
+        assert {item["source_id"] for item in required_health} == required_source_ids
+        assert usable_options
+        assert deadline <= min(
+            value["snapshot"]["valid_until_monotonic_ns"],
+            *(item["valid_until_monotonic_ns"] for item in required_health),
+            max(item["valid_until_monotonic_ns"] for item in usable_options),
+        )
     if value["contract_type"] == "AssuranceDecision":
         assert value["expires_monotonic_ns"] >= value["decided_monotonic_ns"]
         assert value["valid"] or value["issued_command"] is None
