@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import argparse
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import re
+import threading
+import time
+from typing import Any
+from socketserver import TCPServer
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlparse
+from urllib.request import urlopen
+
+from .store import CollectorStore
+
+
+def _get_json(url: str, timeout_s: float) -> dict[str, Any]:
+    with urlopen(url, timeout=timeout_s) as response:
+        value = json.load(response)
+    if not isinstance(value, dict):
+        raise ValueError("upstream response must be an object")
+    return value
+
+
+class SimulatorPoller:
+    def __init__(self, store: CollectorStore, simulator_url: str, branch: str, interval_s: float = 0.02):
+        self.store = store
+        self.simulator_url = simulator_url.rstrip("/")
+        self.branch = branch
+        self.interval_s = interval_s
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.last_error: str | None = None
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._loop, name="collector-simulator", daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join(timeout=2.0)
+
+    def poll_once(self) -> None:
+        base = f"{self.simulator_url}"
+        reference = _get_json(f"{base}/v1/reference?branch={self.branch}", 0.2)
+        batch = _get_json(f"{base}/v1/observations?branch={self.branch}", 0.2)
+        snapshot = _get_json(f"{base}/v1/public/snapshot?branch={self.branch}", 0.2)
+        plant_epoch = batch.get("plant_epoch")
+        snapshot_epoch = re.search(r":epoch-(\d+):snapshot:", str(snapshot.get("snapshot_id", "")))
+        if plant_epoch is not None and snapshot_epoch is not None:
+            if int(snapshot_epoch.group(1)) != int(plant_epoch):
+                raise ValueError("observation batch and public snapshot span different plant epochs")
+        anchor_ns = time.monotonic_ns()
+        self.store.update_reference(self.branch, reference)
+        if plant_epoch is not None:
+            self.store.update_plant_epoch(self.branch, str(snapshot["run_id"]), int(plant_epoch))
+        self.store.update_snapshot(self.branch, snapshot)
+        for item in batch.get("observations", []):
+            self.store.ingest(
+                item,
+                received_ns=anchor_ns,
+                simulation_time_s=float(snapshot["simulation_time_s"]),
+            )
+        self.last_error = None
+
+    def _loop(self) -> None:
+        deadline = time.monotonic()
+        while not self.stop_event.is_set():
+            deadline += self.interval_s
+            try:
+                self.poll_once()
+            except (HTTPError, URLError, TimeoutError, ValueError, KeyError) as exc:
+                self.last_error = str(exc)
+            self.stop_event.wait(max(0.0, deadline - time.monotonic()))
+
+
+class Handler(BaseHTTPRequestHandler):
+    server: "CollectorServer"
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def _json(self, status: HTTPStatus, value: object) -> None:
+        body = json.dumps(value, allow_nan=False, separators=(",", ":")).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        path = parsed.path.rstrip("/") or "/"
+        if path in {"/health", "/v1/diagnostics"}:
+            value = self.server.store.diagnostics()
+            value["upstream_error"] = self.server.poller.last_error if self.server.poller else None
+            self._json(HTTPStatus.OK, value)
+            return
+        if path == "/v1/batch":
+            try:
+                value = self.server.store.batch(
+                    branch=query.get("branch", ["protected"])[0],
+                    after_cursor=int(query.get("after_cursor", ["0"])[0]),
+                    limit=int(query.get("limit", ["512"])[0]),
+                )
+                self._json(HTTPStatus.OK, value)
+            except ValueError as exc:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "BAD_REQUEST", "message": str(exc)})
+            return
+        self._json(HTTPStatus.NOT_FOUND, {"error": "NOT_FOUND"})
+
+    def do_POST(self) -> None:  # noqa: N802
+        if urlparse(self.path).path.rstrip("/") != "/v1/ingest":
+            self._json(HTTPStatus.NOT_FOUND, {"error": "NOT_FOUND"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 1_000_000:
+                raise ValueError("body must be between 1 byte and 1 MB")
+            value = json.loads(self.rfile.read(length))
+            records = value if isinstance(value, list) else [value]
+            if len(records) > 512:
+                raise ValueError("at most 512 records per request")
+            accepted = sum(self.server.store.ingest(item) for item in records)
+            self._json(HTTPStatus.ACCEPTED, {"accepted": accepted, "replayed": len(records) - accepted})
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "BAD_REQUEST", "message": str(exc)})
+
+
+class CollectorServer(ThreadingHTTPServer):
+    def __init__(self, address: tuple[str, int], store: CollectorStore, poller: SimulatorPoller | None = None):
+        self.store = store
+        self.poller = poller
+        super().__init__(address, Handler)
+
+    def server_bind(self) -> None:
+        TCPServer.server_bind(self)
+        self.server_name = str(self.server_address[0])
+        self.server_port = int(self.server_address[1])
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Horizon bounded observation collector")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8105)
+    parser.add_argument("--simulator-url", default="http://127.0.0.1:8100")
+    parser.add_argument("--branch", default="protected")
+    parser.add_argument("--maximum-records", type=int, default=2048)
+    args = parser.parse_args()
+    store = CollectorStore(maximum_records=args.maximum_records)
+    poller = SimulatorPoller(store, args.simulator_url, args.branch)
+    server = CollectorServer((args.host, args.port), store, poller)
+    poller.start()
+    try:
+        server.serve_forever(poll_interval=0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        poller.stop()
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
