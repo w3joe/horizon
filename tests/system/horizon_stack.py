@@ -175,6 +175,7 @@ class HorizonStack:
             for name in ("simulator", "decision_ai", "collector", "fusion", "gate", "assurance")
         }
         self.processes: dict[str, ManagedProcess] = {}
+        self.stopped_commands: dict[str, list[str]] = {}
         self.run_id = f"a08-{scenario.removesuffix('.json')}-{os.getpid()}-{time.monotonic_ns()}"
         self.capabilities = directory / "capabilities"
         self.logs = directory / "logs"
@@ -205,7 +206,8 @@ class HorizonStack:
         return (self.capabilities / name).read_text().strip()
 
     def _start_process(self, name: str, command: list[str]) -> None:
-        log = (self.logs / f"{name}.log").open("wb")
+        log_path = self.logs / f"{name}.log"
+        log = log_path.open("ab" if log_path.exists() else "wb")
         process = subprocess.Popen(  # noqa: S603 - fixed local fixture commands
             command,
             cwd=ROOT,
@@ -364,6 +366,7 @@ class HorizonStack:
 
     def stop_process(self, name: str) -> None:
         item = self.processes.pop(name)
+        self.stopped_commands[name] = list(item.command)
         if item.process.poll() is None:
             os.killpg(item.process.pid, signal.SIGTERM)
             try:
@@ -372,6 +375,15 @@ class HorizonStack:
                 os.killpg(item.process.pid, signal.SIGKILL)
                 item.process.wait(timeout=2.0)
         item.log.close()
+
+    def restart_process(self, name: str) -> None:
+        if name in self.processes:
+            raise ValueError(f"{name} is still running")
+        try:
+            command = self.stopped_commands[name]
+        except KeyError as exc:
+            raise ValueError(f"{name} has not been stopped") from exc
+        self._start_process(name, list(command))
 
     def close(self) -> None:
         diagnostic_root = os.environ.get("HORIZON_SYSTEM_DIAGNOSTICS_DIR")
