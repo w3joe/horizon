@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { SimulationSnapshot } from "../../../../packages/contracts/typescript/src/index";
 import { useDemoReplay } from "../hooks/useDemoReplay";
 import type { DemoBranch, DemoCameraMode, DemoFrame, DemoReplay, DemoStoryStage } from "../lib/demoTypes";
@@ -116,6 +116,9 @@ function storyFor(replay: DemoReplay): DemoStoryStage[] {
     : replay.intervention.mechanism === "assurance_decision"
       ? "The assurance supervisor sends a recovery command through the independent actuator gate."
       : "No protected intervention is recorded in this run.";
+  const interventionSummary = replay.intervention.mode === "preventive_guard"
+    ? "Recovery was applied before an unsafe command was observed active at the protected plant."
+    : mechanism;
   const counterfactual = replay.outcome_summary.counterfactual;
   const protectedOutcome = replay.outcome_summary.protected;
   return [
@@ -132,8 +135,10 @@ function storyFor(replay: DemoReplay): DemoStoryStage[] {
       number: "02",
       timeS: interventionTime,
       eyebrow: "Actual intervention",
-      title: replay.intervention.occurred ? "The safety layer takes authority" : "No takeover was recorded",
-      summary: mechanism,
+      title: replay.intervention.occurred
+        ? replay.intervention.mode === "preventive_guard" ? "Preventive safety guard" : "The safety layer takes authority"
+        : "No takeover was recorded",
+      summary: interventionSummary,
     },
     {
       id: "collision",
@@ -169,11 +174,12 @@ function CurrentEvidence({ replay, frame, timeS }: { replay: DemoReplay; frame: 
   const reasons = interventionReached
     ? replay.intervention.reason_codes
     : receipt?.reason_codes.length ? receipt.reason_codes : decision?.reason_codes ?? [];
+  const interventionLabel = replay.intervention.mode === "preventive_guard" ? "Safety guard engaged" : "Safety takeover recorded";
   return (
     <section className="demo-evidence" aria-label="Current replay evidence">
       <div className="demo-evidence-heading">
         <span>At {formatTime(timeS)}</span>
-        <strong>{interventionReached ? "Safety takeover recorded" : proposal ? "Autonomy is proposing a command" : "Waiting for the first proposal"}</strong>
+        <strong>{interventionReached ? interventionLabel : proposal ? "Autonomy is proposing a command" : "Waiting for the first proposal"}</strong>
       </div>
       <div className="command-compare">
         <article className="command-card proposed-command">
@@ -211,6 +217,7 @@ export function DemoExperience() {
   const demo = useDemoReplay();
   const [cameraMode, setCameraMode] = useState<DemoCameraMode>("oblique");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const branchSection = useRef<HTMLElement | null>(null);
 
   const story = useMemo(() => demo.replay ? storyFor(demo.replay) : [], [demo.replay]);
   const activeStage = story.reduce((selected, stage, index) => demo.timeS >= stage.timeS ? index : selected, 0);
@@ -218,6 +225,13 @@ export function DemoExperience() {
   const counterfactualSnapshot = useMemo(() => demo.replay ? interpolateSnapshot(demo.replay, demo.timeS, "counterfactual") : null, [demo.replay, demo.timeS]);
   const protectedTrail = useMemo(() => demo.replay ? trailFor(demo.replay, demo.timeS, "protected") : [], [demo.replay, demo.timeS]);
   const counterfactualTrail = useMemo(() => demo.replay ? trailFor(demo.replay, demo.timeS, "counterfactual") : [], [demo.replay, demo.timeS]);
+
+  const showReplay = () => {
+    branchSection.current?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "start",
+    });
+  };
 
   if (demo.loadState === "loading-catalog" || demo.loadState === "loading-replay") {
     return (
@@ -239,6 +253,7 @@ export function DemoExperience() {
   const interventionReached = replay.intervention.occurred && replay.intervention.time_s !== null && demo.timeS >= replay.intervention.time_s;
   const protectedCollision = replay.outcome_summary.protected.first_collision_time_s != null && demo.timeS >= replay.outcome_summary.protected.first_collision_time_s;
   const counterfactualCollision = replay.outcome_summary.counterfactual.first_collision_time_s != null && demo.timeS >= replay.outcome_summary.counterfactual.first_collision_time_s;
+  const interventionLabel = replay.intervention.mode === "preventive_guard" ? "Safety guard engaged" : "Safety takeover recorded";
 
   return (
     <main className="demo-shell">
@@ -253,27 +268,27 @@ export function DemoExperience() {
           <h1>When autonomy fails,<br /><em>safety stays in control.</em></h1>
           <p>Watch the same maritime encounter unfold twice. The red branch continues without runtime assurance. The cyan branch shows the command that the protected plant actually received.</p>
           <div className="hero-actions">
-            <button type="button" className="demo-primary" onClick={demo.togglePlaying}><PlayIcon playing={demo.playing} />{demo.playing ? "Pause demo" : demo.timeS > replay.timeline.start_s ? "Continue demo" : "Play safety demo"}</button>
-            <button type="button" className="demo-secondary" onClick={() => demo.seek(story[1]?.timeS ?? replay.timeline.start_s)}>Jump to intervention</button>
+            <button type="button" className="demo-primary" onClick={() => { const starting = !demo.playing; demo.togglePlaying(); if (starting) showReplay(); }}><PlayIcon playing={demo.playing} />{demo.playing ? "Pause demo" : demo.timeS > replay.timeline.start_s ? "Continue demo" : "Play safety demo"}</button>
+            <button type="button" className="demo-secondary" onClick={() => { demo.seek(story[1]?.timeS ?? replay.timeline.start_s); showReplay(); }}>Jump to intervention</button>
           </div>
         </div>
         <aside className="demo-story" aria-label="Four-stage safety story">
           {story.map((stage, index) => (
-            <button key={stage.id} type="button" className={index === activeStage ? "active" : index < activeStage ? "complete" : ""} onClick={() => demo.seek(stage.timeS)}>
+            <button key={stage.id} type="button" className={index === activeStage ? "active" : index < activeStage ? "complete" : ""} onClick={() => { demo.seek(stage.timeS); if (stage.id === "takeover" || stage.id === "collision") showReplay(); }}>
               <span>{stage.number}</span><div><small>{stage.eyebrow}</small><strong>{stage.title}</strong></div><i />
             </button>
           ))}
         </aside>
       </section>
 
-      <section className="branch-section" aria-label="Synchronized branch comparison">
+      <section ref={branchSection} className="branch-section" aria-label="Synchronized branch comparison">
         <header className="branch-section-header">
           <div><span className="section-kicker">Synchronized comparison</span><h2>Same encounter. Different authority.</h2></div>
           <div className="demo-camera-toggle" aria-label="Camera angle"><button type="button" aria-pressed={cameraMode === "oblique"} onClick={() => setCameraMode("oblique")}>Oblique</button><button type="button" aria-pressed={cameraMode === "tactical"} onClick={() => setCameraMode("tactical")}>Tactical</button></div>
         </header>
         <div className="branch-grid">
           <article className="branch-view protected">
-            <header><div><i /><span>RTA protected</span></div><strong>{interventionReached ? "Safety takeover recorded" : "Monitoring"}</strong></header>
+            <header><div><i /><span>RTA protected</span></div><strong>{interventionReached ? interventionLabel : "Monitoring"}</strong></header>
             <div className="demo-scene-wrap"><DemoScene snapshot={protectedSnapshot} trail={protectedTrail} timeS={demo.timeS} branch="protected" cameraMode={cameraMode} collision={protectedCollision} intervention={interventionReached} playing={demo.playing} /></div>
             <footer><span>Recorded outcome · actual protected plant</span><b>{replay.outcome_summary.protected.min_hull_clearance_m.toFixed(1)} m minimum clearance</b></footer>
           </article>

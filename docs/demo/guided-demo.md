@@ -14,7 +14,9 @@ The existing operational workspace remains available through **Live console**.
    evaluation-only without-RTA counterfactual.
 3. Use the four evidence-timed story markers. The first is the recorded unsafe policy proposal. The
    second is the actual intervention time and names the recorded mechanism, including
-   `gate_watchdog` when that is what happened. The third is the counterfactual collision time from
+   `gate_watchdog` when that is what happened. A `preventive_guard` run says that recovery was
+   applied before an unsafe command was observed active at the protected plant; it does not claim a
+   takeover after unsafe actuation. The third marker is the counterfactual collision time from
    post-run scoring. The fourth is the end of the recorded run.
 4. At the intervention, point out **AI proposed** and **Actually issued**. Those values come from the
    latest public proposal, receipt, and protected-command record at or before the playhead. Reason

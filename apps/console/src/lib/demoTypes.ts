@@ -82,6 +82,9 @@ export interface DemoReplay {
     occurred: boolean;
     time_s: number | null;
     mechanism: "gate_watchdog" | "assurance_decision" | null;
+    mode?: "takeover_after_unsafe_command" | "preventive_guard";
+    unsafe_command_applied_before_intervention?: boolean;
+    prior_unsafe_command_id?: string | null;
     reason_codes: string[];
     command_id: string | null;
     actual_command: { heading_rad: number; speed_mps: number } | null;
@@ -206,6 +209,9 @@ export function parseDemoReplay(value: unknown): DemoReplay {
     || !isObject(value.intervention)
     || typeof value.intervention.occurred !== "boolean"
     || (value.intervention.time_s !== null && !isFiniteNumber(value.intervention.time_s))
+    || (value.intervention.mode !== undefined && value.intervention.mode !== "takeover_after_unsafe_command" && value.intervention.mode !== "preventive_guard")
+    || (value.intervention.unsafe_command_applied_before_intervention !== undefined && typeof value.intervention.unsafe_command_applied_before_intervention !== "boolean")
+    || (value.intervention.prior_unsafe_command_id !== undefined && value.intervention.prior_unsafe_command_id !== null && typeof value.intervention.prior_unsafe_command_id !== "string")
     || !Array.isArray(value.intervention.reason_codes)
     || !value.intervention.reason_codes.every((item) => typeof item === "string")
     || !isObject(value.outcome_summary)

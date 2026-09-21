@@ -137,7 +137,7 @@
 .demo-story button.active > i { background: var(--demo-cyan); box-shadow: 0 0 10px var(--demo-cyan); }
 .demo-story button.complete > span { color: #071318; border-color: #6ba6a7; background: #6ba6a7; }
 
-.branch-section { padding: 42px clamp(18px, 4vw, 64px) 24px; border-top: 1px solid var(--demo-line); background: linear-gradient(180deg, rgba(8, 22, 28, .9), rgba(3, 10, 15, .45)); }
+.branch-section { scroll-margin-top: 12px; padding: 42px clamp(18px, 4vw, 64px) 24px; border-top: 1px solid var(--demo-line); background: linear-gradient(180deg, rgba(8, 22, 28, .9), rgba(3, 10, 15, .45)); }
 .branch-section-header { max-width: 1370px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: end; gap: 20px; }
 .branch-section h2, .story-detail h2, .outcome-section h2 { margin: 7px 0 0; font-size: clamp(24px, 3vw, 36px); font-weight: 560; letter-spacing: -.035em; }
 .demo-camera-toggle { display: flex; padding: 3px; border: 1px solid var(--demo-line); border-radius: 5px; background: #071219; }
