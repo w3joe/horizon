@@ -13,10 +13,46 @@ sys.path.insert(0, str(SCRIPTS))
 from console_proxy import (  # noqa: E402
     ConsoleHandler,
     compact_frame,
+    copy_upstream_body,
     load_artifact_frames,
     resolve_public_route,
     validate_artifact,
 )
+
+
+def test_sse_proxy_flushes_each_line_without_waiting_for_a_large_read() -> None:
+    class IncrementalStream:
+        headers = {"Content-Type": "text/event-stream; charset=utf-8"}
+
+        def __init__(self) -> None:
+            self.lines = iter(
+                [b"event: snapshot\n", b'data: {"tick_index":1}\n', b"\n", b""]
+            )
+
+        def readline(self) -> bytes:
+            return next(self.lines)
+
+        def read(self, _size: int) -> bytes:
+            raise AssertionError("SSE forwarding must not wait for a chunked read")
+
+    class Destination:
+        def __init__(self) -> None:
+            self.parts: list[bytes] = []
+            self.flushes = 0
+
+        def write(self, value: bytes) -> None:
+            self.parts.append(value)
+
+        def flush(self) -> None:
+            self.flushes += 1
+
+    destination = Destination()
+    copy_upstream_body(IncrementalStream(), destination)
+
+    assert b"".join(destination.parts) == (
+        b"event: snapshot\n" b'data: {"tick_index":1}\n' b"\n"
+    )
+    assert destination.flushes == 3
 
 
 def test_public_proxy_routes_are_explicitly_allowlisted() -> None:

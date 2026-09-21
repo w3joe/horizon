@@ -34,6 +34,20 @@ PUBLIC_GET_ROUTES = {
 FRAME_ID = re.compile(r"^[0-9]{5}$")
 
 
+def copy_upstream_body(response: Any, destination: Any) -> None:
+    """Forward finite bodies in chunks and SSE bodies as they arrive."""
+
+    content_type = response.headers.get("Content-Type", "")
+    if content_type.split(";", 1)[0].strip().lower() == "text/event-stream":
+        while line := response.readline():
+            destination.write(line)
+            destination.flush()
+        return
+    while chunk := response.read(16_384):
+        destination.write(chunk)
+        destination.flush()
+
+
 def compact_frame(record: dict[str, Any]) -> dict[str, Any]:
     frame_id = str(record["frame_id"])
     stem = Path(frame_id).stem
@@ -431,9 +445,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                         self.send_header(header, value)
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
-                while chunk := response.read(16_384):
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+                copy_upstream_body(response, self.wfile)
         except HTTPError as error:
             self._json(HTTPStatus(error.code), {"error": "UPSTREAM_HTTP_ERROR"})
         except (URLError, TimeoutError, BrokenPipeError, ConnectionResetError):
