@@ -1,4 +1,4 @@
-import type { AssuranceDecision, Observation, SimulationSnapshot } from "../../../../packages/contracts/typescript/src/index";
+import type { AssuranceDecision, GateReceipt, Observation, SimulationSnapshot } from "../../../../packages/contracts/typescript/src/index";
 import type { ConsolePacket, ScenarioEvent, ScenarioId } from "../types";
 
 const scenarioCopy: Record<ScenarioId, { label: string; reason: string; codes: string[]; neural: ConsolePacket["neural"] }> = {
@@ -143,10 +143,39 @@ export function createFixturePacket(scenarioId: ScenarioId, timeS: number): Cons
     solver: { status: "not_used" },
     valid: true,
   };
+  const receipt: GateReceipt = {
+    contract_type: "GateReceipt",
+    schema_version: "0.1.0",
+    receipt_id: "receipt-0042",
+    run_id: decision.run_id,
+    branch_id: decision.branch_id,
+    decision_id: decision.decision_id,
+    command_id: `${decision.decision_id}:issued`,
+    authority: decision.authority,
+    accepted: true,
+    reason_codes: [],
+    received_monotonic_ns: decision.decided_monotonic_ns + 2_000_000,
+    actuated_monotonic_ns: decision.decided_monotonic_ns + 8_000_000,
+    actual_command: decision.issued_command,
+  };
 
   return {
     snapshot,
     decision,
+    receipt,
+    lineage: {
+      status: "accepted",
+      eventType: "decision_receipt",
+      sampleId: snapshot.snapshot_id,
+      governorInput: null,
+      decision,
+      receipt,
+      reasonCodes: decision.reason_codes,
+      cycleTimeNs: 28_000_000,
+      explanation: "Synthetic fixture receipt indicates the displayed command was accepted in fixture playback.",
+    },
+    collectorDiagnostics: null,
+    gateStatus: null,
     observations,
     proposedCommand: { headingRad: 0.08, speedMps: 3.0 },
     proposedPath: [[0, -37], [28, -29], [52, -13], [76, 8], [104, 29]].map(([north, east]) => ({ north, east })),

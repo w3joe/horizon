@@ -5,6 +5,7 @@ import { MaritimeScene } from "./components/MaritimeScene";
 import { NeuralView } from "./components/NeuralView";
 import { Timeline } from "./components/Timeline";
 import { useConsoleFeed } from "./hooks/useConsoleFeed";
+import { usePerceptionArtifact } from "./hooks/usePerceptionArtifact";
 import { SCENARIOS } from "./lib/fixtures";
 import type { CameraMode, ScenarioId, Workspace } from "./types";
 
@@ -27,8 +28,16 @@ export function App() {
   const frame = useRef<number | null>(null);
   const previous = useRef<number | null>(null);
   const { packet, connection, endpoint } = useConsoleFeed(scenarioId, timeS);
+  const perceptionArtifact = usePerceptionArtifact(true);
+  const operatorLocked = endpoint !== null;
   const displayTime = packet.fixture ? timeS : packet.snapshot.simulation_time_s;
+  const timelineDuration = packet.fixture ? DURATION_S : Math.max(DURATION_S, Math.ceil(displayTime / 60) * 60);
   const selectedEvent = useMemo(() => packet.events.find((event) => event.id === selectedEventId), [packet.events, selectedEventId]);
+
+  useEffect(() => {
+    if (packet.fixture || packet.events.length === 0 || packet.events.some((event) => event.id === selectedEventId)) return;
+    setSelectedEventId(packet.events.at(-1)?.id ?? "");
+  }, [packet.events, packet.fixture, selectedEventId]);
 
   useEffect(() => {
     if (!playing || !packet.fixture) return;
@@ -65,15 +74,15 @@ export function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (["INPUT", "SELECT", "BUTTON", "TEXTAREA"].includes(target.tagName)) return;
-      if (event.key === " ") { event.preventDefault(); if (packet.fixture) setPlaying((value) => !value); }
+      if (event.key === " ") { event.preventDefault(); if (packet.fixture && !operatorLocked) setPlaying((value) => !value); }
       if (event.key === "1") setWorkspace("navigation");
       if (event.key === "2") setWorkspace("data");
       if (event.key === "3") setWorkspace("neural");
-      if (event.key.toLowerCase() === "r" && packet.fixture) { setTimeS(0); setPlaying(false); }
+      if (event.key.toLowerCase() === "r" && packet.fixture && !operatorLocked) { setTimeS(0); setPlaying(false); }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [packet.fixture]);
+  }, [operatorLocked, packet.fixture]);
 
   const changeScenario = (id: ScenarioId) => {
     setScenarioId(id);
@@ -98,14 +107,15 @@ export function App() {
           {(["navigation", "data", "neural"] as Workspace[]).map((item, index) => <button key={item} type="button" aria-pressed={workspace === item} onClick={() => setWorkspace(item)}><span>0{index + 1}</span>{item === "data" ? "Data flow" : item === "neural" ? "Neural sensor" : "Navigation"}</button>)}
         </nav>
         <div className="scenario-controls">
-          <label><span>Scenario / inject fault</span><select value={scenarioId} disabled={!packet.fixture} onChange={(event) => changeScenario(event.target.value as ScenarioId)}>{SCENARIOS.map((scenario) => <option value={scenario.id} key={scenario.id}>{scenario.label}</option>)}</select></label>
-          <button type="button" className={showBranch ? "active" : ""} disabled={!packet.fixture} onClick={() => setShowBranch((value) => !value)}>Compare branch</button>
+          <label><span>Scenario / inject fault</span><select value={scenarioId} disabled={operatorLocked || !packet.fixture} onChange={(event) => changeScenario(event.target.value as ScenarioId)}>{SCENARIOS.map((scenario) => <option value={scenario.id} key={scenario.id}>{scenario.label}</option>)}</select></label>
+          <button type="button" className={showBranch ? "active" : ""} disabled={operatorLocked || !packet.fixture} onClick={() => setShowBranch((value) => !value)}>Compare branch</button>
+          {operatorLocked && <span className="control-pending">Operator controls pending coordinated reset capability</span>}
         </div>
       </section>
 
       <div className="mode-disclosure">
-        <strong>{packet.fixture ? "INITIAL FIXTURE MODE" : "LIVE PUBLIC MODE"}</strong>
-        <span>{packet.fixture ? "Synthetic schema-valid display data · no measured performance or validated safety claim" : "Public sensor-derived simulator state · no truth, control token, or assurance decision available"}</span>
+        <strong>{packet.fixture ? operatorLocked ? "FIXTURE FALLBACK · LIVE DISCONNECTED" : "INITIAL FIXTURE MODE" : "LIVE PUBLIC MODE"}</strong>
+        <span>{packet.fixture ? operatorLocked ? "Synthetic layout sample only · server operator controls locked · no live evidence claim" : "Synthetic schema-valid display data · no measured performance or validated safety claim" : `Public online evidence · lineage ${packet.lineage.status} · evaluation truth and private capabilities unavailable`}</span>
         {endpoint && connection !== "live" && <code>{endpoint}</code>}
       </div>
 
@@ -115,21 +125,21 @@ export function App() {
             <>
               <div className="scene-toolbar">
                 <div className="camera-toggle"><button type="button" aria-pressed={cameraMode === "oblique"} onClick={() => setCameraMode("oblique")}>Oblique</button><button type="button" aria-pressed={cameraMode === "tactical"} onClick={() => setCameraMode("tactical")}>Tactical</button></div>
-                <div className="scene-legend"><span className="accepted">Accepted</span><span className="proposed">Proposed</span>{showBranch && <span className="branch">Unprotected prediction</span>}</div>
+                <div className="scene-legend">{packet.acceptedPath.length > 1 ? <span className="accepted">Gate-applied trajectory</span> : <span className="unavailable">Applied trajectory unavailable</span>}{packet.proposedPath.length > 1 ? <span className="proposed">AI-proposed trajectory</span> : <span className="unavailable">Proposed trajectory unavailable</span>}{showBranch && packet.fixture && <span className="branch">Fixture branch prediction</span>}</div>
               </div>
               <MaritimeScene packet={packet} cameraMode={cameraMode} selectedContactId={selectedContactId} onSelectContact={setSelectedContactId} showBranch={showBranch && packet.fixture} />
               <div className="scene-footnote"><span>{packet.physicsLabel}</span><span>Ownship hull 12 × 3 m</span></div>
             </>
           )}
           {workspace === "data" && <DataFlowView packet={packet} event={selectedEvent} />}
-          {workspace === "neural" && <NeuralView packet={packet} event={selectedEvent} />}
+          {workspace === "neural" && <NeuralView packet={packet} event={selectedEvent} artifact={perceptionArtifact} />}
         </div>
         <EvidencePanel packet={packet} selectedEvent={selectedEvent} />
       </section>
 
       <Timeline
         timeS={displayTime}
-        durationS={DURATION_S}
+        durationS={timelineDuration}
         playing={playing}
         rate={rate}
         events={packet.events}
@@ -144,7 +154,8 @@ export function App() {
         onReset={() => { setTimeS(0); setPlaying(false); setSelectedEventId("evt-fault"); }}
         onRateChange={setRate}
         onSelectEvent={(id) => { const event = packet.events.find((item) => item.id === id); setSelectedEventId(id); if (event) { setTimeS(event.timeS); setPlaying(false); } }}
-        disabled={!packet.fixture}
+        disabled={operatorLocked || !packet.fixture}
+        disabledReason="Live controls await the server-side operator handshake"
       />
       <footer className="console-footer"><span>Keyboard: 1–3 workspaces · Space play/pause · R reset</span><span>Contract 0.1.0 · {packet.snapshot.frame}</span></footer>
     </main>
