@@ -515,6 +515,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     proposals: list[dict[str, Any]] = []
     gate_receipts: list[dict[str, Any]] = []
     watchdog_receipts: list[dict[str, Any]] = []
+    watchdog_actions: list[dict[str, Any]] = []
     recovery_primes: list[dict[str, Any]] = []
     scheduler_events: list[dict[str, Any]] = []
     scheduler_rejections: list[dict[str, Any]] = []
@@ -567,6 +568,8 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     def watchdog_event() -> None:
         nonlocal watchdog_opportunities
         watchdog_opportunities += 1
+        with gate.lock:
+            generation_before = gate.control_generation
         started = time.monotonic_ns()
         receipt = gate.watchdog_tick()
         actual_wall_timings_ns["watchdog"].append(
@@ -579,6 +582,24 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                     simulation_time_s=simulator.simulation_time_s,
                     source="watchdog",
                 )
+            )
+        with gate.lock:
+            generation_after = gate.control_generation
+            last_event = copy.deepcopy(gate.telemetry[-1]) if gate.telemetry else None
+        if generation_after != generation_before:
+            reason_codes = list(receipt.get("reason_codes", [])) if receipt else []
+            if not reason_codes and isinstance(last_event, dict):
+                reason_codes = list(last_event.get("reason_codes", []))
+            watchdog_actions.append(
+                {
+                    "host_monotonic_ns": clock(),
+                    "simulation_time_s": simulator.simulation_time_s,
+                    "generation_before": generation_before,
+                    "generation_after": generation_after,
+                    "command_issued": receipt is not None,
+                    "receipt_id": receipt.get("receipt_id") if receipt else None,
+                    "reason_codes": reason_codes,
+                }
             )
 
     def advance_stage(stage: str, *, floor_ns: int | None = None) -> bool:
@@ -893,6 +914,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         "proposals": proposals,
         "gate_receipts": gate_receipts,
         "watchdog_receipts": watchdog_receipts,
+        "watchdog_actions": watchdog_actions,
         "protected_command_trace": copy.deepcopy(plant.command_trace),
         "authority_audit": authority_audit,
         "authorized_proposal_sources": ["decision-ai-fixture"],

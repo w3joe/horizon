@@ -69,6 +69,7 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
     decisions = list(bundle.get("decisions", []))
     gate_receipts = list(bundle.get("gate_receipts", []))
     watchdog_receipts = list(bundle.get("watchdog_receipts", []))
+    watchdog_actions = list(bundle.get("watchdog_actions", []))
     truth_frames = list(bundle.get("truth_frames", []))
     return {
         "record_type": "DevelopmentEpisodeDiagnostics",
@@ -105,6 +106,16 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
         "watchdog_receipts": {
             "count": len(watchdog_receipts),
             "accepted": sum(item.get("accepted") is True for item in watchdog_receipts),
+        },
+        "watchdog_actions": {
+            "count": len(watchdog_actions),
+            "without_command": sum(
+                item.get("command_issued") is not True for item in watchdog_actions
+            ),
+            "generation_advanced": all(
+                int(item["generation_after"]) > int(item["generation_before"])
+                for item in watchdog_actions
+            ),
         },
         "operational_authority_counts": dict(
             sorted(Counter(str(item.get("authority", "unknown")) for item in truth_frames).items())
