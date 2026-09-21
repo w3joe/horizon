@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from experiment.evaluation.scoring import score_closed_loop
 from experiment.harness.closed_loop import (
     _audit_engineering_bounds,
@@ -147,7 +149,7 @@ def test_gate_service_expiry_rejects_before_receiver_mutation(monkeypatch) -> No
 
     monkeypatch.setattr(A1ThresholdSimplex, "evaluate", short_lived_decision)
     request = _request("A1")
-    request["max_simulation_time_s"] = 0.5
+    request["max_simulation_time_s"] = 0.3
     request["modeled_gate_service_ns"] = 40_000_000
 
     bundle = run_assured_episode(request)
@@ -219,6 +221,70 @@ def test_candidate_completion_never_precedes_emitted_decision_time(monkeypatch) 
     assert candidate_event["completed_monotonic_ns"] >= int(
         bundle["decisions"][0]["decided_monotonic_ns"]
     )
+
+
+def test_production_candidate_deadline_failure_sets_completion_floor(monkeypatch) -> None:
+    import horizon_assurance.candidates as candidates_module
+
+    host_times = iter((1_000_000_000, 1_041_000_000))
+    monkeypatch.setattr(
+        candidates_module,
+        "time",
+        SimpleNamespace(monotonic_ns=lambda: next(host_times)),
+    )
+    request = _request("A1")
+    request["max_simulation_time_s"] = 0.3
+    request["modeled_candidate_service_ns"] = 0
+    request["modeled_gate_service_ns"] = 0
+
+    bundle = run_assured_episode(request)
+
+    decision = bundle["decisions"][0]
+    candidate_event = next(
+        event
+        for event in bundle["timing_model"]["events"]
+        if event["stage"] == "candidate"
+    )
+    assert decision["compute_time_ns"] == 41_000_000
+    assert decision["deadline_met"] is False
+    assert decision["valid"] is False
+    assert decision["action"] == "invalid"
+    assert candidate_event["completed_monotonic_ns"] >= decision[
+        "decided_monotonic_ns"
+    ]
+    assert bundle["gate_receipts"][0]["accepted"] is False
+    assert "DECISION_INVALID_OR_LATE" in bundle["gate_receipts"][0]["reason_codes"]
+
+
+def test_nonzero_front_end_stages_fail_closed_before_candidate_evaluation() -> None:
+    all_nonzero = _request("A1")
+    all_nonzero.update(
+        {
+            "max_simulation_time_s": 0.5,
+            "timing_profile_id": "all-stages-20ms-v1",
+            "modeled_ai_service_ns": 20_000_000,
+            "modeled_recovery_prime_service_ns": 20_000_000,
+            "modeled_candidate_service_ns": 20_000_000,
+            "modeled_gate_service_ns": 20_000_000,
+        }
+    )
+    ai_stale = run_assured_episode(all_nonzero)
+    assert ai_stale["decisions"] == []
+    assert ai_stale["proposals"] == []
+    assert ai_stale["gate_receipts"] == []
+    assert any(
+        event["stage"] == "ai" and event["plant_steps"] == 1
+        for event in ai_stale["timing_model"]["events"]
+    )
+
+    prime_nonzero = _request("A1")
+    prime_nonzero["max_simulation_time_s"] = 0.5
+    prime_nonzero["modeled_recovery_prime_service_ns"] = 20_000_000
+    prime_stale = run_assured_episode(prime_nonzero)
+    assert prime_stale["cadence"]["post_prime_expired_inputs"] > 0
+    assert prime_stale["decisions"] == []
+    assert prime_stale["proposals"] == []
+    assert prime_stale["gate_receipts"] == []
 
 
 def test_stage_latency_must_be_finite_fixed_step_multiple() -> None:

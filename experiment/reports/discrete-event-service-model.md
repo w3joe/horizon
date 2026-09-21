@@ -30,11 +30,13 @@ invent a `GateReceipt`. Otherwise it calls `gate.submit` without a supplied `now
 simulator receiver read the shared live clock and reject expired evidence before plant mutation.
 
 Wall durations for candidate evaluation, recovery validation, gate submission, and watchdog calls
-are recorded separately. They do not advance the simulated timeline and cannot be described as
-measured end-to-end response time. In particular, gate validation is instantaneous at the modeled
-gate-completion event. The default zero-time AI and recovery stages are explicit limitations. A
-study using different assumptions must put those exact finite times in every episode request and
-retain them in the raw diagnostics.
+are recorded separately. They do not directly advance the simulated timeline and cannot be
+described as measured end-to-end response time. Candidate wall work can affect simulated completion
+indirectly: production candidates include measured compute in `decided_monotonic_ns`, and that field
+is a mandatory scheduler floor. Gate validation remains instantaneous at the modeled gate-completion
+event. The default zero-time AI and recovery stages are explicit limitations. A study using different
+assumptions must put those exact finite times in every episode request and retain them in the raw
+diagnostics.
 
 The raw runner writes one bounded diagnostics sidecar per episode. It records the candidate version
 read from the instantiated plugin, the complete timing model, scheduler cancellations, action
