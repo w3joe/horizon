@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 from pathlib import Path
 import re
 from socketserver import TCPServer
+import threading
 from typing import Any, ClassVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -81,6 +84,55 @@ def load_artifact_frames(output: Path | None) -> dict[str, dict[str, Any]]:
     return frames
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_artifact(
+    output: Path | None, source: Path | None
+) -> tuple[dict[str, Any] | None, dict[str, dict[str, Any]], str | None]:
+    try:
+        if output is None or source is None:
+            raise ValueError("paths_not_configured")
+        manifest = json.loads((output / "manifest.json").read_text())
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest_not_object")
+        if manifest.get("sequence_frame_count") != 85:
+            raise ValueError("manifest_frame_count")
+        expected = {f"{index:05d}" for index in range(85)}
+        frames = load_artifact_frames(output)
+        if set(frames) != expected:
+            raise ValueError("features_incomplete")
+        for frame in frames.values():
+            for layer in frame["layers"].values():
+                if not layer["finite"] or not all(
+                    math.isfinite(float(layer[key]))
+                    for key in ("minimum", "maximum", "mean", "std")
+                ):
+                    raise ValueError("feature_statistics_invalid")
+        input_hashes = manifest.get("input_sha256")
+        if not isinstance(input_hashes, dict) or set(input_hashes) != {
+            f"{stem}.jpg" for stem in expected
+        }:
+            raise ValueError("input_hash_manifest_incomplete")
+        for stem in expected:
+            raw = source / f"{stem}.jpg"
+            preview = output / "mask_previews" / f"{stem}.png"
+            class_mask = output / "class_masks" / f"{stem}.png"
+            if not all(path.is_file() and path.stat().st_size > 0 for path in (raw, preview, class_mask)):
+                raise ValueError("artifact_file_incomplete")
+            if sha256_file(raw) != input_hashes[raw.name]:
+                raise ValueError("raw_image_hash_mismatch")
+        return manifest, frames, None
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        reason = str(exc) if isinstance(exc, ValueError) and str(exc) else type(exc).__name__
+        return None, {}, reason
+
+
 def resolve_public_route(request_path: str) -> tuple[str, str] | None:
     parsed = urlsplit(request_path)
     if parsed.path.startswith("/api/v1/"):
@@ -103,6 +155,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     artifact_source: ClassVar[Path | None]
     artifact_manifest: ClassVar[dict[str, Any] | None]
     artifact_frames: ClassVar[dict[str, dict[str, Any]]]
+    artifact_error: ClassVar[str | None]
+    simulator_operator_token_file: ClassVar[Path | None] = None
+    gate_operator_token_file: ClassVar[Path | None] = None
+    declared_fault_ids: ClassVar[frozenset[str]] = frozenset()
+    operator_lock: ClassVar[threading.RLock] = threading.RLock()
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -120,6 +177,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self.path.rstrip("/") == "/health":
             self._json(HTTPStatus.OK, {"status": "ok", "service": "horizon-console"})
             return
+        if urlsplit(self.path).path == "/api/operator/capabilities":
+            self._json(HTTPStatus.OK, self._operator_status())
+            return
         if urlsplit(self.path).path.startswith("/api/artifacts/perception"):
             self._artifact_get(urlsplit(self.path).path)
             return
@@ -135,6 +195,198 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self.path != "/" and not Path(requested).exists():
             self.path = "/index.html"
         super().do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802
+        path = urlsplit(self.path).path
+        actions = {
+            "/api/operator/pause": "pause",
+            "/api/operator/resume": "resume",
+            "/api/operator/reset": "reset",
+            "/api/operator/fault": "fault",
+            "/api/operator/acknowledge": "acknowledge",
+        }
+        action = actions.get(path)
+        if action is None:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "ROUTE_NOT_ALLOWLISTED"})
+            return
+        if self.headers.get("X-Horizon-Operator") != "1":
+            self._json(HTTPStatus.FORBIDDEN, {"error": "OPERATOR_INTENT_REQUIRED"})
+            return
+        origin = self.headers.get("Origin")
+        if origin and origin != f"http://{self.headers.get('Host')}":
+            self._json(HTTPStatus.FORBIDDEN, {"error": "ORIGIN_DENIED"})
+            return
+        try:
+            body = self._request_body()
+            with self.operator_lock:
+                response_status, payload = self._operator_action(action, body)
+            self._json(response_status, payload)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "BAD_OPERATOR_REQUEST", "detail": str(exc)},
+            )
+
+    def _request_body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length < 0 or length > 16_384:
+            raise ValueError("operator request body exceeds 16 KiB")
+        value = json.loads(self.rfile.read(length) or b"{}")
+        if not isinstance(value, dict):
+            raise ValueError("operator request body must be a JSON object")
+        return value
+
+    @staticmethod
+    def _token(path: Path | None) -> str:
+        if path is None:
+            raise ValueError("operator capability is not configured")
+        token = path.read_text().strip()
+        if not token:
+            raise ValueError("operator capability is unavailable")
+        return token
+
+    def _json_upstream(
+        self,
+        service: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        token_file: Path | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        headers = {"Accept": "application/json"}
+        data = None
+        method = "GET"
+        if body is not None:
+            data = json.dumps(body, allow_nan=False).encode()
+            headers["Content-Type"] = "application/json"
+            headers["Authorization"] = f"Bearer {self._token(token_file)}"
+            method = "POST"
+        request = Request(
+            f"{self.upstreams[service]}{path}", data=data, headers=headers, method=method
+        )
+        try:
+            with urlopen(request, timeout=2.0) as response:
+                value = json.load(response)
+                return response.status, value
+        except HTTPError as exc:
+            try:
+                value = json.loads(exc.read())
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                value = {"error": "UPSTREAM_HTTP_ERROR"}
+            return exc.code, value
+
+    @staticmethod
+    def _snapshot_epoch(snapshot: dict[str, Any]) -> int | None:
+        match = re.search(r":epoch-([0-9]+):", str(snapshot.get("snapshot_id", "")))
+        return int(match.group(1)) if match else None
+
+    def _operator_status(self) -> dict[str, Any]:
+        try:
+            _, snapshot = self._json_upstream(
+                "simulator", "/v1/public/snapshot?branch=protected"
+            )
+            _, gate = self._json_upstream("gate", "/health")
+            plant_epoch = self._snapshot_epoch(snapshot)
+            gate_epoch = int(gate["epoch"])
+            startup_ready = gate.get("startup_recovery_ready") is True
+            resume_permitted = plant_epoch == gate_epoch and startup_ready
+            state = "ready" if resume_permitted else "reset_in_progress"
+        except (KeyError, OSError, TypeError, ValueError, URLError, TimeoutError):
+            plant_epoch = None
+            gate_epoch = None
+            startup_ready = None
+            resume_permitted = False
+            state = "unavailable"
+        return {
+            "schema_version": "1.0",
+            "branch_id": "protected",
+            "state": state,
+            "plant_epoch": plant_epoch,
+            "gate_epoch": gate_epoch,
+            "startup_recovery_ready": startup_ready,
+            "resume_permitted": resume_permitted,
+            "required_header": {"X-Horizon-Operator": "1"},
+            "declared_fault_ids": sorted(self.declared_fault_ids),
+            "actions": {
+                name: {"method": "POST", "path": f"/api/operator/{name}"}
+                for name in ("pause", "resume", "reset", "fault", "acknowledge")
+            },
+        }
+
+    def _operator_action(
+        self, action: str, body: dict[str, Any]
+    ) -> tuple[HTTPStatus, dict[str, Any]]:
+        if action == "resume":
+            readiness = self._operator_status()
+            if not readiness["resume_permitted"]:
+                return HTTPStatus.CONFLICT, {
+                    "accepted": False,
+                    "action": action,
+                    "error": "STARTUP_RECOVERY_NOT_READY",
+                    "control": readiness,
+                }
+        if action == "fault":
+            fault_id = body.get("fault_id")
+            if body.get("enabled", True) and fault_id not in self.declared_fault_ids:
+                return HTTPStatus.UNPROCESSABLE_ENTITY, {
+                    "accepted": False,
+                    "action": action,
+                    "error": "FAULT_NOT_DECLARED",
+                    "declared_fault_ids": sorted(self.declared_fault_ids),
+                }
+            upstream_body = {
+                "enabled": bool(body.get("enabled", True)),
+                "fault_id": str(fault_id or ""),
+            }
+        else:
+            upstream_body = {}
+        if action == "reset":
+            pause_status, pause = self._json_upstream(
+                "simulator",
+                "/v1/operator/pause?branch=protected",
+                body={},
+                token_file=self.simulator_operator_token_file,
+            )
+            if pause_status != 200:
+                return HTTPStatus.BAD_GATEWAY, {
+                    "accepted": False,
+                    "action": action,
+                    "error": "PLANT_PAUSE_FAILED",
+                    "upstream": pause,
+                }
+            status, result = self._json_upstream(
+                "simulator",
+                "/v1/operator/reset?branch=protected",
+                body={},
+                token_file=self.simulator_operator_token_file,
+            )
+            control = self._operator_status()
+            return HTTPStatus.ACCEPTED if status == 200 else HTTPStatus.BAD_GATEWAY, {
+                "accepted": status == 200,
+                "action": action,
+                "state": "reset_in_progress",
+                "plant": result,
+                "pause": pause,
+                "control": control,
+                "note": "plant remains paused until resume is explicitly requested after recovery readiness",
+            }
+        if action == "acknowledge":
+            service = "gate"
+            path = "/v1/operator/acknowledge"
+            token_file = self.gate_operator_token_file
+        else:
+            service = "simulator"
+            path = f"/v1/operator/{action}?branch=protected"
+            token_file = self.simulator_operator_token_file
+        status, result = self._json_upstream(
+            service, path, body=upstream_body, token_file=token_file
+        )
+        return HTTPStatus(status), {
+            "accepted": status == 200,
+            "action": action,
+            "upstream": result,
+            "control": self._operator_status(),
+        }
 
     def _proxy_get(self, service: str, path: str) -> None:
         request = Request(
@@ -178,6 +430,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     "frame_url_template": f"{base}/frames/{{frame_id}}",
                     "provenance": "recorded WaSR-T reproduction",
                     "use": "perception reproduction evidence; not safety truth",
+                    "unavailable_reason": self.artifact_error,
                 },
             )
             return
@@ -250,6 +503,9 @@ def main() -> None:
     parser.add_argument("--gate-url", default="http://127.0.0.1:8102")
     parser.add_argument("--artifact-output", type=Path)
     parser.add_argument("--artifact-source", type=Path)
+    parser.add_argument("--simulator-operator-token-file", type=Path)
+    parser.add_argument("--gate-operator-token-file", type=Path)
+    parser.add_argument("--fault-id", action="append", default=[])
     args = parser.parse_args()
     if not (args.dist / "index.html").is_file():
         raise SystemExit(f"console build missing: {args.dist / 'index.html'}")
@@ -262,11 +518,14 @@ def main() -> None:
     }
     ConsoleHandler.artifact_output = args.artifact_output
     ConsoleHandler.artifact_source = args.artifact_source
-    manifest_path = args.artifact_output / "manifest.json" if args.artifact_output else None
-    ConsoleHandler.artifact_manifest = (
-        json.loads(manifest_path.read_text()) if manifest_path and manifest_path.is_file() else None
-    )
-    ConsoleHandler.artifact_frames = load_artifact_frames(args.artifact_output)
+    ConsoleHandler.simulator_operator_token_file = args.simulator_operator_token_file
+    ConsoleHandler.gate_operator_token_file = args.gate_operator_token_file
+    ConsoleHandler.declared_fault_ids = frozenset(args.fault_id)
+    (
+        ConsoleHandler.artifact_manifest,
+        ConsoleHandler.artifact_frames,
+        ConsoleHandler.artifact_error,
+    ) = validate_artifact(args.artifact_output, args.artifact_source)
     handler = lambda *handler_args, **kwargs: ConsoleHandler(  # noqa: E731
         *handler_args, directory=str(args.dist), **kwargs
     )

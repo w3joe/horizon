@@ -87,7 +87,7 @@ def stop_all(processes: list[ManagedProcess]) -> None:
         item.log_handle.close()
 
 
-def verify_public_slice(host: str, ports: dict[str, int]) -> dict[str, str]:
+def verify_public_slice(host: str, ports: dict[str, int]) -> dict[str, object]:
     with urlopen(
         f"http://{host}:{ports['console']}/api/v1/public/snapshot?branch=protected",
         timeout=2.0,
@@ -122,11 +122,65 @@ def verify_public_slice(host: str, ports: dict[str, int]) -> dict[str, str]:
         time.sleep(0.03)
     if governor.get("contract_type") != "GovernorInput":
         raise RuntimeError("fusion did not produce a fresh GovernorInput")
+
+    evidence_url = f"http://{host}:{ports['assurance']}/v1/evidence/latest"
+    evidence: dict[str, object] = {}
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(evidence_url, timeout=0.5) as response:
+                evidence = json.load(response)
+            break
+        except HTTPError as exc:
+            if exc.code != 503:
+                raise
+        except (URLError, TimeoutError, ConnectionError):
+            pass
+        time.sleep(0.05)
+    accepted_input = evidence.get("governor_input", {})
+    decision = evidence.get("decision", {})
+    receipt = evidence.get("receipt", {})
+    if not all(isinstance(item, dict) for item in (accepted_input, decision, receipt)):
+        raise RuntimeError("assurance evidence did not contain a joined control chain")
+    if (
+        decision.get("input_snapshot_id")
+        != accepted_input.get("snapshot", {}).get("snapshot_id")
+        or decision.get("proposal_id")
+        != accepted_input.get("proposal", {}).get("command_id")
+        or receipt.get("decision_id") != decision.get("decision_id")
+        or receipt.get("accepted") is not True
+        or receipt.get("actuated_monotonic_ns") is None
+        or not isinstance(receipt.get("actual_command"), dict)
+    ):
+        raise RuntimeError("joined evidence was not an accepted, identity-matched plant command")
+    command_id = receipt.get("command_id")
+    response_snapshot: dict[str, object] = {}
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        with urlopen(
+            f"http://{host}:{ports['simulator']}/v1/public/snapshot?branch=protected",
+            timeout=0.5,
+        ) as response:
+            response_snapshot = json.load(response)
+        if (
+            response_snapshot.get("active_command_id") == command_id
+            and int(response_snapshot.get("tick_index", -1))
+            > int(accepted_input.get("tick_index", -1))
+        ):
+            break
+        time.sleep(0.02)
+    else:
+        raise RuntimeError("simulator did not expose a subsequent response to the accepted command")
     return {
         "console_to_simulator": "passed",
         "snapshot_boundary": "public_display_only",
         "decision_ai_proposal": "passed",
         "observation_to_governor_input": "passed",
+        "assurance_to_gate": "accepted",
+        "decision_id": decision["decision_id"],
+        "gate_receipt_id": receipt["receipt_id"],
+        "plant_active_command_id": command_id,
+        "plant_response_tick": response_snapshot["tick_index"],
     }
 
 
@@ -178,6 +232,25 @@ def main() -> int:
             "--decision-ai-url", f"http://{host}:{ports['decision_ai']}",
             "--branch", "protected",
         ],
+        "gate": [
+            str(ROOT / ".venv/bin/python"), "-m", "horizon_gate.http_api",
+            "--host", host, "--port", str(ports["gate"]),
+            "--run-id", run_id, "--branch-id", "protected",
+            "--plant-url", f"http://{host}:{ports['simulator']}",
+            "--plant-token-file", str(secrets_dir / "gate.token"),
+            "--decision-token-file", str(secrets_dir / "gate-decision.token"),
+            "--operator-token-file", str(secrets_dir / "gate-operator.token"),
+        ],
+        "assurance": [
+            str(ROOT / ".venv/bin/python"), "-m", "horizon_assurance.http_api",
+            "--host", host, "--port", str(ports["assurance"]),
+            "--reference-url", f"http://{host}:{ports['simulator']}/v1/reference?branch=protected",
+            "--fusion-url", f"http://{host}:{ports['fusion']}",
+            "--gate-url", f"http://{host}:{ports['gate']}",
+            "--candidate", "A1",
+            "--gate-decision-token-file", str(secrets_dir / "gate-decision.token"),
+            "--gate-operator-token-file", str(secrets_dir / "gate-operator.token"),
+        ],
         "console": [
             str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/console_proxy.py"),
             "--host", host, "--port", str(ports["console"]),
@@ -193,8 +266,13 @@ def main() -> int:
             "--artifact-source", str(
                 data_root() / "sources/WaSR-T/examples/sequence"
             ),
+            "--simulator-operator-token-file", str(secrets_dir / "operator.token"),
+            "--gate-operator-token-file", str(secrets_dir / "gate-operator.token"),
         ],
     }
+    scenario = json.loads((ROOT / args.scenario).read_text())
+    for fault in scenario.get("faults", []):
+        commands["console"].extend(["--fault-id", str(fault["fault_id"])])
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
         [
@@ -203,6 +281,8 @@ def main() -> int:
             str(ROOT / "services/simulator"),
             str(ROOT / "services/collector"),
             str(ROOT / "services/fusion"),
+            str(ROOT / "services/assurance"),
+            str(ROOT / "services/gate"),
         ]
     )
     managed: list[ManagedProcess] = []
@@ -228,7 +308,15 @@ def main() -> int:
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
     try:
-        for name in ("simulator", "decision_ai", "collector", "fusion", "console"):
+        for name in (
+            "simulator",
+            "decision_ai",
+            "collector",
+            "fusion",
+            "gate",
+            "assurance",
+            "console",
+        ):
             port = ports[name]
             assert_port_free(host, port)
             log_handle = (logs_dir / f"{name}.log").open("wb")

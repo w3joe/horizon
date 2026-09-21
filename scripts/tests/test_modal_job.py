@@ -22,6 +22,18 @@ def spec_with_output(tmp_path: Path) -> dict:
     return spec
 
 
+def launch_provenance() -> dict:
+    return {
+        "captured_utc": "2026-09-21T00:00:00+00:00",
+        "repository_commit": "launch-commit",
+        "entrypoint": "services/perception/modal_wasrt_smoke.py",
+        "entrypoint_sha256": "entrypoint-hash",
+        "job_spec_sha256": "spec-hash",
+        "declared_source_tree": "services/perception",
+        "declared_source_tree_sha256": "tree-hash",
+    }
+
+
 def test_validate_download_matches_a07_artifact_layout(tmp_path: Path) -> None:
     spec = spec_with_output(tmp_path)
     output = Path(spec["output"]["local_path"])
@@ -75,7 +87,14 @@ def test_download_failure_retains_volume_and_records_provider_id(
     monkeypatch.setattr(job, "modal", fake_modal)
     monkeypatch.setattr(job, "delete_volume", lambda *_args: deleted.append(True) or True)
     with pytest.raises(RuntimeError, match="download"):
-        job.execute_job(ledger, "a07-wasrt-sequence-002", spec, Path("entrypoint.py"), {})
+        job.execute_job(
+            ledger,
+            "a07-wasrt-sequence-002",
+            spec,
+            Path("entrypoint.py"),
+            {},
+            launch_provenance(),
+        )
     assert deleted == []
     record = next(
         item
@@ -104,7 +123,14 @@ def test_unknown_app_id_never_claims_termination_or_deletes_volume(
     deleted: list[bool] = []
     monkeypatch.setattr(job, "delete_volume", lambda *_args: deleted.append(True) or True)
     with pytest.raises(RuntimeError, match="unverified"):
-        job.execute_job(ledger, "a07-wasrt-sequence-002", spec, Path("entrypoint.py"), {})
+        job.execute_job(
+            ledger,
+            "a07-wasrt-sequence-002",
+            spec,
+            Path("entrypoint.py"),
+            {},
+            launch_provenance(),
+        )
     assert deleted == []
     record = next(
         item
@@ -114,3 +140,26 @@ def test_unknown_app_id_never_claims_termination_or_deletes_volume(
     assert record["provider_job_id"] is None
     assert "termination=unknown_no_app_id" in record["reconciliation_note"]
     assert "volume_retained=True" in record["reconciliation_note"]
+
+
+def test_run_metadata_reuses_prelaunch_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = spec_with_output(tmp_path)
+    output = Path(spec["output"]["local_path"])
+    (output / "class_masks").mkdir(parents=True)
+    (output / "mask_previews").mkdir()
+    (output / "manifest.json").write_text("{}")
+    (output / "features.jsonl").write_text("{}\n")
+    (output / "class_masks/00000.png").write_bytes(b"mask")
+    (output / "mask_previews/00000.png").write_bytes(b"preview")
+    monkeypatch.setattr(
+        job.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("late git read")),
+    )
+    provenance = launch_provenance()
+    job.write_run_metadata(spec, "ap-exact123", provenance)
+    metadata = json.loads((output / "platform-run.json").read_text())
+    assert metadata["repository_commit"] == "launch-commit"
+    assert metadata["code"]["declared_source_tree_sha256"] == "tree-hash"
