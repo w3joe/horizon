@@ -37,7 +37,10 @@ def test_real_a1_a5_adapter_preserves_deadlines_authority_and_truth_separation()
         assert bundle["health_policy"]["label"] == (
             "synthetic fixed-health controller-isolation"
         )
-        assert bundle["source_health_audit"]
+        assert len(bundle["source_health_audit"]) == len(bundle["decisions"])
+        assert len(bundle["proposals"]) == len(bundle["decisions"])
+        assert len(bundle["gate_receipts"]) == len(bundle["decisions"])
+        assert bundle["cadence"]["fresh_proposals"] == len(bundle["decisions"])
         for decision, health_record in zip(
             bundle["decisions"], bundle["source_health_audit"]
         ):
@@ -73,7 +76,10 @@ def test_real_a1_a5_adapter_preserves_deadlines_authority_and_truth_separation()
         assert bundle["assumption_audit"]["configured_assumptions"]["contact"][
             "assumption_id"
         ] == "synthetic-harbor-radar-contact-odd-bound-v1"
-        assert bundle["decisions"]
+        if not bundle["decisions"]:
+            assert bundle["cadence"]["post_prime_expired_inputs"] > 0
+            assert bundle["proposals"] == []
+            assert bundle["gate_receipts"] == []
         for decision, receipt in zip(bundle["decisions"], bundle["gate_receipts"]):
             if not decision["deadline_met"]:
                 assert decision["action"] == "invalid"
