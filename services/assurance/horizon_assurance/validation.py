@@ -32,8 +32,8 @@ def _all_finite(value: Any) -> bool:
     return False
 
 
-@lru_cache(maxsize=1)
-def _contract_validator() -> Any | None:
+@lru_cache(maxsize=3)
+def _contract_validator(contract_type: str) -> Any | None:
     if jsonschema is None:
         return None
     schema_path = (
@@ -46,11 +46,18 @@ def _contract_validator() -> Any | None:
     if not schema_path.exists():
         return None
     schema = json.loads(schema_path.read_text())
-    return jsonschema.Draft202012Validator(schema)
+    # Each entrypoint knows its required contract. Validate that exact schema,
+    # retaining all nested constraints, rather than traversing every unrelated
+    # branch of the public union on the 40 ms control path.
+    if contract_type not in {"GovernorInput", "RecoveryInput", "AssuranceDecision"}:
+        raise ValueError("unsupported control-path contract")
+    return jsonschema.Draft202012Validator({
+        "$defs": schema["$defs"], "$ref": f"#/$defs/{contract_type}"
+    })
 
 
-def _validate_contract(message: Any, *, invalid_reason: str, reasons: list[str]) -> None:
-    validator = _contract_validator()
+def _validate_contract(message: Any, *, contract_type: str, invalid_reason: str, reasons: list[str]) -> None:
+    validator = _contract_validator(contract_type)
     if validator is None:
         reasons.append("SCHEMA_VALIDATION_UNAVAILABLE")
         return
@@ -65,7 +72,7 @@ def validate_governor_input(message: dict[str, Any], *, validate_schema: bool = 
     if not isinstance(message, dict):
         raise InputRejected(("GOVERNOR_INPUT_SCHEMA_INVALID",))
     if validate_schema:
-        _validate_contract(message, invalid_reason="SCHEMA_INVALID", reasons=reasons)
+        _validate_contract(message, contract_type="GovernorInput", invalid_reason="SCHEMA_INVALID", reasons=reasons)
         if reasons:
             raise InputRejected(reasons)
     if not _all_finite(message):
@@ -116,7 +123,7 @@ def validate_recovery_input(message: dict[str, Any], *, validate_schema: bool = 
     if not isinstance(message, dict) or message.get("contract_type") != "RecoveryInput":
         raise InputRejected(("RECOVERY_INPUT_SCHEMA_INVALID",))
     if validate_schema:
-        _validate_contract(message, invalid_reason="RECOVERY_INPUT_SCHEMA_INVALID", reasons=reasons)
+        _validate_contract(message, contract_type="RecoveryInput", invalid_reason="RECOVERY_INPUT_SCHEMA_INVALID", reasons=reasons)
         if reasons:
             raise InputRejected(reasons)
     if not _all_finite(message):
@@ -159,6 +166,7 @@ def validate_decision_identity(
     if validate_schema:
         _validate_contract(
             decision,
+            contract_type="AssuranceDecision",
             invalid_reason="DECISION_SCHEMA_INVALID",
             reasons=reasons,
         )
