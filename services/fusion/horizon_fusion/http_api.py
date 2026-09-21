@@ -58,7 +58,7 @@ class FusionLoop:
         if self.thread:
             self.thread.join(timeout=2.0)
 
-    def cycle_once(self) -> None:
+    def _collect_once(self) -> bool:
         query = urlencode({"branch": self.branch, "after_cursor": self.cursor, "limit": 512})
         batch = _get_json(f"{self.collector_url}/v1/batch?{query}")
         upstream = batch.get("upstream", {})
@@ -96,6 +96,11 @@ class FusionLoop:
                     "SIMULATOR_TRANSPORT_BACKLOG" if upstream.get("has_more") else
                     "COLLECTOR_CURSOR_LOSS" if batch.get("cursor_lost") else "COLLECTOR_BACKLOG"
                 ]
+            return False
+        return True
+
+    def cycle_once(self) -> None:
+        if not self._collect_once():
             return
         decision_snapshot = self.engine.decision_snapshot()
         if decision_snapshot["snapshot_id"] == self.last_processed_snapshot_id:
@@ -128,6 +133,22 @@ class FusionLoop:
             except (HTTPError, URLError, TimeoutError, ValueError, KeyError, TypeError) as exc:
                 self.last_error_reasons = ["UPSTREAM_ERROR", type(exc).__name__]
             self.stop_event.wait(max(0.0, deadline - time.monotonic()))
+
+
+class RecoveryFusionLoop(FusionLoop):
+    """Independent bounded collector reader with no decision-AI network calls."""
+
+    def __init__(self, collector_url: str, branch: str, interval_s: float = 0.02):
+        super().__init__(FusionEngine(), collector_url, "", branch, interval_s)
+
+    def cycle_once(self) -> None:
+        if not self._collect_once():
+            return
+        recovery = self.engine.assemble_recovery()
+        with self.lock:
+            self.latest = recovery
+            self.last_processed_snapshot_id = recovery["snapshot"]["snapshot_id"]
+            self.last_error_reasons = []
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -168,6 +189,23 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json(HTTPStatus.OK, copy.deepcopy(evidence))
             return
+        if path == "/v1/recovery-input":
+            loop = self.server.recovery_loop
+            branch = query.get("branch", ["protected"])[0]
+            if loop is None:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "NOT_READY", "reason_codes": ["RECOVERY_READER_UNAVAILABLE"]})
+                return
+            with loop.lock:
+                latest = copy.deepcopy(loop.latest)
+                reasons = list(loop.last_error_reasons)
+            now_ns = time.monotonic_ns()
+            if latest is None or latest.get("branch_id") != branch:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "NOT_READY", "reason_codes": reasons or ["NO_MATCHING_RECOVERY_INPUT"]})
+            elif now_ns >= min(int(latest["snapshot"]["valid_until_monotonic_ns"]), int(latest["recovery_deadline_monotonic_ns"])):
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "NOT_READY", "reason_codes": ["RECOVERY_INPUT_EXPIRED"]})
+            else:
+                self._json(HTTPStatus.OK, latest, sample_id=latest["recovery_input_id"])
+            return
         if path == "/v1/governor-input":
             branch = query.get("branch", ["protected"])[0]
             with self.server.loop.lock:
@@ -192,8 +230,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class FusionServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], loop: FusionLoop):
+    def __init__(self, address: tuple[str, int], loop: FusionLoop, recovery_loop: RecoveryFusionLoop | None = None):
         self.loop = loop
+        self.recovery_loop = recovery_loop
         super().__init__(address, Handler)
 
     def server_bind(self) -> None:
@@ -211,14 +250,17 @@ def main() -> None:
     parser.add_argument("--branch", default="protected")
     args = parser.parse_args()
     loop = FusionLoop(FusionEngine(), args.collector_url, args.decision_ai_url, args.branch)
-    server = FusionServer((args.host, args.port), loop)
+    recovery_loop = RecoveryFusionLoop(args.collector_url, args.branch)
+    server = FusionServer((args.host, args.port), loop, recovery_loop)
     loop.start()
+    recovery_loop.start()
     try:
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         pass
     finally:
         loop.stop()
+        recovery_loop.stop()
         server.server_close()
 
 

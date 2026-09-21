@@ -110,6 +110,40 @@ def validate_governor_input(message: dict[str, Any], *, validate_schema: bool = 
         raise InputRejected(reasons)
 
 
+def validate_recovery_input(message: dict[str, Any], *, validate_schema: bool = True) -> None:
+    """Validate sensor-only recovery input without inventing primary-AI lineage."""
+    reasons: list[str] = []
+    if not isinstance(message, dict) or message.get("contract_type") != "RecoveryInput":
+        raise InputRejected(("RECOVERY_INPUT_SCHEMA_INVALID",))
+    if validate_schema:
+        _validate_contract(message, invalid_reason="RECOVERY_INPUT_SCHEMA_INVALID", reasons=reasons)
+        if reasons:
+            raise InputRejected(reasons)
+    if not _all_finite(message):
+        reasons.append("NON_FINITE_INPUT")
+    now = message.get("monotonic_time_ns")
+    deadline = message.get("recovery_deadline_monotonic_ns")
+    if type(now) is not int or type(deadline) is not int or deadline <= now:
+        reasons.append("INVALID_RECOVERY_DEADLINE")
+    elif message["snapshot"]["valid_until_monotonic_ns"] <= now:
+        reasons.append("SNAPSHOT_EXPIRED")
+    if type(message.get("plant_epoch")) is not int or message["plant_epoch"] < 0:
+        reasons.append("INVALID_PLANT_EPOCH")
+    snapshot = message["snapshot"]
+    if snapshot["actuator"]["status"] == "invalid":
+        reasons.append("ACTUATOR_CAPABILITY_INVALID")
+    for target in (snapshot["ownship"], *snapshot["contacts"]):
+        covariance = target["uncertainty"]["covariance"]
+        if covariance is not None and len(covariance["data"]) != covariance["rows"] * covariance["cols"]:
+            reasons.append("COVARIANCE_DIMENSION_MISMATCH")
+    if type(now) is int and not any(option["valid_until_monotonic_ns"] > now for option in message["recovery_options"]):
+        reasons.append("NO_UNEXPIRED_RECOVERY_OPTION")
+    # Required independent source health is qualified by the gate using the
+    # active operating mode. Optional/AI health may be unknown or expired.
+    if reasons:
+        raise InputRejected(reasons)
+
+
 def validate_decision_identity(
     decision: dict[str, Any],
     governor_input: dict[str, Any],

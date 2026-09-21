@@ -13,7 +13,7 @@ from horizon_collector.http_api import CollectorServer, SimulatorPoller
 from horizon_collector.store import CollectorStore
 from horizon_fusion.core import FusionEngine
 from horizon_fusion import http_api as fusion_http_api
-from horizon_fusion.http_api import FusionLoop, FusionServer
+from horizon_fusion.http_api import FusionLoop, FusionServer, RecoveryFusionLoop
 from horizon_sim.engine import AuthoritativeSimulator
 from horizon_sim.http_api import SimulatorHTTPServer, SimulatorRuntime
 from horizon_sim.scenario import load_scenario
@@ -207,3 +207,57 @@ def test_fusion_attaches_to_existing_nonzero_plant_epoch() -> None:
     engine = FusionEngine()
     engine.update_batch({"plant_epoch": 7, "observations": []})
     assert engine.epoch == engine.plant_epoch == 7
+
+
+def test_independent_http_recovery_keeps_refreshing_while_ai_call_is_blocked(monkeypatch):
+    sim = AuthoritativeSimulator(load_scenario(ROOT / "scenarios/normal_transit.json"), seed=3, run_id="independent-reader")
+    runtime = SimulatorRuntime(sim, realtime=True)
+    sim_server = SimulatorHTTPServer(("127.0.0.1", 0), runtime)
+    store = CollectorStore()
+    poller = SimulatorPoller(store, f"http://127.0.0.1:{sim_server.server_port}", "protected")
+    collector = CollectorServer(("127.0.0.1", 0), store, poller)
+    collector_url = f"http://127.0.0.1:{collector.server_port}"
+    primary = FusionLoop(FusionEngine(), collector_url, "http://blocked-ai", "protected")
+    recovery = RecoveryFusionLoop(collector_url, "protected")
+    server = FusionServer(("127.0.0.1", 0), primary, recovery)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_ai(*_args):
+        entered.set()
+        release.wait(3)
+        raise TimeoutError("injected AI stall")
+
+    monkeypatch.setattr(fusion_http_api, "_post_json", blocked_ai)
+    threads = [_serve(sim_server), _serve(collector), _serve(server)]
+    runtime.start()
+    poller.start()
+    primary.start()
+    recovery.start()
+    try:
+        assert entered.wait(2)
+        samples = []
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            status, value = _json(f"http://127.0.0.1:{server.server_port}/v1/recovery-input?branch=protected")
+            if status == 200:
+                VALIDATOR.validate(value)
+                assert value["contract_type"] == "RecoveryInput"
+                assert "proposal" not in value
+                samples.append(value["tick_index"])
+                if len(set(samples)) >= 3:
+                    break
+            time.sleep(.02)
+        assert len(set(samples)) >= 3
+        assert primary.latest is None
+        assert not release.is_set()
+    finally:
+        release.set()
+        primary.stop()
+        recovery.stop()
+        poller.stop()
+        runtime.stop()
+        for item in (server, collector, sim_server):
+            item.shutdown()
+            item.server_close()
+        for thread in threads:
+            thread.join(timeout=1)
