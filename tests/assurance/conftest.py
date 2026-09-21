@@ -88,6 +88,17 @@ def governor_input(reference: NavigationReference) -> dict:
 def recovery_input(reference: NavigationReference) -> dict:
     message = json.loads((ROOT / "packages/contracts/fixtures/recovery-input.json").read_text())
     message["configuration_hash"] = reference.digest()
+    mode_health = {
+        "health_id": "fixture-health:operating_mode_qualification",
+        "source_id": "operating_mode_qualification",
+        "status": "healthy",
+        "age_s": 0.0,
+        "capability": "available",
+        "reason_codes": ["BASELINE_ASSURANCE_CONFIGURATION"],
+        "valid_until_monotonic_ns": 4_300_000_000,
+    }
+    message["health"]["source_health_ids"].append(mode_health["health_id"])
+    message["health"]["summaries"].append(mode_health)
     message["snapshot"]["contacts"][0]["position_ne_m"] = [400.0, 400.0]
     message["snapshot"]["contacts"][0]["velocity_ne_mps"] = [0.0, 0.0]
     message["snapshot"]["environment"]["current_bounded_error_ne_mps"] = [0.02, 0.02]

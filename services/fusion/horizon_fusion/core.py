@@ -118,6 +118,8 @@ class FusionEngine:
         self.plant_epoch: int | None = None
         self.tracks: list[dict[str, Any]] = []
         self.health_records: list[dict[str, Any]] = []
+        self.perception_health: dict[str, Any] | None = None
+        self.perception_health_observation_ids: list[str] = []
         self.peer_intents: list[dict[str, Any]] = []
         self.last_evidence: dict[str, Any] | None = None
         self.dropped = 0
@@ -180,6 +182,8 @@ class FusionEngine:
         self.latest_by_source.clear()
         self.tracks.clear()
         self.health_records.clear()
+        self.perception_health = None
+        self.perception_health_observation_ids.clear()
         self.peer_intents.clear()
         self.snapshot = None
         self.last_tick = -1
@@ -413,6 +417,102 @@ class FusionEngine:
             "display_only": True,
         }
 
+    def _bound_perception_health(
+        self, now_ns: int
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[str], str | None]:
+        """Resolve one fresh health record and its exact image observation.
+
+        A later collector receipt cannot make either member fresh, and a health
+        record without its named frame/inference mate is never bound.
+        """
+        candidates: list[tuple[float, int, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+        malformed = False
+        lineage_invalid = False
+        for value in self.latest_by_source.values():
+            if value.get("input_group") != "neural_sensor_internals":
+                continue
+            if int(value["time"]["valid_until_monotonic_ns"]) < now_ns:
+                continue
+            nested = value.get("payload", {}).get("perception_health")
+            if not isinstance(nested, dict) or not _contract_validator("PerceptionHealth").is_valid(nested):
+                malformed = True
+                continue
+            if (
+                value.get("source_id") != "neural-health-recorded-wasrt"
+                or value.get("capability") != "output_only"
+                or value.get("payload", {}).get("mode")
+                != "recorded_camera_live_processing_not_pose_reactive"
+            ):
+                malformed = True
+                continue
+            if int(nested["valid_until_monotonic_ns"]) < now_ns:
+                continue
+            if nested.get("source_id") != value.get("source_id"):
+                malformed = True
+                continue
+            perception_id = value.get("payload", {}).get("perception_observation_id")
+            linked = self.observations.get(perception_id) if isinstance(perception_id, str) else None
+            if (
+                linked is None
+                or linked.get("input_group") != "obstacle_perception"
+                or linked.get("source_id") != "camera-recorded-wasrt"
+                or linked.get("capability") != "output_only"
+                or linked.get("payload", {}).get("mode")
+                != "recorded_camera_live_processing_not_pose_reactive"
+                or linked.get("payload", {}).get("contacts") != []
+                or linked.get("payload", {}).get("frame_id")
+                != value.get("payload", {}).get("frame_id")
+                or linked.get("payload", {}).get("inference_id")
+                != value.get("payload", {}).get("inference_id")
+                or int(linked["time"]["valid_until_monotonic_ns"]) < now_ns
+                or str(linked["observation_id"])
+                not in value.get("payload", {}).get("_collector", {}).get("ancestor_ids", [])
+            ):
+                lineage_invalid = True
+                continue
+            candidates.append((
+                float(value["time"]["event_time_s"]),
+                int(value["sequence"]),
+                value,
+                nested,
+                linked,
+            ))
+        if not candidates:
+            reason = (
+                "PERCEPTION_HEALTH_SCHEMA_INVALID" if malformed
+                else "PERCEPTION_HEALTH_LINEAGE_INVALID" if lineage_invalid
+                else None
+            )
+            return None, None, [], reason
+        _, _, source, nested, linked = max(candidates, key=lambda item: (item[0], item[1]))
+        return source, nested, [str(source["observation_id"]), str(linked["observation_id"])], None
+
+    def perception_context(self, *, now_ns: int | None = None) -> dict[str, Any] | None:
+        """Return the bounded non-geometric camera context offered to decision AI."""
+        current = time.monotonic_ns() if now_ns is None else now_ns
+        source, nested, lineage_ids, _ = self._bound_perception_health(current)
+        if source is None or nested is None:
+            return None
+        payload = source["payload"]
+        return {
+            "context_type": "RecordedCameraPerceptionContext",
+            "health_id": str(nested["health_id"]),
+            "health_status": str(nested["status"]),
+            "method_id": str(nested["method_id"]),
+            "valid_until_monotonic_ns": min(
+                int(source["time"]["valid_until_monotonic_ns"]),
+                int(nested["valid_until_monotonic_ns"]),
+            ),
+            "supported_scope": str(nested["supported_scope"]),
+            "source_observation_ids": lineage_ids,
+            "frame_id": str(payload["frame_id"]),
+            "inference_id": str(payload["inference_id"]),
+            "mode": str(payload.get("mode", "recorded_camera_source")),
+            "camera_free_space_usable": False,
+            "metric_contacts_usable": False,
+            "calibrated_risk_band": "unknown",
+        }
+
     def _health(self, now_ns: int, trace: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         records: list[dict[str, Any]] = []
         group_sources: dict[str, list[dict[str, Any]]] = {group: [] for group in INPUT_GROUPS}
@@ -444,6 +544,8 @@ class FusionEngine:
             return max(0.0, (now_ns - anchor) / 1e9) + float(value["time"]["clock_uncertainty_ms"]) / 1000.0
 
         statuses: list[str] = []
+        self.perception_health = None
+        self.perception_health_observation_ids = []
         for group in INPUT_GROUPS:
             sources = group_sources[group]
             fresh = [v for v in sources if int(v["time"]["valid_until_monotonic_ns"]) >= now_ns]
@@ -474,7 +576,31 @@ class FusionEngine:
                 missing = sorted(required_sources.get(group, set()) - fresh_source_ids)
                 valid = min(int(v["time"]["valid_until_monotonic_ns"]) for v in fresh)
                 age_s = max(source_age(value) for value in fresh)
-                if missing:
+                if group == "neural_sensor_internals":
+                    source_observation, nested, lineage_ids, binding_error = (
+                        self._bound_perception_health(now_ns)
+                    )
+                    if source_observation is not None and nested is not None:
+                        self.perception_health = copy.deepcopy(nested)
+                        self.perception_health_observation_ids = lineage_ids
+                        status = str(nested["status"])
+                        valid = min(
+                            int(source_observation["time"]["valid_until_monotonic_ns"]),
+                            int(nested["valid_until_monotonic_ns"]),
+                        )
+                        age_s = source_age(source_observation)
+                        reason_codes.extend(str(code) for code in nested["reason_codes"])
+                        if capability == "unavailable":
+                            status = "unknown"
+                            reason_codes.append("NEURAL_SOURCE_UNAVAILABLE")
+                    else:
+                        status = "invalid" if binding_error else "unknown"
+                        valid = min(int(v["time"]["valid_until_monotonic_ns"]) for v in fresh)
+                        age_s = max(source_age(value) for value in fresh)
+                        reason_codes.append(
+                            binding_error or "PERCEPTION_HEALTH_NOT_BOUND"
+                        )
+                elif missing:
                     status = "unknown"
                     if capability == "available":
                         capability = "degraded"
@@ -504,10 +630,6 @@ class FusionEngine:
                     if status == "healthy":
                         status = "degraded"
                     reason_codes.append("PEER_CLAIM_NOT_INDEPENDENT_MOTION")
-                elif group == "neural_sensor_internals":
-                    if status == "healthy":
-                        status = "degraded"
-                    reason_codes.append("NEURAL_HEALTH_CONTRACT_NOT_BOUND")
             elif group == "neural_sensor_internals":
                 status, capability, valid, age_s = "unknown", "output_only", now_ns + 100_000_000, 0.0
                 reason_codes.append("INTERNAL_ACTIVATIONS_UNAVAILABLE")
@@ -554,6 +676,68 @@ class FusionEngine:
             "valid_until_monotonic_ns": int(radar["time"]["valid_until_monotonic_ns"]) if radar else now_ns,
         })
         statuses.append(radar_status)
+        qualification = self.reference.get("operating_mode_qualification") if self.reference else None
+        model_version = str(self.reference.get("model_version", "")) if self.reference else ""
+        mode_reasons: list[str] = []
+        if isinstance(qualification, dict):
+            mode_config_sha = qualification.get("config_sha256")
+            declared_reasons = qualification.get("reason_codes")
+            well_formed = (
+                isinstance(qualification.get("plant_mode_id"), str)
+                and qualification.get("physical_model_status")
+                in {"characterized", "degraded", "unknown"}
+                and qualification.get("assurance_status") in {"qualified", "unknown"}
+                and isinstance(declared_reasons, list)
+                and all(isinstance(code, str) and code for code in declared_reasons)
+                and isinstance(mode_config_sha, str)
+                and len(mode_config_sha) == 64
+                and all(character in "0123456789abcdef" for character in mode_config_sha)
+            )
+            qualified = (
+                well_formed
+                and qualification.get("plant_mode_id") == model_version
+                and qualification.get("physical_model_status") == "characterized"
+                and qualification.get("assurance_status") == "qualified"
+            )
+            if well_formed:
+                mode_reasons.extend(declared_reasons)
+            else:
+                mode_reasons.append("OPERATING_MODE_QUALIFICATION_MALFORMED")
+            if not qualified:
+                mode_reasons.append("OPERATING_MODE_NOT_ASSURANCE_QUALIFIED")
+        elif model_version == "synthetic-12m-3dof-v1":
+            # Compatibility is deliberately limited to the exact baseline
+            # whose assurance configuration predates the reference field.
+            qualified = True
+            mode_reasons.append("BASELINE_ASSURANCE_CONFIGURATION_COMPATIBILITY")
+        else:
+            qualified = False
+            mode_reasons.append("OPERATING_MODE_QUALIFICATION_MISSING")
+        # SimulatorReference is static and has no independent TTL. Bind its
+        # qualification to the shortest current health-evidence lifetime so
+        # the derived leaf cannot outlive the state it qualifies.
+        mode_expiry = min(
+            (
+                int(item["valid_until_monotonic_ns"])
+                for item in records
+                if item["source_id"] in {
+                    "navigation_environment",
+                    "obstacle_perception:radar",
+                    "ship_actuator_feedback",
+                }
+            ),
+            default=now_ns,
+        )
+        records.append({
+            "health_id": f"{self.last_run_branch[0]}:{self.last_run_branch[1]}:health:{self.epoch}:operating-mode:{self.last_tick}",
+            "source_id": "operating_mode_qualification",
+            "status": "healthy" if qualified else "unknown",
+            "age_s": 0.0,
+            "capability": "available" if qualified else "unavailable",
+            "reason_codes": sorted(set(mode_reasons)),
+            "valid_until_monotonic_ns": mode_expiry,
+        })
+        statuses.append("healthy" if qualified else "unknown")
         overall = "invalid" if "invalid" in statuses else ("degraded" if "degraded" in statuses else ("unknown" if "unknown" in statuses else "healthy"))
         self.health_records = records
         return records, overall
@@ -565,6 +749,7 @@ class FusionEngine:
         *,
         now_ns: int | None = None,
         request_monotonic_ns: int | None = None,
+        requested_perception_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         _require_contract(proposal, "ProposedCommand")
         _require_contract(trace, "AIInferenceTrace")
@@ -583,7 +768,19 @@ class FusionEngine:
             reasons.append("PROPOSAL_ORIGIN_MISMATCH")
         if trace.get("trace_id") != proposal.get("inference_trace_id"):
             reasons.append("TRACE_ID_MISMATCH")
-        if trace.get("consumed_input_ids") != [decision_snapshot["snapshot_id"]]:
+        expected_consumed = [decision_snapshot["snapshot_id"]]
+        if requested_perception_context is not None:
+            current_context = self.perception_context(now_ns=current)
+            if (
+                current_context is None
+                or current_context.get("health_id")
+                != requested_perception_context.get("health_id")
+                or int(requested_perception_context.get("valid_until_monotonic_ns", 0)) < current
+            ):
+                reasons.append("AI_PERCEPTION_CONTEXT_STALE_OR_REPLACED")
+            else:
+                expected_consumed.append(str(requested_perception_context["health_id"]))
+        if trace.get("consumed_input_ids") != expected_consumed:
             reasons.append("AI_CONSUMPTION_LINEAGE_MISMATCH")
         if reasons:
             raise NotReady(reasons)
@@ -674,6 +871,11 @@ class FusionEngine:
             "degradation_reasons": list(actuator_assessment.reasons),
         }
         health, health_status = self._health(current, trace)
+        perception_health_id = (
+            str(self.perception_health["health_id"])
+            if self.perception_health is not None
+            else None
+        )
         validity = min(
             int(gnss["time"]["valid_until_monotonic_ns"]),
             int(imu["time"]["valid_until_monotonic_ns"]),
@@ -726,7 +928,7 @@ class FusionEngine:
             },
             "health": {
                 "source_health_ids": [item["health_id"] for item in health],
-                "perception_health_id": None,
+                "perception_health_id": perception_health_id,
                 "summaries": health,
                 "status": health_status,
             },
@@ -735,7 +937,11 @@ class FusionEngine:
                 {"recovery_id": "independent-recovery-controller", "valid_until_monotonic_ns": validity, "assumption_id": "a04-must-validate-continuation"}
             ],
         }
-        observation_ids = sorted({identifier for track in tracks for identifier in track["supporting_observation_ids"] + track["contradicting_observation_ids"]} | {gnss["observation_id"], imu["observation_id"], actuator["observation_id"]})
+        observation_ids = sorted(
+            {identifier for track in tracks for identifier in track["supporting_observation_ids"] + track["contradicting_observation_ids"]}
+            | {gnss["observation_id"], imu["observation_id"], actuator["observation_id"]}
+            | set(self.perception_health_observation_ids)
+        )
         self.last_evidence = {
             "bundle": {
                 "contract_type": "EvidenceBundle",
@@ -745,12 +951,17 @@ class FusionEngine:
                 "branch_id": branch,
                 "observation_ids": observation_ids,
                 "track_ids": [track["track_id"] for track in tracks],
-                "health_ids": [item["health_id"] for item in health],
+                "health_ids": [item["health_id"] for item in health]
+                + ([perception_health_id] if perception_health_id else []),
                 "assumption_ids": ["geometric-nearest-neighbour-v1", "common-ancestry-dedup-v1", "public-reference-only"],
                 "valid_until_monotonic_ns": validity,
             },
             "tracks": tracks,
             "health": health,
+            "perception_health": copy.deepcopy(self.perception_health),
+            "perception_health_observation_ids": list(
+                self.perception_health_observation_ids
+            ),
             "peer_intents": copy.deepcopy(self.peer_intents),
             "ai_trace": copy.deepcopy(trace),
             "actuator_response": copy.deepcopy(actuator_assessment.evidence),
@@ -772,6 +983,12 @@ class FusionEngine:
             "track_count": len(self.tracks),
             "common_ancestry_suppressed": self.common_ancestry_suppressed,
             "peer_intent_claims": len(self.peer_intents),
+            "perception_health_id": (
+                self.perception_health.get("health_id") if self.perception_health else None
+            ),
+            "perception_health_status": (
+                self.perception_health.get("status") if self.perception_health else "unknown"
+            ),
             "collection_interruptions": self.collection_interruptions,
             "last_collection_interruption": self.last_collection_interruption,
             "plant_authority": False,

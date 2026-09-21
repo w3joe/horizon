@@ -17,6 +17,7 @@ class FixturePolicy:
         self,
         mode: str = "nominal",
         *,
+        camera_reliance: str = "radar_only",
         model_version: str | None = None,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ):
@@ -28,12 +29,24 @@ class FixturePolicy:
             "malformed",
         }:
             raise ValueError(f"unsupported fixture policy: {mode}")
+        if camera_reliance not in {"radar_only", "recorded_camera_supporting"}:
+            raise ValueError(f"unsupported camera reliance: {camera_reliance}")
         self.mode = mode
-        self.model_version = model_version or f"decision-ai-fixture-{mode}-v1"
+        self.camera_reliance = camera_reliance
+        default_model = (
+            f"decision-ai-fixture-{mode}-v1"
+            if camera_reliance == "radar_only"
+            else f"decision-ai-fixture-{mode}-{camera_reliance}-v1"
+        )
+        self.model_version = model_version or default_model
         self._monotonic_ns = monotonic_ns
         self.sequence = 0
 
-    def propose(self, snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def propose(
+        self,
+        snapshot: dict[str, Any],
+        perception_context: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         start_ns = self._monotonic_ns()
         ownship = snapshot["ownship"]
         heading = float(ownship["heading_rad"])
@@ -47,6 +60,19 @@ class FixturePolicy:
                 speed = 2.0
         elif self.mode == "unsafe_straight":
             speed = 6.0
+
+        # This fixture can model a deployment whose primary AI is configured
+        # to rely on camera support. The context can only constrain it. It
+        # cannot grant geometric authority or relax radar requirements.
+        camera_support_usable = bool(
+            perception_context is not None
+            and perception_context["health_status"] == "healthy"
+            and perception_context["camera_free_space_usable"] is True
+            and perception_context["metric_contacts_usable"] is True
+            and perception_context["calibrated_risk_band"] != "unknown"
+        )
+        if self.camera_reliance == "recorded_camera_supporting" and not camera_support_usable:
+            speed = min(speed, 1.0)
 
         sim_time = float(snapshot["simulation_time_s"])
         issued_ns = round(sim_time * 1e9)
@@ -83,6 +109,9 @@ class FixturePolicy:
             # still returns JSON so boundary validation is exercised.
             proposal["command"]["speed_mps"] = "six"
         completed_ns = self._monotonic_ns()
+        consumed_input_ids = [str(snapshot["snapshot_id"])]
+        if perception_context is not None:
+            consumed_input_ids.append(str(perception_context["health_id"]))
         trace = {
             "contract_type": "AIInferenceTrace",
             "schema_version": "0.1.0",
@@ -91,10 +120,14 @@ class FixturePolicy:
             "branch_id": snapshot["branch_id"],
             "source_id": "decision-ai-fixture",
             "model_version": self.model_version,
-            "consumed_input_ids": [str(snapshot["snapshot_id"])],
+            "consumed_input_ids": consumed_input_ids,
             "started_monotonic_ns": start_ns,
             "completed_monotonic_ns": completed_ns,
-            "candidate_scores": {"route_progress": 1.0, "contact_avoidance": 0.5 if self.mode == "nominal" else 0.0},
+            "candidate_scores": {
+                "route_progress": 1.0,
+                "contact_avoidance": 0.5 if self.mode == "nominal" else 0.0,
+                "camera_support_usable": 1.0 if camera_support_usable else 0.0,
+            },
             "status": "ok",
         }
         self.sequence += 1

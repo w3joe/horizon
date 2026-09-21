@@ -1,0 +1,64 @@
+{
+  "schema_version": "horizon.recorded-camera-live.v1",
+  "mode": "recorded_camera_live_processing_not_pose_reactive",
+  "source": {
+    "dataset": "MODD2",
+    "sequence": "kope81-00-00006800-00007095",
+    "camera": "left",
+    "partition": "development",
+    "timestamp_source": "synthetic_10hz_order_only",
+    "split_manifest_sha256": "45a116eeeeeb55e9a2e566327c6d6045a5f8682f8ad7c5a6260ef4eaf301b425"
+  },
+  "camera_geometry": {
+    "version": "modd2-kope81-stereo-intrinsics-only-v1",
+    "source_calibration": {
+      "format": "opencv_stereo_yaml",
+      "sha256": "4d01822cb0bae21d0555197fafb5af193d02a1fc5223e3567a0d9e6733dee1f4",
+      "image_size_pixels": [1278, 958],
+      "left_intrinsics": [
+        957.795070602726,
+        0.0,
+        656.2372489843759,
+        0.0,
+        956.9935540787893,
+        538.419031314297,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "left_distortion": [
+        -0.3676793440391972,
+        0.20338139685872125,
+        0.00020790579046378462,
+        0.00046865669065358353,
+        -0.07562557669135672
+      ]
+    },
+    "metric_projection": {
+      "status": "unavailable",
+      "contacts_emitted": false,
+      "missing": [
+        "validated_camera_to_vessel_extrinsics",
+        "camera_height_and_water_level",
+        "synchronized_attitude_binding",
+        "water_contact_pixel_extractor",
+        "projection_error_model",
+        "range_validation"
+      ],
+      "reason": "intrinsics and stereo baseline alone do not qualify water-plane contact projection"
+    }
+  },
+  "runtime": {
+    "cadence_s": 0.1,
+    "queue_capacity": 2,
+    "ttl_s": 3.0,
+    "drop_policy": "drop_oldest_queued_frame",
+    "publication_retry_count": 0
+  },
+  "limitations": [
+    "Recorded frames do not react to simulator pose or commands.",
+    "Image-space water and obstacle classes do not establish metric free space.",
+    "Health risk remains unknown until a frozen calibration is validated on held-out sequences.",
+    "This mode cannot qualify a vessel operating mode or replace independent radar geometry."
+  ]
+}

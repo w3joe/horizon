@@ -106,7 +106,11 @@ class FusionLoop:
         if decision_snapshot["snapshot_id"] == self.last_processed_snapshot_id:
             return
         request_started_ns = time.monotonic_ns()
-        result = _post_json(f"{self.decision_ai_url}/v1/propose", {"snapshot": decision_snapshot})
+        perception_context = self.engine.perception_context(now_ns=request_started_ns)
+        request = {"snapshot": decision_snapshot}
+        if perception_context is not None:
+            request["perception_context"] = perception_context
+        result = _post_json(f"{self.decision_ai_url}/v1/propose", request)
         proposal, trace = result.get("proposal"), result.get("inference_trace")
         if not isinstance(proposal, dict) or not isinstance(trace, dict):
             raise NotReady(["DECISION_AI_RESPONSE_INVALID"])
@@ -116,6 +120,7 @@ class FusionLoop:
             trace,
             now_ns=now_ns,
             request_monotonic_ns=request_started_ns,
+            requested_perception_context=perception_context,
         )
         with self.lock:
             self.latest = governor

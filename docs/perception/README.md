@@ -14,6 +14,10 @@ No local or cloud result is committed to Git. The expected external run director
 
 The upstream sequence is a reproduction fixture, not held-out evidence. Its timestamps are synthesized at 10 Hz from file order because source timestamps are absent. WaSR-T labels are obstacle 0, water 1, and sky 2; MaSTr ground truth may also contain ignore label 4. Image-space water does not establish depth or safe free space.
 
+The bounded recorded-camera service, exact live lineage, camera geometry limits,
+AI reliance policy, and finite 296-frame development wrapper are documented in
+[`live-recorded-camera.md`](live-recorded-camera.md).
+
 ## Health methods
 
 All methods return the bounded `PerceptionHealth` record described in `configs/perception/health-methods.json`.

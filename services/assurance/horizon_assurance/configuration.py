@@ -108,12 +108,15 @@ class AssuranceConfig:
         "ship_actuator_feedback",
         "internal_ship_communications",
         "decision_ai_telemetry",
+        "operating_mode_qualification",
     )
     optional_health_sources: tuple[str, ...] = (
         "onboard_network",
         "inter_ship_communications",
         "neural_sensor_internals",
     )
+    camera_reliance_mode: str = "radar_only"
+    camera_health_source: str = "neural_sensor_internals"
     prediction_horizon_s: float = 60.0
     recovery_horizon_s: float = 60.0
     geometry_chunk_s: float = 2.0
@@ -163,3 +166,24 @@ class AssuranceConfig:
     )
     recovery_speeds_mps: tuple[float, ...] = (1.0, 2.0, 0.0)
     plant_parameters: Any | None = None
+
+    def __post_init__(self) -> None:
+        if self.camera_reliance_mode not in {"radar_only", "recorded_camera_supporting"}:
+            raise ValueError(f"unsupported camera reliance mode: {self.camera_reliance_mode}")
+        if self.camera_health_source != "neural_sensor_internals":
+            raise ValueError("camera health source must be neural_sensor_internals")
+        if self.camera_reliance_mode == "recorded_camera_supporting":
+            if self.camera_health_source not in self.required_health_sources:
+                object.__setattr__(
+                    self,
+                    "required_health_sources",
+                    tuple((*self.required_health_sources, self.camera_health_source)),
+                )
+            object.__setattr__(
+                self,
+                "optional_health_sources",
+                tuple(
+                    source for source in self.optional_health_sources
+                    if source != self.camera_health_source
+                ),
+            )

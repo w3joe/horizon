@@ -17,8 +17,16 @@ class DecisionAIClient:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
 
-    def propose(self, snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        body = json.dumps({"snapshot": snapshot}, allow_nan=False).encode()
+    def propose(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        perception_context: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        request_body = {"snapshot": snapshot}
+        if perception_context is not None:
+            request_body["perception_context"] = perception_context
+        body = json.dumps(request_body, allow_nan=False).encode()
         request = Request(
             f"{self.base_url}/v1/propose",
             data=body,

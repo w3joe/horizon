@@ -20,15 +20,20 @@ def required_health_evidence(
     but does not require the primary AI to be alive. Degraded evidence can be
     used only under the controller's separate bounded-capability policy.
     """
+    recovery_exempt = {"decision_ai_telemetry", "internal_ship_communications"}
+    if config.camera_reliance_mode == "recorded_camera_supporting":
+        recovery_exempt.add(config.camera_health_source)
     required = tuple(
         source for source in config.required_health_sources
-        if not recovery or source not in {
-            "decision_ai_telemetry", "internal_ship_communications"
-        }
+        if not recovery or source not in recovery_exempt
     )
     current = int(governor_input["monotonic_time_ns"]) if now_ns is None else now_ns
     expiry = int(governor_input["snapshot"]["valid_until_monotonic_ns"])
     reasons: list[str] = []
+    if config.camera_reliance_mode == "recorded_camera_supporting" and not recovery:
+        health_id = governor_input["health"].get("perception_health_id")
+        if not isinstance(health_id, str) or not health_id:
+            reasons.append("CAMERA_RELIANCE_HEALTH_ID_MISSING")
     summaries = governor_input["health"].get("summaries", [])
     for source in required:
         matches = [item for item in summaries if item["source_id"] == source]
