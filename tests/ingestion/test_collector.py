@@ -61,6 +61,15 @@ def test_purged_reset_history_advances_empty_page_cursor_once() -> None:
     assert len(store.batch(branch="protected", after_cursor=gap["cursor"])["observations"]) == 1
 
 
+def test_collector_attaches_to_existing_plant_epoch_without_zero_relabeling() -> None:
+    store = CollectorStore()
+    store.update_plant_epoch("protected", "run", 7)
+    assert store.ingest(observation())
+    batch = store.batch(branch="protected")
+    assert batch["plant_epoch"] == 7
+    assert batch["observations"][0]["payload"]["_collector"]["epoch"] == 7
+
+
 def test_reset_epoch_allows_restarted_sequences_only_after_snapshot_regression() -> None:
     store = CollectorStore(maximum_records=8)
     store.update_snapshot("protected", {"contract_type": "SimulationSnapshot", "display_only": True, "run_id": "run", "branch_id": "protected", "tick_index": 10})

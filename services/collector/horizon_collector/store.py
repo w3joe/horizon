@@ -337,6 +337,8 @@ class CollectorStore:
             raise ValueError("plant_epoch must be non-negative")
         with self._lock:
             previous = self._plant_epoch.get(branch)
+            if previous is None:
+                self._epoch[(run_id, branch)] = plant_epoch
             if previous is not None and plant_epoch != previous:
                 lineage = (run_id, branch)
                 self._invalidate_lineage(lineage)
