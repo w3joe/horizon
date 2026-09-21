@@ -36,3 +36,12 @@ each feedback record is explicitly linked to the command observation through
 collector ancestry. A few matching samples never promote the configured
 limits to nominal. The evidence route reports the exact command and feedback
 observation IDs used by an assessment.
+# Independent recovery
+
+`GET /v1/recovery-input?branch=protected` reads a separate bounded collector
+consumer and fusion engine. A stalled decision-AI request cannot block this
+reader. The response is a `RecoveryInput` with the actual plant epoch, fresh
+sensor state, constraints and original source-health expiries; it has no
+proposal or synthesized AI trace. Missing epoch, transport loss/backlog and
+expired input remain unavailable. The gate independently qualifies required
+navigation, radar and actuator sources before a recovery can be authorized.

@@ -89,6 +89,42 @@ def test_malformed_ai_output_is_not_published_as_governor_input(invalid_speed) -
     assert engine.last_evidence is None
 
 
+def test_recovery_input_uses_fresh_sensors_without_an_ai_trace():
+    from horizon_assurance.validation import validate_recovery_input
+    from horizon_assurance.health_policy import required_health_evidence
+    from horizon_assurance.configuration import AssuranceConfig
+    now_ns = time.monotonic_ns()
+    batch, sim = live_batch(now_ns)
+    batch["plant_epoch"] = sim.plant_epoch
+    engine = FusionEngine()
+    engine.update_batch(batch, now_ns=now_ns)
+    recovery = engine.assemble_recovery(now_ns=now_ns)
+    validate_recovery_input(recovery)
+    assert "proposal" not in recovery and "proposal_id" not in recovery
+    assert recovery["plant_epoch"] == sim.plant_epoch
+    health = {item["source_id"]: item for item in recovery["health"]["summaries"]}
+    assert health["decision_ai_telemetry"]["status"] == "invalid"
+    assert health["decision_ai_telemetry"]["valid_until_monotonic_ns"] < now_ns
+    expiry, reasons = required_health_evidence(recovery, AssuranceConfig(), recovery=True, now_ns=now_ns)
+    assert not reasons and expiry > now_ns
+    assert recovery["snapshot"]["valid_until_monotonic_ns"] <= min(
+        health[source]["valid_until_monotonic_ns"] for source in
+        ("navigation_environment", "obstacle_perception:radar", "ship_actuator_feedback")
+    )
+    with pytest.raises(NotReady):
+        engine.assemble_recovery(now_ns=expiry + 1)
+
+
+def test_recovery_input_does_not_invent_an_unknown_plant_epoch():
+    now_ns = time.monotonic_ns()
+    batch, _ = live_batch(now_ns)
+    engine = FusionEngine()
+    engine.update_batch(batch, now_ns=now_ns)
+    assert engine.plant_epoch is None
+    with pytest.raises(NotReady, match="PLANT_EPOCH_UNAVAILABLE"):
+        engine.assemble_recovery(now_ns=now_ns)
+
+
 def contact_observation(source: str, sequence: int, position: list[float], observation_id: str, ancestor: str, now_ns: int, sigma: float = 1.0) -> dict:
     return {
         "contract_type": "Observation", "schema_version": "0.1.0", "observation_id": observation_id, "run_id": "run", "branch_id": "protected", "input_group": "obstacle_perception", "source_id": source, "sequence": sequence,
