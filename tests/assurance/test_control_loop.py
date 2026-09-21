@@ -6,7 +6,7 @@ import time
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
 from horizon_assurance.control_loop import AssuranceControlLoop
-from horizon_assurance.http_api import AssuranceRuntime
+from horizon_assurance.http_api import AssuranceHTTPServer, AssuranceRuntime
 
 
 def live_input(message, *, tick: int, epoch: int = 0):
@@ -43,12 +43,16 @@ class FakeFusion:
 
 
 class FakeGate:
-    def __init__(self, *, epoch=0, ready=False):
+    def __init__(
+        self, *, epoch=0, ready=False, prime_accepted=True, submit_accepted=True
+    ):
         self.epoch = epoch
         self.ready = ready
         self.primes = []
         self.submissions = []
         self.resets = 0
+        self.prime_accepted = prime_accepted
+        self.submit_accepted = submit_accepted
 
     def status(self, *, timeout_s):
         del timeout_s
@@ -64,13 +68,23 @@ class FakeGate:
     def prime(self, governor_input, *, timeout_s):
         del timeout_s
         self.primes.append(governor_input["snapshot"]["snapshot_id"])
-        self.ready = True
-        return {"accepted": True, "reason_codes": ["STARTUP_RECOVERY_VALIDATED"]}
+        self.ready = self.prime_accepted
+        return {
+            "accepted": self.prime_accepted,
+            "reason_codes": [
+                "STARTUP_RECOVERY_VALIDATED"
+                if self.prime_accepted
+                else "NO_VALIDATED_RECOVERY"
+            ],
+        }
 
     def submit(self, governor_input, decision, *, timeout_s):
         del timeout_s
         self.submissions.append((governor_input, decision))
-        return {"accepted": True, "decision_id": decision["decision_id"]}
+        return {
+            "accepted": self.submit_accepted,
+            "decision_id": decision["decision_id"],
+        }
 
 
 def test_loop_primes_before_first_autonomy_and_skips_duplicate(reference, governor_input) -> None:
@@ -124,6 +138,40 @@ def test_loop_synchronizes_epoch_before_evaluation(reference, governor_input) ->
     assert not gate.submissions
 
 
+def test_loop_does_not_publish_rejected_receipt_as_latest_evidence(
+    reference, governor_input
+) -> None:
+    message = live_input(governor_input, tick=42)
+    gate = FakeGate(ready=True, submit_accepted=False)
+    evidence = []
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([message]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+        evidence_sink=evidence.append,
+    )
+    event = loop.run_once()
+    assert event["event_type"] == "decision_receipt"
+    assert event["receipt"]["accepted"] is False
+    assert evidence == []
+
+
+def test_loop_reports_rejected_startup_recovery_without_claiming_prime(
+    reference, governor_input
+) -> None:
+    message = live_input(governor_input, tick=0)
+    gate = FakeGate(prime_accepted=False)
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([message]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+    event = loop.run_once()
+    assert event["event_type"] == "startup_recovery_rejected"
+    assert event["result"]["accepted"] is False
+    assert gate.ready is False
+
+
 def test_loop_never_submits_expired_input(reference, governor_input) -> None:
     message = live_input(governor_input, tick=42)
     message["decision_deadline_monotonic_ns"] = time.monotonic_ns() - 1
@@ -141,8 +189,11 @@ def test_latest_evidence_store_requires_exact_joined_identities(
     reference, governor_input
 ) -> None:
     runtime = AssuranceRuntime(reference)
+    governor_input = live_input(governor_input, tick=42, epoch=0)
     decision = A1ThresholdSimplex(reference).evaluate(governor_input)
     receipt = {
+        "run_id": governor_input["run_id"],
+        "branch_id": governor_input["branch_id"],
         "decision_id": decision["decision_id"],
         "accepted": True,
     }
@@ -159,6 +210,33 @@ def test_latest_evidence_store_requires_exact_joined_identities(
     try:
         runtime.record_evidence(mismatched)
     except ValueError as exc:
-        assert "identity mismatch" in str(exc)
+        assert "identity match" in str(exc)
     else:
         raise AssertionError("mismatched evidence should be rejected")
+
+    rejected = copy.deepcopy(evidence)
+    rejected["receipt"]["accepted"] = False
+    try:
+        runtime.record_evidence(rejected)
+    except ValueError as exc:
+        assert "accepted receipt" in str(exc)
+    else:
+        raise AssertionError("rejected evidence should not be cached")
+
+    runtime.record_control_event({"event_type": "gate_epoch_synchronized", "epoch": 1})
+    assert runtime.latest_evidence is None
+    try:
+        runtime.record_evidence(evidence)
+    except ValueError as exc:
+        assert "older than" in str(exc)
+    else:
+        raise AssertionError("prior-epoch evidence should not return after reset")
+
+
+def test_assurance_server_binds_numeric_loopback_without_name_lookup(reference) -> None:
+    server = AssuranceHTTPServer(("127.0.0.1", 0), AssuranceRuntime(reference))
+    try:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1]
+    finally:
+        server.server_close()

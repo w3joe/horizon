@@ -254,7 +254,11 @@ class AssuranceControlLoop:
                 self.last_sample_id = sample_id
                 return self._record(
                     {
-                        "event_type": "startup_recovery_primed",
+                        "event_type": (
+                            "startup_recovery_primed"
+                            if prime.get("accepted") is True
+                            else "startup_recovery_rejected"
+                        ),
                         "host_monotonic_ns": time.monotonic_ns(),
                         "sample_id": sample_id,
                         "epoch": epoch,
@@ -314,7 +318,7 @@ class AssuranceControlLoop:
             "decision": decision,
             "receipt": receipt,
         }
-        if self.evidence_sink is not None:
+        if self.evidence_sink is not None and receipt.get("accepted") is True:
             self.evidence_sink(
                 {
                     "governor_input": copy.deepcopy(governor_input),
