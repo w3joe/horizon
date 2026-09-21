@@ -136,8 +136,12 @@ def run_controls(
         "metric": "absolute change in mean class-0 logit inside RAW MODD2 obstacle boxes",
         "official_metric": False,
         "results": results,
-        "selected_direction_wins": selected_wins,
-        "claim_gate_passed": selected_wins == len(results),
+        "exploratory_selected_direction_wins": selected_wins,
+        "claim_gate_passed": False,
+        "claim_gate_reason": (
+            "requires a converged frozen SAE, stable feature across scenes, multiple seeds, "
+            "and held-out confirmation; this run is pair-selected development exploration"
+        ),
         "limitations": [
             "Exploratory controls use three adjacent-frame development pairs and one seed.",
             "The fitted SAE reached its epoch cap and is not treated as converged.",
