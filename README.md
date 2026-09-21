@@ -14,7 +14,16 @@ actuator observation before it reports the slice ready.
 ./scripts/launch_cpu.sh
 ```
 
-Open `http://127.0.0.1:5173`. Each launch gets a unique directory under the external `horizon-runs/` location with logs, status, and mode-`0600` local capabilities. Press Ctrl-C for graceful shutdown. Use `./scripts/launch_cpu.sh --smoke-seconds 2` for a finite smoke run.
+Open `http://127.0.0.1:5173`. The console opens in the guided recorded demo when a verified replay is present and keeps the live seven-service console as a separate mode. The recording compares protected and evaluation-only counterfactual branches from one exact paused-reset state, with evidence-linked intervention and post-run outcome panels. See the [guided demo](docs/demo/guided-demo.md) and [backend replay provenance](docs/demo/backend-replay.md).
+
+Generate the finite 45-second S22 recording from a clean commit without using paid compute:
+
+```sh
+.venv/bin/python scripts/demo_capture.py \
+  --output ../horizon-runs/demo/unsafe-route-v4
+```
+
+Each live launch gets a unique directory under the external `horizon-runs/` location with logs, status, and mode-`0600` local capabilities. Press Ctrl-C for graceful shutdown. Use `./scripts/launch_cpu.sh --smoke-seconds 2` for a finite live smoke run.
 
 The reset flow pauses physics, advances the plant epoch, obtains fresh sensor
 evidence and a bounded gate recovery certificate, and requires an explicit
