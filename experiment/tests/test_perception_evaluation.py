@@ -60,7 +60,10 @@ def _drift_fixture(tmp_path: Path):
         **base_manifest,
         "device": "cuda:0",
         "fp16": True,
-        "split_manifest_sha256": split_hash,
+        "split_manifest": {
+            "path": "configs/perception/modd2-splits.json",
+            "sha256": split_hash,
+        },
     }
     base_manifest_path = tmp_path / "base-manifest.json"
     candidate_manifest_path = tmp_path / "candidate-manifest.json"

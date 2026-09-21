@@ -125,8 +125,11 @@ def _validate_drift_manifest(
             f"{arm} manifest hash mismatch",
         )
     if arm_spec.get("split_manifest_sha256"):
+        split_binding = manifest.get("split_manifest_sha256")
+        if split_binding is None and isinstance(manifest.get("split_manifest"), dict):
+            split_binding = manifest["split_manifest"].get("sha256")
         _require(
-            manifest.get("split_manifest_sha256") == arm_spec["split_manifest_sha256"],
+            split_binding == arm_spec["split_manifest_sha256"],
             f"{arm} split-manifest binding mismatch",
         )
 
