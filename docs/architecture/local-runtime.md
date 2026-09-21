@@ -10,9 +10,9 @@ Run `./scripts/bootstrap.sh` once, `./scripts/check.sh` for the full repository 
 | Decision-AI fixture | 8101 | Started as a separate process and health-checked |
 | Gate | 8102 | Assigned; reported unavailable until A04 provides its entrypoint |
 | Assurance | 8103 | Assigned; reported unavailable until A04 provides its entrypoint |
-| Fusion | 8104 | Assigned; reported unavailable until A05 provides its entrypoint |
-| Collector | 8105 | Assigned; reported unavailable until A05 provides its entrypoint |
+| Fusion | 8104 | Polls collector and Decision AI, then serves fresh `GovernorInput` records |
+| Collector | 8105 | Polls the protected simulator branch and buffers bounded observations |
 
 The launcher refuses occupied ports before starting each process. A launch receives a UTC/random run ID and a new external run directory. Set `HORIZON_RUNS_DIR` to choose another external root. `run.json` records the commit, ports, ready processes, unavailable components, smoke results, PIDs, exit codes, and start/stop timestamps.
 
-SIGINT or SIGTERM stops only process groups created by the launcher. It first sends SIGTERM, waits up to five seconds, and then uses SIGKILL only for an owned child that did not exit. A finite `--smoke-seconds N` run follows the same shutdown path. Startup verifies simulator and decision-AI health, console health, the console-to-public-simulator path, the `display_only` boundary, and a schema-shaped decision-AI proposal.
+SIGINT or SIGTERM stops only process groups created by the launcher. It first sends SIGTERM, waits up to five seconds, and then uses SIGKILL only for an owned child that did not exit. A finite `--smoke-seconds N` run follows the same shutdown path. Startup order is simulator, Decision AI, collector, fusion, then console. Startup verifies every process health endpoint, the console-to-public-simulator path, the `display_only` boundary, a schema-shaped Decision AI proposal, and a fresh `GovernorInput` produced through the observation/collector/fusion path.

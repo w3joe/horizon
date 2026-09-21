@@ -24,12 +24,12 @@
     "fusion": {
       "implementation_path": "services/fusion/horizon_fusion/http_api.py",
       "health_path": "/health",
-      "status": "pending_owner_entrypoint"
+      "status": "runnable"
     },
     "collector": {
       "implementation_path": "services/collector/horizon_collector/http_api.py",
       "health_path": "/health",
-      "status": "pending_owner_entrypoint"
+      "status": "runnable"
     },
     "console": {
       "implementation_path": "apps/console/dist/index.html",

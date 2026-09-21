@@ -12,7 +12,7 @@ recorded/synthetic/unavailable sources
 authoritative simulator truth -> evaluation-only scorer -> EvaluationRecord
 ```
 
-The current CPU launch starts the implemented simulator, separate decision-AI fixture, and console. Gate, assurance, fusion, and collector ports are stable assignments, but the launcher reports those components as unavailable until their owner entrypoints exist. It never substitutes success fixtures for an absent service.
+The current CPU launch starts the simulator, separate Decision AI fixture, collector, fusion, and console. Gate and assurance ports are stable assignments, but the launcher reports those components as unavailable until their owner packet is merged. It never substitutes success fixtures for an absent service.
 
 `packages/contracts/schema/horizon.schema.json` is authoritative. Generated Python and TypeScript declarations are convenience types. Contract records carry explicit lineage, monotonic validity, simulation time, uncertainty semantics, and provenance. A covariance coverage level does not imply a hard bound; a bounded set names its assumption separately.
 
