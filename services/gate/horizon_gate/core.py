@@ -322,7 +322,9 @@ class ActuatorGate:
     ) -> dict[str, Any]:
         decision_fields = decision if isinstance(decision, dict) else {}
         authority = decision_fields.get("authority", "recovery")
-        if authority not in {"autonomy", "filtered_autonomy", "recovery", "gate_watchdog"}:
+        if not isinstance(authority, str) or authority not in {
+            "autonomy", "filtered_autonomy", "recovery", "gate_watchdog"
+        }:
             authority = "recovery"
         receipt = {
             "contract_type": "GateReceipt",

@@ -213,6 +213,8 @@ def test_gate_returns_rejections_for_malformed_contracts(reference, governor_inp
         (None, governor_input, "DECISION_SCHEMA_INVALID"),
         ([], governor_input, "DECISION_SCHEMA_INVALID"),
         ({"valid": True}, governor_input, "DECISION_SCHEMA_INVALID"),
+        ({**valid_decision, "authority": []}, governor_input, "DECISION_SCHEMA_INVALID"),
+        ({**valid_decision, "authority": {}}, governor_input, "DECISION_SCHEMA_INVALID"),
         (valid_decision, None, "GOVERNOR_INPUT_SCHEMA_INVALID"),
         (valid_decision, [], "GOVERNOR_INPUT_SCHEMA_INVALID"),
         (valid_decision, {}, "SCHEMA_INVALID"),
