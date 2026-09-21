@@ -1,6 +1,6 @@
 # MODD2 development evidence
 
-This record covers one frozen development sequence,
+The initial analysis below covers one frozen development sequence,
 `kope81-00-00006800-00007095`. It contains 296 left-camera frames. The
 calibration and held-out partitions remain unopened, and the 85-frame upstream
 example remains an integration fixture rather than evaluation data.
@@ -79,3 +79,39 @@ The external artifacts are under
 `horizon-runs/compute/a07-modd2-dev-kope81-00006800/` and
 `horizon-runs/compute/a07-modd2-dev-health-kope81-00006800/`. They remain
 outside Git because they contain masks, feature caches, and run output.
+
+
+## Additional development extraction and metadata correction
+
+Two further frozen development sequences completed locally with the same pinned
+WaSR-T source, checkpoint, float32 MPS configuration, and four CPU threads. Each
+contains 521 left-camera frames, bringing completed development extraction to
+1,338 frames across three sequences. Both include masks, feature caches, and five
+fixed spatial probes. Calibration and held-out partitions remain unopened.
+
+| Sequence | Frames | Median forward latency | Maximum forward latency |
+| --- | ---: | ---: | ---: |
+| `kope81-00-00000560-00001080` | 521 | 800.242 ms | 855.083 ms |
+| `kope81-00-00004330-00004850` | 521 | 800.224 ms | 835.508 ms |
+
+These are extraction results; H2-H4 have not yet been refitted or evaluated on
+these additional caches. The launch record captures commit `cc917b2` and hashes
+of every perception and neural-health Python source, checked unchanged after
+each sequence. External artifacts live in `horizon-runs/compute/dev-extra-<sequence>/`.
+
+SHA-256 identities, in the same sequence order:
+
+- Manifest: `7d8af69f37e32819a0a87a8d8966362391e950aab0d0eb6d1bca342de4820d5d`;
+  features: `97b79afc24dae1b1745c1fa6f043dd3f0f38ee8daf0d4fcd64bfcf657abf8c3d`.
+- Manifest: `3f9a34713f227dd21b70f57c3cd31de6e16fc0ceab582911f5f49ff76655dfdf`;
+  features: `7c1257f554ae5a126abb4f3b50704773cc94927549d42cb9f0276891d5126604`.
+
+A subsequent code audit found two metadata/configuration issues in the original
+296-frame health fit. Its references incorrectly labelled `fit_split` as
+`nominal_reference`, although the input was the development sequence described
+above. Its requested H4 convergence tolerance of `1e-6` was not forwarded by
+`build_reference`; the actual fit used the default `1e-7`. Commit `9cb897b` fixes
+both for future runs and records the effective fit parameters. Original hashed
+artifacts remain unchanged. The original fit still reached 3,000 epochs without
+converging; this correction does not open the causal claim gate or turn its
+same-cache results into validation evidence.
