@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1.0",
+  "study_id": "analytic-fixture-smoke",
+  "experiment_mode": "full_pipeline_closed_loop",
+  "split": "development",
+  "protocol_frozen": false,
+  "calibration_hash": null,
+  "candidate_ids": ["STUB_PASS", "STUB_RECOVERY"],
+  "health_ids": ["H0"],
+  "scenarios": [
+    {
+      "scenario_id": "fixture-crossing",
+      "headline": false,
+      "stochastic": false,
+      "seed_count": 2,
+      "seed_offset": 0,
+      "observation_tape_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+      "fault_schedule_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+      "ai_policy_version": "fixture-policy-v1"
+    }
+  ]
+}

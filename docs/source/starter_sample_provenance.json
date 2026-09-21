@@ -1,0 +1,39 @@
+[
+  {
+    "file": "signalk-nmea0183.log",
+    "url": "https://raw.githubusercontent.com/SignalK/signalk-server/master/samples/n2kd-183-merrimac.log",
+    "retrieved": "2026-09-21",
+    "bytes": 13071,
+    "sha256": "1ba3223de3f365105bea522f1bebc36dd2880029b612707e0934df9c07f62cc3",
+    "license_note": "Signal K sample NMEA 0183; repository license Apache-2.0, sample-specific provenance/rights not separately stated.",
+    "inspection": {
+      "lines": 541,
+      "sentence_ids": {
+        "$02MWV": 122,
+        "$24HDG": 123,
+        "$04HDM": 247,
+        "$24MWV": 25,
+        "$23DBS": 13,
+        "$05DBT": 11
+      },
+      "valid_xor_checksums": 541,
+      "invalid_xor_checksums": 0
+    }
+  },
+  {
+    "file": "martts-scenarios.jsonl",
+    "url": "https://zenodo.org/api/records/19205712/files/emsair_scenarios_parsed.jsonl/content",
+    "retrieved": "2026-09-21",
+    "bytes": 73269,
+    "sha256": "b6d84e376d09b5ed41ca152cf93e15aa45e9cf4cfb2062560731c79a4b89ce7a",
+    "license_note": "MARTTS by Bonasera et al. (DLR); Zenodo record license CC BY 4.0; synthetic communication text, not real recordings.",
+    "inspection": {
+      "records": 80,
+      "first_record_keys": [
+        "dialog_id",
+        "topic",
+        "utterances"
+      ]
+    }
+  }
+]

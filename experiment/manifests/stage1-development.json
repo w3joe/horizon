@@ -1,0 +1,42 @@
+{
+  "schema_version": "0.1.0",
+  "study_id": "stage1-controller-development",
+  "experiment_mode": "full_pipeline_closed_loop",
+  "split": "development",
+  "protocol_frozen": false,
+  "calibration_hash": null,
+  "candidate_ids": ["A1", "A2", "A3", "A4", "A5"],
+  "health_ids": ["H1"],
+  "scenarios": [
+    {
+      "scenario_id": "crossing-development",
+      "headline": true,
+      "stochastic": true,
+      "seed_count": 100,
+      "seed_offset": 0,
+      "observation_tape_hash": "3111111111111111111111111111111111111111111111111111111111111111",
+      "fault_schedule_hash": "4111111111111111111111111111111111111111111111111111111111111111",
+      "ai_policy_version": "pending-a03-policy-version"
+    },
+    {
+      "scenario_id": "head-on-development",
+      "headline": true,
+      "stochastic": true,
+      "seed_count": 100,
+      "seed_offset": 100,
+      "observation_tape_hash": "3222222222222222222222222222222222222222222222222222222222222222",
+      "fault_schedule_hash": "4222222222222222222222222222222222222222222222222222222222222222",
+      "ai_policy_version": "pending-a03-policy-version"
+    },
+    {
+      "scenario_id": "overtaking-development",
+      "headline": true,
+      "stochastic": true,
+      "seed_count": 100,
+      "seed_offset": 200,
+      "observation_tape_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "fault_schedule_hash": "4333333333333333333333333333333333333333333333333333333333333333",
+      "ai_policy_version": "pending-a03-policy-version"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1.0",
+  "study_id": "stage1-controller-heldout",
+  "execution_status": "blocked_until_methods_and_calibration_are_frozen",
+  "experiment_mode": "full_pipeline_closed_loop",
+  "split": "heldout",
+  "protocol_frozen": false,
+  "calibration_hash": null,
+  "candidate_ids": ["A1", "A2", "A3", "A4", "A5"],
+  "health_ids": ["H1"],
+  "scenarios": [
+    {"scenario_id": "encounter-heldout", "headline": true, "stochastic": true, "seed_count": 134, "seed_offset": 0, "observation_tape_hash": "5111111111111111111111111111111111111111111111111111111111111111", "fault_schedule_hash": "6111111111111111111111111111111111111111111111111111111111111111", "ai_policy_version": "pending-frozen-version"},
+    {"scenario_id": "dense-traffic-heldout", "headline": true, "stochastic": true, "seed_count": 134, "seed_offset": 134, "observation_tape_hash": "5222222222222222222222222222222222222222222222222222222222222222", "fault_schedule_hash": "6222222222222222222222222222222222222222222222222222222222222222", "ai_policy_version": "pending-frozen-version"},
+    {"scenario_id": "sensor-timing-heldout", "headline": true, "stochastic": true, "seed_count": 134, "seed_offset": 268, "observation_tape_hash": "5333333333333333333333333333333333333333333333333333333333333333", "fault_schedule_hash": "6333333333333333333333333333333333333333333333333333333333333333", "ai_policy_version": "pending-frozen-version"},
+    {"scenario_id": "source-conflict-heldout", "headline": true, "stochastic": true, "seed_count": 133, "seed_offset": 402, "observation_tape_hash": "5444444444444444444444444444444444444444444444444444444444444444", "fault_schedule_hash": "6444444444444444444444444444444444444444444444444444444444444444", "ai_policy_version": "pending-frozen-version"},
+    {"scenario_id": "manipulation-heldout", "headline": true, "stochastic": true, "seed_count": 133, "seed_offset": 535, "observation_tape_hash": "5555555555555555555555555555555555555555555555555555555555555555", "fault_schedule_hash": "6555555555555555555555555555555555555555555555555555555555555555", "ai_policy_version": "pending-frozen-version"},
+    {"scenario_id": "visual-degradation-heldout", "headline": true, "stochastic": true, "seed_count": 133, "seed_offset": 668, "observation_tape_hash": "5666666666666666666666666666666666666666666666666666666666666666", "fault_schedule_hash": "6666666666666666666666666666666666666666666666666666666666666666", "ai_policy_version": "pending-frozen-version"},
+    {"scenario_id": "vessel-degradation-heldout", "headline": true, "stochastic": true, "seed_count": 133, "seed_offset": 801, "observation_tape_hash": "5777777777777777777777777777777777777777777777777777777777777777", "fault_schedule_hash": "6777777777777777777777777777777777777777777777777777777777777777", "ai_policy_version": "pending-frozen-version"},
+    {"scenario_id": "boundary-depth-heldout", "headline": true, "stochastic": true, "seed_count": 133, "seed_offset": 934, "observation_tape_hash": "5888888888888888888888888888888888888888888888888888888888888888", "fault_schedule_hash": "6888888888888888888888888888888888888888888888888888888888888888", "ai_policy_version": "pending-frozen-version"},
+    {"scenario_id": "initially-unrecoverable-heldout", "headline": true, "stochastic": true, "seed_count": 133, "seed_offset": 1067, "observation_tape_hash": "5999999999999999999999999999999999999999999999999999999999999999", "fault_schedule_hash": "6999999999999999999999999999999999999999999999999999999999999999", "ai_policy_version": "pending-frozen-version"}
+  ]
+}
