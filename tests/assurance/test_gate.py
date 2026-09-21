@@ -510,6 +510,9 @@ def test_injected_monotonic_clock_controls_async_cache_and_watchdog(
 
     runtime.reset_handshake(token="operator-secret")
     assert runtime.last_supervisor_host_ns == clock()
+    status = runtime.status()
+    assert status["observed_monotonic_ns"] == clock()
+    assert status["startup_recovery_ready"] is False
 
 
 def test_gate_reset_handshake_rotates_epoch_and_supervisor_token(reference, governor_input) -> None:

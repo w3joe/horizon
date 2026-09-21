@@ -765,8 +765,10 @@ class ActuatorGate:
 
     def status(self) -> dict[str, Any]:
         with self.lock:
+            observed_monotonic_ns = self._monotonic_ns()
             return {
                 "service": "horizon-gate",
+                "observed_monotonic_ns": observed_monotonic_ns,
                 "run_id": self.run_id,
                 "branch_id": self.branch_id,
                 "epoch": self.epoch,
@@ -779,7 +781,7 @@ class ActuatorGate:
                 "last_transport_error": self.last_transport_error,
                 "startup_recovery_ready": bool(
                     self.stored_recovery
-                    and self._monotonic_ns() < self.stored_recovery.host_valid_until_ns
+                    and observed_monotonic_ns < self.stored_recovery.host_valid_until_ns
                 ),
                 "retained_receipt_count": len(self.receipts),
                 "retained_snapshot_id_count": len(self.seen_snapshot_ids),

@@ -98,7 +98,7 @@ class FusionEngine:
         batch_epoch = batch.get("plant_epoch")
         if batch_epoch is not None:
             parsed_epoch = int(batch_epoch)
-            if self.plant_epoch is not None and parsed_epoch != self.plant_epoch:
+            if parsed_epoch != self.plant_epoch:
                 self._reset_epoch(new_epoch=parsed_epoch)
             self.plant_epoch = parsed_epoch
         snapshot = batch.get("snapshot")
@@ -156,7 +156,8 @@ class FusionEngine:
         """Discard partial lineage after collector history loss."""
         self.collection_interruptions += 1
         self.last_collection_interruption = reason
-        self._reset_epoch()
+        # Capture loss invalidates evidence, not the plant's reset identity.
+        self._reset_epoch(new_epoch=self.plant_epoch if self.plant_epoch is not None else self.epoch)
 
     def _expire(self, now_ns: int) -> None:
         stale = [key for key, value in self.observations.items() if int(value["time"]["valid_until_monotonic_ns"]) < now_ns - 5_000_000_000]

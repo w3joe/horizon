@@ -161,3 +161,49 @@ def test_fusion_loop_never_serves_through_collector_backlog_or_cursor_loss(monke
     assert engine.collection_interruptions == 1
     assert engine.last_collection_interruption == "COLLECTOR_CURSOR_LOSS"
     assert post_calls == []
+
+
+def test_fusion_consumes_complete_new_epoch_page_after_history_purge(monkeypatch) -> None:
+    simulator = AuthoritativeSimulator(
+        load_scenario(ROOT / "scenarios/crossing_recoverable.json"),
+        seed=3, run_id="reset-page-test",
+    )
+    store = CollectorStore()
+    engine = FusionEngine()
+    loop = FusionLoop(engine, "http://collector", "http://decision", "protected")
+
+    def collect() -> dict:
+        store.update_plant_epoch("protected", simulator.run_id, simulator.plant_epoch)
+        store.update_reference("protected", simulator.public_reference())
+        store.update_snapshot("protected", simulator.public_snapshot())
+        for item in simulator.observation_batch():
+            store.ingest(item, simulation_time_s=simulator.simulation_time_s)
+        return store.batch(branch="protected", after_cursor=0)
+
+    simulator.step(80)
+    engine.update_batch(collect())
+    assert engine.epoch == 0
+    simulator.reset()
+    simulator.step(80)
+    page = collect()
+    assert page["cursor_lost"] and page["plant_epoch"] == 1
+    policy = FixturePolicy("nominal")
+
+    def propose(_url: str, body: dict) -> dict:
+        proposal, trace = policy.propose(body["snapshot"])
+        return {"proposal": proposal, "inference_trace": trace}
+
+    monkeypatch.setattr(fusion_http_api, "_get_json", lambda *_args: page)
+    monkeypatch.setattr(fusion_http_api, "_post_json", propose)
+    loop.cycle_once()
+    assert loop.latest is not None
+    assert ":epoch-1:" in loop.latest["snapshot"]["snapshot_id"]
+    assert engine.epoch == engine.plant_epoch == 1
+    engine.invalidate_collection("TEST_CAPTURE_LOSS")
+    assert engine.epoch == engine.plant_epoch == 1
+
+
+def test_fusion_attaches_to_existing_nonzero_plant_epoch() -> None:
+    engine = FusionEngine()
+    engine.update_batch({"plant_epoch": 7, "observations": []})
+    assert engine.epoch == engine.plant_epoch == 7
