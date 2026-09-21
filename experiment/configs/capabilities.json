@@ -1,0 +1,93 @@
+{
+  "schema_version": "0.1.0",
+  "architectures": [
+    {
+      "id": "A1",
+      "name": "rule_threshold_simplex",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "required_input_representations": ["point_estimate"],
+      "required_failure_behavior": ["stale_input_recovery", "deadline_recovery"]
+    },
+    {
+      "id": "A2",
+      "name": "probabilistic_risk_simplex",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "required_input_representations": ["covariance", "covariance_coverage"],
+      "required_failure_behavior": ["uncalibrated_risk_unknown", "deadline_recovery"]
+    },
+    {
+      "id": "A3",
+      "name": "bounded_predictive_recoverability",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "required_input_representations": ["bounded_set", "bounded_error_assumption"],
+      "required_failure_behavior": ["no_valid_continuation_minimum_risk", "deadline_recovery"]
+    },
+    {
+      "id": "A4",
+      "name": "model_appropriate_robust_barrier_filter",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "required_input_representations": ["declared_dynamics_abstraction", "bounded_disturbance"],
+      "required_failure_behavior": ["infeasible_recovery", "invalid_residual_recovery", "timeout_recovery"],
+      "required_method_disclosures": ["barrier_geometry", "relative_degree", "qp_convexity", "sampled_data_margin", "final_command_revalidation"]
+    },
+    {
+      "id": "A5",
+      "name": "evidence_conditioned_hybrid",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "required_input_representations": ["bounded_set", "source_health", "perception_health"],
+      "required_failure_behavior": ["diagnostics_missing_policy", "independent_recovery", "final_command_revalidation"]
+    }
+  ],
+  "health_methods": [
+    {
+      "id": "H0",
+      "name": "output_confidence_entropy",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "evidence": ["output_confidence", "entropy"]
+    },
+    {
+      "id": "H1",
+      "name": "conventional_input_temporal_geometry",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "evidence": ["H0", "exposure", "blur", "occlusion", "frozen_frame", "timestamp", "horizon", "temporal_output"]
+    },
+    {
+      "id": "H2",
+      "name": "fixed_embedding_distance",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "evidence": ["H1", "embedding_distance", "mahalanobis"]
+    },
+    {
+      "id": "H3",
+      "name": "pca_dictionary_reconstruction",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "evidence": ["H1", "pca_reconstruction", "dictionary_reconstruction", "activation_novelty"]
+    },
+    {
+      "id": "H4",
+      "name": "sparse_autoencoder_and_interventions",
+      "availability": "missing",
+      "entrypoint": null,
+      "alias_of": null,
+      "evidence": ["H1", "sparse_autoencoder_features", "offline_feature_interventions"]
+    }
+  ]
+}
