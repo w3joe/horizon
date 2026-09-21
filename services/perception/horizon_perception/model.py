@@ -65,6 +65,8 @@ def _upstream_import_path(path: Path) -> Iterator[None]:
     installed_stub = "pytorch_lightning" not in sys.modules
     if installed_stub:
         lightning = types.ModuleType("pytorch_lightning")
+        # Single-frame WaSR defines a training-only exporter during import.
+        lightning.Callback = type("Callback", (), {})
         loggers = types.ModuleType("pytorch_lightning.loggers")
         loggers.LoggerCollection = type("LoggerCollection", (), {})
         # The pinned utility module evaluates this training-only return

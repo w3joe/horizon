@@ -8,7 +8,7 @@ The hook comparison processes the same prefix three ways: vanilla after one warm
 
 ## Reproduce the official example
 
-The centrally controlled Modal job is `services/perception/modal_wasrt_smoke.py`. A01 creates the temporary artifact Volume, reserves the job in the central ledger, runs it with a 2,250-second controller wall-clock limit, retrieves and verifies artifacts, and deletes the Volume. The remote function itself enforces one L4, one container, no retries, fixed CPU/RAM bounds, a 900-second startup timeout, a 1,200-second execution timeout, no network, exactly 85 frames, and a 150 MiB output cap. Partial or oversized results are deleted before the Volume commit.
+The centrally controlled Modal job is `services/perception/modal_wasrt_smoke.py`. A01 creates the temporary artifact Volume, reserves the job in the central ledger, applies the selected job's controller wall-clock limit (600 seconds for attempt 002), retrieves and verifies artifacts, and deletes the Volume. The remote function itself enforces one L4, one container, no retries, fixed CPU/RAM bounds, a 900-second startup timeout, a 1,200-second execution timeout, no network, exactly 85 frames, and a 150 MiB output cap. Partial or oversized results are deleted before the Volume commit.
 
 No local or cloud result is committed to Git. The expected external run directory contains `manifest.json`, `features.jsonl`, 85 single-channel `class_masks/*.png`, and 85 `mask_previews/*.png` files.
 
@@ -51,3 +51,28 @@ The local artifacts are outside Git under
 check, not held-out evidence or a GPU performance measurement. The first Modal
 attempt was stopped during image construction after this import issue was
 found locally; no successful GPU inference is claimed for that attempt.
+
+The full 85-frame example subsequently completed on the same local CPU setup.
+`horizon-runs/compute/local-wasrt-sequence-085/` contains all 85 class masks,
+previews, and three-layer feature records. The three measured comparison
+frames again had exact vanilla/hooked and reset-replay agreement. Across the
+85 instrumented frames, inference median was 1,413.744 ms and maximum was
+1,583.511 ms. This is offline reproduction, not a 20 Hz perception result.
+The recorded repository commit in its environment file was captured at run
+completion; perception source did not change during that run.
+
+Local Apple M1 Max MPS also passed a four-frame WaSR-T compatibility check
+with exact hooked/unhooked output agreement. Timing used explicit MPS
+synchronization, unlike the current generic runner's CUDA-only timing hook.
+`horizon-runs/compute/local-mps-compatibility.json` records this small check;
+it does not establish CPU/MPS numerical equivalence or sustained throughput.
+
+The single-frame WaSR checkpoint passed a separate one-frame MPS functional
+check, with exact hooked/unhooked agreement and real encoder/decoder summaries.
+Its importer additionally needs a training-only Lightning `Callback` base stub.
+Artifacts are in `horizon-runs/compute/local-wasr-baseline-preflight/`. WaSR has
+no temporal module, and no temporal evidence is claimed for this baseline.
+
+Modal attempt 002 built its image but was rejected before GPU execution because
+the workspace lacked a payment method. Its app was stopped and empty temporary
+volume deleted. Neither cloud attempt supplies GPU inference evidence.
