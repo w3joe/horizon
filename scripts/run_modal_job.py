@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import tempfile
 import time
 from typing import Any
 
@@ -199,6 +200,35 @@ def validate_download(spec: dict) -> None:
         raise RuntimeError(f"downloaded output exceeds cap: {size} bytes")
 
 
+def download_artifacts(spec: dict, environment: dict[str, str]) -> None:
+    """Download a remote directory into an existing staging parent, then publish it.
+
+    Modal's directory download preserves the remote directory basename. Passing
+    a nonexistent destination instead can map every remote entry to one path.
+    A fresh existing parent also prevents partially downloaded results from
+    looking like a completed local artifact.
+    """
+    output = Path(spec["output"]["local_path"])
+    if output.exists():
+        raise RuntimeError("refusing to overwrite an existing local artifact")
+    remote = spec["output"]["remote_path"]
+    if not Path(remote).name or Path(remote).name in {".", ".."}:
+        raise ValueError("remote artifact directory must have a concrete basename")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="horizon-download-", dir=output.parent) as staging:
+        get_rc = modal(
+            ["volume", "get", spec["modal_volume_name"], remote, staging],
+            environment,
+            timeout_s=300,
+        )
+        if get_rc:
+            raise RuntimeError("failed to download bounded output artifacts")
+        downloaded = Path(staging) / Path(remote).name
+        staged_spec = {**spec, "output": {**spec["output"], "local_path": str(downloaded)}}
+        validate_download(staged_spec)
+        downloaded.rename(output)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -338,15 +368,7 @@ def execute_job(
             raise RuntimeError(f"Modal run exited with status {run_result.returncode}")
         if termination != "verified_stopped":
             raise RuntimeError(f"remote app termination is unverified: {termination}")
-        output.parent.mkdir(parents=True, exist_ok=True)
-        get_rc = modal(
-            ["volume", "get", spec["modal_volume_name"], spec["output"]["remote_path"], str(output)],
-            environment,
-            timeout_s=300,
-        )
-        if get_rc:
-            raise RuntimeError("failed to download bounded output artifacts")
-        validate_download(spec)
+        download_artifacts(spec, environment)
         if app_id is None:
             raise RuntimeError("cannot write run metadata without an exact provider app ID")
         write_run_metadata(spec, app_id, launch_provenance)

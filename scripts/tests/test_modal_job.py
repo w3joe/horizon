@@ -84,6 +84,41 @@ def test_stop_uses_exact_app_id_and_verifies_zero_tasks(monkeypatch: pytest.Monk
     assert commands[0][3] == "ap-exact123"
 
 
+def test_directory_download_uses_existing_parent_and_publishes_validated_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = spec_with_output(tmp_path)
+    output = Path(spec["output"]["local_path"])
+
+    def fake_modal(command: list[str], _environment: dict, timeout_s: int) -> int:
+        assert command[:2] == ["volume", "get"]
+        parent = Path(command[-1])
+        assert parent.is_dir(), "Modal treats a missing destination as a file path"
+        assert not output.exists(), "incomplete artifacts must not be published"
+        downloaded = parent / Path(command[-2]).name
+        (downloaded / "class_masks").mkdir(parents=True)
+        (downloaded / "mask_previews").mkdir()
+        (downloaded / "manifest.json").write_text("{}")
+        (downloaded / "features.jsonl").write_text("{}\n")
+        for index in range(85):
+            (downloaded / "class_masks" / f"{index}.png").write_bytes(b"mask")
+            (downloaded / "mask_previews" / f"{index}.png").write_bytes(b"preview")
+        return 0
+
+    monkeypatch.setattr(job, "modal", fake_modal)
+    job.download_artifacts(spec, {})
+    job.validate_download(spec)
+    assert not list(tmp_path.glob("horizon-download-*"))
+
+
+def test_incomplete_download_is_not_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = spec_with_output(tmp_path)
+    monkeypatch.setattr(job, "modal", lambda *_args, **_kwargs: 0)
+    with pytest.raises(RuntimeError, match="incomplete"):
+        job.download_artifacts(spec, {})
+    assert not Path(spec["output"]["local_path"]).exists()
+
+
 def test_download_failure_retains_volume_and_records_provider_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
