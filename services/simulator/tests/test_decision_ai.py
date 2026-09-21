@@ -53,6 +53,18 @@ def test_fault_fixtures_expose_expiry_and_lineage_failures() -> None:
     assert stale["origin_snapshot_id"] != snapshot["snapshot_id"]
 
 
+def test_malformed_fixture_returns_json_that_contract_validation_can_reject() -> None:
+    sim = AuthoritativeSimulator(
+        load_scenario(ROOT / "scenarios" / "crossing_recoverable.json"),
+        seed=7,
+        run_id="ai-malformed-test",
+    )
+    malformed, trace = load_policy_class()("malformed").propose(sim.public_snapshot())
+
+    assert malformed["command"]["speed_mps"] == "six"
+    assert trace["consumed_input_ids"] == [sim.public_snapshot()["snapshot_id"]]
+
+
 def test_policy_trace_uses_injected_monotonic_clock() -> None:
     sim = AuthoritativeSimulator(
         load_scenario(ROOT / "scenarios" / "crossing_recoverable.json"),

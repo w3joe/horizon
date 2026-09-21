@@ -1,0 +1,36 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S12",
+  "title": "Supervisor timeout and process kill",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "crossing_recoverable.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [
+    {
+      "at_s": 24.0,
+      "action": "stop_service",
+      "target": "assurance",
+      "parameters": {
+        "signal": "SIGTERM",
+        "duration_s": 3.0
+      }
+    },
+    {
+      "at_s": 27.0,
+      "action": "restart_service",
+      "target": "assurance",
+      "parameters": {}
+    }
+  ],
+  "dependencies": [
+    "A01/A08 process orchestration",
+    "A04 gate watchdog"
+  ],
+  "acceptance_condition": "The gate takes over within bounded expiry and reports the health fault.",
+  "independent_verification": "pending_A08"
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S05",
+  "title": "Waypoint outside corridor",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "boundary_depth.json"
+  ],
+  "decision_ai_policies": [
+    "unsafe_straight"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A04 swept-hull containment"
+  ],
+  "acceptance_condition": "The unsafe route segment is rejected before hull containment is lost.",
+  "independent_verification": "pending_A08"
+}

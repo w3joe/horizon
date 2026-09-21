@@ -20,7 +20,13 @@ class FixturePolicy:
         model_version: str | None = None,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ):
-        if mode not in {"nominal", "unsafe_straight", "expired", "stale_lineage"}:
+        if mode not in {
+            "nominal",
+            "unsafe_straight",
+            "expired",
+            "stale_lineage",
+            "malformed",
+        }:
             raise ValueError(f"unsupported fixture policy: {mode}")
         self.mode = mode
         self.model_version = model_version or f"decision-ai-fixture-{mode}-v1"
@@ -72,6 +78,10 @@ class FixturePolicy:
             "command": {"heading_rad": heading, "speed_mps": speed},
             "inference_trace_id": trace_id,
         }
+        if self.mode == "malformed":
+            # Deliberately violates ProposedCommand. The standalone service
+            # still returns JSON so boundary validation is exercised.
+            proposal["command"]["speed_mps"] = "six"
         completed_ns = self._monotonic_ns()
         trace = {
             "contract_type": "AIInferenceTrace",

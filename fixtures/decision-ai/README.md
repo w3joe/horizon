@@ -9,6 +9,7 @@ Policies:
 - `unsafe_straight`: commands maximum speed without avoiding contacts.
 - `expired`: emits a command that is already expired.
 - `stale_lineage`: reports an input snapshot it did not consume.
+- `malformed`: returns JSON with a nonnumeric command speed for boundary tests.
 
 Run it with Python 3.12:
 

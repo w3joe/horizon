@@ -1,0 +1,21 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S10",
+  "title": "Slow and stuck rudder",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "vessel_degradation.json",
+    "rudder_stuck.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A05 sliding-window actuator monitor",
+    "A04 feasible-maneuver update"
+  ],
+  "acceptance_condition": "Remaining actuator authority is respected and limitations remain visible.",
+  "independent_verification": "pending_A08"
+}

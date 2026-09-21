@@ -1,0 +1,27 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S16",
+  "title": "Fault clears and planner requests authority",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "vessel_degradation_recovery.json"
+  ],
+  "decision_ai_policies": [
+    "nominal"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [
+    {
+      "at_s": 75.0,
+      "action": "operator_acknowledge",
+      "target": "gate",
+      "parameters": {}
+    }
+  ],
+  "dependencies": [
+    "A04 quarantine/release state machine",
+    "A08 operator recipe"
+  ],
+  "acceptance_condition": "Authority returns only after release criteria and acknowledgement; no chatter occurs.",
+  "independent_verification": "pending_A08"
+}
