@@ -16,7 +16,7 @@ from compute_ledger import initialize  # noqa: E402
 
 def spec_with_output(tmp_path: Path) -> dict:
     spec = json.loads(
-        (SCRIPTS.parent / "infra/modal/jobs/a07-wasrt-sequence-001.json").read_text()
+        (SCRIPTS.parent / "infra/modal/jobs/a07-wasrt-sequence-002.json").read_text()
     )
     spec["output"]["local_path"] = str(tmp_path / "output")
     return spec
@@ -75,9 +75,13 @@ def test_download_failure_retains_volume_and_records_provider_id(
     monkeypatch.setattr(job, "modal", fake_modal)
     monkeypatch.setattr(job, "delete_volume", lambda *_args: deleted.append(True) or True)
     with pytest.raises(RuntimeError, match="download"):
-        job.execute_job(ledger, "a07-wasrt-sequence-001", spec, Path("entrypoint.py"), {})
+        job.execute_job(ledger, "a07-wasrt-sequence-002", spec, Path("entrypoint.py"), {})
     assert deleted == []
-    record = json.loads(ledger.read_text())["reservations"][0]
+    record = next(
+        item
+        for item in json.loads(ledger.read_text())["reservations"]
+        if item["reservation_id"] == "a07-wasrt-sequence-002"
+    )
     assert record["status"] == "awaiting_reconciliation"
     assert record["provider_job_id"] == app_id
     assert "termination=verified_stopped" in record["reconciliation_note"]
@@ -100,9 +104,13 @@ def test_unknown_app_id_never_claims_termination_or_deletes_volume(
     deleted: list[bool] = []
     monkeypatch.setattr(job, "delete_volume", lambda *_args: deleted.append(True) or True)
     with pytest.raises(RuntimeError, match="unverified"):
-        job.execute_job(ledger, "a07-wasrt-sequence-001", spec, Path("entrypoint.py"), {})
+        job.execute_job(ledger, "a07-wasrt-sequence-002", spec, Path("entrypoint.py"), {})
     assert deleted == []
-    record = json.loads(ledger.read_text())["reservations"][0]
+    record = next(
+        item
+        for item in json.loads(ledger.read_text())["reservations"]
+        if item["reservation_id"] == "a07-wasrt-sequence-002"
+    )
     assert record["provider_job_id"] is None
     assert "termination=unknown_no_app_id" in record["reconciliation_note"]
     assert "volume_retained=True" in record["reconciliation_note"]

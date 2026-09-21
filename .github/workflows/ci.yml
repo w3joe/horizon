@@ -41,6 +41,6 @@ jobs:
       - name: Validate authorized compute reservation without launching cloud work
         run: |
           ./scripts/python.sh scripts/compute_ledger.py init
-          ./scripts/python.sh scripts/run_modal_job.py --reservation a07-wasrt-sequence-001
+          ./scripts/python.sh scripts/run_modal_job.py --reservation a07-wasrt-sequence-002
       - name: Start and stop the implemented CPU slice
         run: ./scripts/launch_cpu.sh --smoke-seconds 1
