@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -197,6 +198,51 @@ def validate_download(spec: dict) -> None:
         raise RuntimeError(f"downloaded output exceeds cap: {size} bytes")
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def sha256_tree(path: Path) -> str:
+    digest = hashlib.sha256()
+    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+        digest.update(str(item.relative_to(path)).encode())
+        digest.update(b"\0")
+        digest.update(sha256_file(item).encode())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def write_run_metadata(spec: dict, app_id: str) -> None:
+    output = Path(spec["output"]["local_path"])
+    spec_path = ROOT / "infra/modal/jobs" / f"{spec['job_id']}.json"
+    entrypoint = ROOT / spec["modal_entrypoint"]
+    metadata = {
+        "job_id": spec["job_id"],
+        "reservation_id": spec["reservation_id"],
+        "repository_commit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip(),
+        "modal_app_id": app_id,
+        "limits": spec["limits"],
+        "code": {
+            "entrypoint": spec["modal_entrypoint"],
+            "entrypoint_sha256": sha256_file(entrypoint),
+            "job_spec_sha256": sha256_file(spec_path),
+        },
+        "artifacts": {
+            "manifest_sha256": sha256_file(output / "manifest.json"),
+            "features_sha256": sha256_file(output / "features.jsonl"),
+            "class_masks_tree_sha256": sha256_tree(output / "class_masks"),
+            "mask_previews_tree_sha256": sha256_tree(output / "mask_previews"),
+        },
+    }
+    (output / "platform-run.json").write_text(json.dumps(metadata, indent=2) + "\n")
+
+
 def execute_job(
     ledger_path: Path,
     reservation_id: str,
@@ -243,6 +289,9 @@ def execute_job(
         if get_rc:
             raise RuntimeError("failed to download bounded output artifacts")
         validate_download(spec)
+        if app_id is None:
+            raise RuntimeError("cannot write run metadata without an exact provider app ID")
+        write_run_metadata(spec, app_id)
         if not delete_volume(spec, environment):
             raise RuntimeError("download verified but dedicated Volume deletion failed")
     except BaseException as error:
@@ -301,6 +350,7 @@ def main() -> int:
     environment = os.environ.copy()
     environment["HORIZON_MODAL_JOB_SPEC"] = str(spec_path)
     environment["HORIZON_DATA_ROOT"] = str(Path(spec["input"]["source_path"]).parents[1])
+    environment["HORIZON_MODAL_RUN_ID"] = spec["job_id"]
     environment["HORIZON_MODAL_VOLUME"] = spec["modal_volume_name"]
     execute_job(args.ledger, args.reservation, spec, entrypoint, environment)
     print("Modal attempt finished; reconcile the inclusive provider charge before another reservation.")

@@ -13,17 +13,18 @@ LOCAL_DATA = Path(os.environ.get("HORIZON_DATA_ROOT", "/Users/w3joe/Desktop/2026
 LOCAL_SERVICE = Path(__file__).resolve().parent
 SOURCE = LOCAL_DATA / "sources" / "WaSR-T"
 WEIGHTS = LOCAL_DATA / "weights" / "wasrt_mastr1325.pth"
-RUN_ID = "a07-wasrt-sequence-001"
+RUN_ID = os.environ["HORIZON_MODAL_RUN_ID"]
 OUTPUT_CAP_BYTES = 157_286_400
-VOLUME_NAME = os.environ.get("HORIZON_MODAL_VOLUME", "horizon-a07-artifacts")
+VOLUME_NAME = os.environ["HORIZON_MODAL_VOLUME"]
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("torch==2.5.1", "torchvision==0.20.1", "Pillow==10.4.0")
     .add_local_dir(SOURCE, remote_path="/opt/wasr-t", copy=True)
     .run_commands("printf '%s\\n' 1b5360af20408e09bbf0116a0029f7e0c0800e7c > /opt/wasr-t/.horizon-source-commit")
-    .add_local_file(WEIGHTS, remote_path="/opt/weights/wasrt_mastr1325.pth", copy=True)
     .add_local_dir(LOCAL_SERVICE, remote_path="/opt/horizon/services/perception", copy=True)
+    .env({"HORIZON_MODAL_RUN_ID": RUN_ID, "HORIZON_MODAL_VOLUME": VOLUME_NAME})
+    .add_local_file(WEIGHTS, remote_path="/opt/weights/wasrt_mastr1325.pth", copy=False)
 )
 artifacts = modal.Volume.from_name(VOLUME_NAME, create_if_missing=False)
 app = modal.App("horizon-a07-wasrt-smoke", image=image)

@@ -119,6 +119,46 @@ def begin(path: Path, reservation_id: str) -> dict[str, Any]:
     return mutate(path, operation)
 
 
+def reserve(
+    path: Path,
+    reservation_id: str,
+    job_spec: str,
+    upper_bound_usd: float,
+    authorization: str,
+) -> dict[str, Any]:
+    upper_bound = finite_nonnegative(upper_bound_usd, "reservation upper bound")
+    if not reservation_id or not job_spec or not authorization:
+        raise ValueError("reservation ID, job spec, and authorization are required")
+
+    def operation(ledger: dict[str, Any]) -> None:
+        if any(item["reservation_id"] == reservation_id for item in ledger["reservations"]):
+            raise ValueError(f"duplicate reservation ID {reservation_id!r}")
+        budget = ledger["budget"]
+        active = sum(
+            entry["upper_bound_usd"]
+            for entry in ledger["reservations"]
+            if entry["status"] in ACTIVE_STATUSES
+        )
+        if budget["reconciled_spend"] + active + upper_bound > budget["working_cap"] + 1e-9:
+            raise ValueError("reservation would exceed the working cap")
+        ledger["reservations"].append(
+            {
+                "reservation_id": reservation_id,
+                "job_spec": job_spec,
+                "status": "authorized",
+                "upper_bound_usd": upper_bound,
+                "actual_usd": None,
+                "authorized_utc": None,
+                "authorization": authorization,
+                "attempts_started": 0,
+                "provider_job_id": None,
+                "reconciliation_note": None,
+            }
+        )
+
+    return mutate(path, operation)
+
+
 def finish_attempt(path: Path, reservation_id: str, provider_job_id: str | None, note: str) -> dict[str, Any]:
     def operation(ledger: dict[str, Any]) -> None:
         item = reservation(ledger, reservation_id)
@@ -140,8 +180,8 @@ def reconcile(path: Path, reservation_id: str, actual_usd: float, note: str) -> 
         item["status"] = "reconciled_overrun" if actual > item["upper_bound_usd"] else "reconciled"
         item["actual_usd"] = actual
         item["reconciliation_note"] = note
-        ledger["budget"]["reconciled_spend"] = round(
-            sum(entry["actual_usd"] or 0.0 for entry in ledger["reservations"]), 6
+        ledger["budget"]["reconciled_spend"] = sum(
+            entry["actual_usd"] or 0.0 for entry in ledger["reservations"]
         )
 
     return mutate(path, operation)
@@ -176,6 +216,11 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init")
     commands.add_parser("status")
+    reserve_parser = commands.add_parser("reserve")
+    reserve_parser.add_argument("--reservation", required=True)
+    reserve_parser.add_argument("--job-spec", required=True)
+    reserve_parser.add_argument("--upper-bound-usd", required=True, type=float)
+    reserve_parser.add_argument("--authorization", required=True)
     reconcile_parser = commands.add_parser("reconcile")
     reconcile_parser.add_argument("--reservation", required=True)
     reconcile_parser.add_argument("--actual-usd", required=True, type=float)
@@ -183,7 +228,15 @@ def main() -> int:
     args = parser.parse_args()
     path = args.ledger.expanduser().resolve()
     initialize(path)
-    if args.command == "reconcile":
+    if args.command == "reserve":
+        ledger = reserve(
+            path,
+            args.reservation,
+            args.job_spec,
+            args.upper_bound_usd,
+            args.authorization,
+        )
+    elif args.command == "reconcile":
         ledger = reconcile(path, args.reservation, args.actual_usd, args.note)
     else:
         ledger = json.loads(path.read_text())

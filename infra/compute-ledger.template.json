@@ -7,7 +7,7 @@
     "total_cap": 100.0,
     "protected_reserve": 20.0,
     "working_cap": 80.0,
-    "reconciled_spend": 0.0
+    "reconciled_spend": 0.00515378
   },
   "rates": {
     "effective_date": "2026-09-21",
@@ -26,6 +26,18 @@
     {
       "reservation_id": "a07-wasrt-sequence-001",
       "job_spec": "infra/modal/jobs/a07-wasrt-sequence-001.json",
+      "status": "reconciled",
+      "upper_bound_usd": 1.5,
+      "actual_usd": 0.00515378,
+      "authorized_utc": null,
+      "authorization": "Coordinator authorization recorded in the 2026-09-21 session; exact timestamp not recorded",
+      "attempts_started": 1,
+      "provider_job_id": "ap-Q3PIof7DQF5xAtfMdtUYOw",
+      "reconciliation_note": "Provider hourly report: CPU 0.00467878 + memory 0.00047500 USD, GPU 0. App verified stopped; empty Volume inspected and deleted. No GPU inference occurred."
+    },
+    {
+      "reservation_id": "a07-wasrt-sequence-002",
+      "job_spec": "infra/modal/jobs/a07-wasrt-sequence-002.json",
       "status": "authorized",
       "upper_bound_usd": 1.5,
       "actual_usd": null,
