@@ -20,11 +20,22 @@ evaluation window contains a physical collision event. This is consistent with
 the separately generated seed-7 evidence, which reports collision at 37.5 s
 and minimum signed hull clearance -4.5 m.
 
-The protected-path test remains a strict expected failure because the live
-gate path is not yet wired to consume the independent `RecoveryInput`. On this
-integrated base, the farther obstacle allows startup to produce accepted
-evidence through the older GovernorInput priming path, but the first observed
-A1 decision passes the 6 m/s proposal. This bounded compatibility rerun does
-not claim a complete pre-collision protected episode. It verifies the revised
-hazard premise and keeps protected S22 acceptance open for the pending wiring
-and subsequent full-episode rerun.
+The gate now consumes proposal-free `RecoveryInput` records through a
+dedicated capability and keeps that validation independent of the primary
+decision-AI call path. The system regression first runs an unprotected clone
+at 6 m/s to obtain the comparison collision time. It then runs a separate
+protected stack for at least 45 simulated seconds, joins an accepted external
+6 m/s command, and requires a subsequently actuated gate-watchdog command
+below 6 m/s before the comparison collision. Authoritative protected truth
+must contain no collision and must retain positive signed hull clearance for
+the complete window.
+
+The strict expected-failure marker was removed after that full test passed.
+In the recorded development run, the protected branch reached 45.4 s with no
+collision and a minimum signed hull clearance of 98.27 m, while the fixed
+counterfactual collides at 37.5 s. The first accepted A1 decisions still passed
+the far-field 6 m/s proposal. The observed intervention was the gate watchdog
+continuing or reducing to bounded recovery when timely supervisor authority
+was absent. This establishes bounded protected clearance for this episode; it
+does not establish that A1 detected the obstacle or that the mission route was
+completed.
