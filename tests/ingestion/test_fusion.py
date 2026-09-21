@@ -54,6 +54,7 @@ def test_live_public_observations_to_separate_ai_to_schema_valid_governor_input(
     assert health["navigation_environment"]["age_s"] >= 0.002
     assert health["obstacle_perception"]["status"] == "degraded"
     assert "CLOCK_UNCERTAINTY_HIGH" in health["obstacle_perception"]["reason_codes"]
+    assert health["obstacle_perception:radar"]["status"] == "healthy"
     assert health["ship_actuator_feedback"]["status"] == "healthy"
     assert health["onboard_network"]["status"] == "unknown"
     assert health["internal_ship_communications"]["status"] == "healthy"
@@ -121,6 +122,46 @@ def test_false_ais_far_away_cannot_delete_radar_track_and_peer_intent_stays_sepa
     assert any("radar" in track["supporting_observation_ids"] for track in tracks)
     assert len(engine.peer_intents) == 1
     assert all("peer" not in track["supporting_observation_ids"] for track in tracks)
+
+
+def test_uncertain_ais_cannot_change_radar_kinematics_or_alignment() -> None:
+    now_ns = time.monotonic_ns()
+    engine = FusionEngine()
+    engine.last_run_branch = ("run", "protected")
+    radar = contact_observation("radar", 0, [10.0, 0.0], "radar", "radar", now_ns)
+    ais = contact_observation("ais", 0, [12.0, 1.0], "ais", "ais", now_ns)
+    ais["time"]["clock_uncertainty_ms"] = 100.0
+    ais["time"]["event_time_s"] = 1000.0
+    engine.update_batch({"observations": [radar, ais]}, now_ns=now_ns)
+    tracks = engine.fuse_tracks(now_ns)
+    assert len(tracks) == 1
+    assert tracks[0]["position_ne_m"] == [10.0, 0.0]
+    assert tracks[0]["supporting_observation_ids"] == ["radar"]
+    assert "ais" in engine.observations
+    records, _ = engine._health(now_ns, {})
+    by_source = {item["source_id"]: item for item in records}
+    assert by_source["obstacle_perception"]["status"] == "degraded"
+    assert by_source["obstacle_perception:radar"]["status"] == "healthy"
+
+
+@pytest.mark.parametrize("fault", ["stale", "uncertain", "unavailable"])
+def test_radar_source_health_does_not_hide_radar_failures(fault) -> None:
+    now_ns = time.monotonic_ns()
+    engine = FusionEngine()
+    engine.last_run_branch = ("run", "protected")
+    radar = contact_observation("radar", 0, [10.0, 0.0], "radar", "radar", now_ns)
+    if fault == "stale":
+        radar["time"]["valid_until_monotonic_ns"] = now_ns - 1
+    elif fault == "uncertain":
+        radar["time"]["clock_uncertainty_ms"] = 100.0
+    else:
+        radar["capability"] = "unavailable"
+    ais = contact_observation("ais", 0, [12.0, 1.0], "ais", "ais", now_ns)
+    engine.update_batch({"observations": [radar, ais]}, now_ns=now_ns)
+    records, _ = engine._health(now_ns, {})
+    by_source = {item["source_id"]: item for item in records}
+    assert by_source["obstacle_perception:radar"]["status"] != "healthy"
+    assert all("radar" not in track["supporting_observation_ids"] for track in engine.fuse_tracks(now_ns))
 
 
 def test_epoch_change_invalidates_old_proposal_lineage() -> None:
