@@ -46,7 +46,7 @@ export function DataFlowView({ packet, event }: { packet: ConsolePacket; event?:
     <div className="flow-workspace workspace-scroll">
       <div className="workspace-heading">
         <div><span className="eyebrow">EVENT-COHERENT LINEAGE</span><h2>{event?.label ?? packet.lineage.eventType.replaceAll("_", " ")}</h2></div>
-        <span className={`lineage-id ${packet.lineage.status}`}>{packet.lineage.status}</span>
+        <span className={`lineage-id ${packet.lineage.status}`}>{packet.lineage.status} chain · {packet.authority.state} authority</span>
       </div>
       <div className="flow-layout">
         <section className="source-bank" aria-label="Input groups">
@@ -66,9 +66,9 @@ export function DataFlowView({ packet, event }: { packet: ConsolePacket; event?:
           <div className={`flow-node external ${trace?.status === "ok" ? "confirmed" : "unknown"}`}><span>02</span><div><strong>External decision AI</strong><small>{input?.proposal.command_id ?? "Proposal unavailable"}{traceMs === null ? "" : ` · ${traceMs.toFixed(1)} ms`}</small></div></div>
           <div className={`flow-edge ${decision ? "active danger" : ""}`}><i /><span>{decision ? `${decision.action} · ${decision.deadline_met ? "deadline met" : "deadline missed"}` : "decision unknown"}</span></div>
           <div className={`flow-node governor ${decision?.valid ? "confirmed" : "unknown"}`}><span>03</span><div><strong>Assurance governor</strong><small>{decision ? `${decision.candidate_id} · ${decision.decision_id}` : "No linked decision"}</small></div></div>
-          <div className={`flow-edge ${receipt?.accepted ? "active" : "danger"}`}><i /><span>{receipt?.accepted ? "accepted receipt" : receipt ? "gate rejected" : "receipt unknown"}</span></div>
-          <div className={`flow-node ${receipt?.accepted ? "confirmed" : "unknown"}`}><span>04</span><div><strong>Exclusive actuator gate</strong><small>{receipt?.receipt_id ?? "No matching gate receipt"}</small></div></div>
-          <aside className="isolation-note"><strong>Read-only console</strong><span>The browser receives public evidence and cannot write to protected actuation or evaluation truth.</span></aside>
+          <div className={`flow-edge ${packet.authority.state === "current" ? "active" : "danger"}`}><i /><span>{packet.authority.state === "current" ? "current accepted authority" : receipt?.accepted ? "historical accepted receipt" : receipt ? "gate rejected" : "receipt unknown"}</span></div>
+          <div className={`flow-node ${packet.authority.state === "current" ? "confirmed" : "unknown"}`}><span>04</span><div><strong>Exclusive actuator gate</strong><small>{receipt?.receipt_id ?? "No matching gate receipt"}</small></div></div>
+          <aside className="isolation-note"><strong>Mediated operator boundary</strong><span>The browser can request fixed operator actions through the same-origin proxy. It cannot access bearer tokens, submit gate decisions, command the plant directly, or read evaluation truth.</span></aside>
         </section>
       </div>
       <div className="flow-evidence-row">
@@ -86,7 +86,7 @@ export function DataFlowView({ packet, event }: { packet: ConsolePacket; event?:
         <section className="uncertainty-record">
           <span className="eyebrow">UNCERTAINTY REPRESENTATION</span>
           <strong>{packet.contact.uncertaintyKind?.replaceAll("_", " ") ?? "unknown"}</strong>
-          <p>{packet.contact.uncertaintyRadiusM ? `Engineering bound radius ${packet.contact.uncertaintyRadiusM.toFixed(1)} m.` : "No engineering bound is available."} {packet.contact.covarianceCoverage === null || packet.contact.covarianceCoverage === undefined ? "Covariance coverage unavailable." : `Covariance coverage ${(packet.contact.covarianceCoverage * 100).toFixed(0)}%.`}</p>
+          <p>{packet.contact.uncertaintyRadiusM === null ? "No engineering bound is available." : `Engineering bound radius ${packet.contact.uncertaintyRadiusM.toFixed(1)} m.`} {packet.contact.covarianceCoverage === null || packet.contact.covarianceCoverage === undefined ? "Covariance coverage unavailable." : `Covariance coverage ${(packet.contact.covarianceCoverage * 100).toFixed(0)}%.`}</p>
           <small>Covariance is probabilistic evidence; it is not presented as a guaranteed bound.</small>
         </section>
         <section className="peer-record">

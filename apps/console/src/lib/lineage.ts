@@ -1,5 +1,5 @@
 import type { AssuranceDecision, GateReceipt, SimulationSnapshot } from "../../../../packages/contracts/typescript/src/index";
-import type { LineageState, LiveControlEvent, LiveGovernorInput, LiveInputSummary, PathPoint } from "../types";
+import type { JoinedEvidence, LineageState, LiveControlEvent, LiveGovernorInput, LiveInputSummary, PathPoint } from "../types";
 
 function matchesInput(decision: AssuranceDecision, input: LiveGovernorInput): boolean {
   return decision.run_id === input.run_id
@@ -15,15 +15,27 @@ function matchesReceipt(decision: AssuranceDecision, receipt: GateReceipt): bool
     && receipt.decision_id === decision.decision_id;
 }
 
-export function assembleLineage(events: LiveControlEvent[], latestInput: LiveGovernorInput | null): LineageState {
-  const event = [...events].reverse().find((item) => item.decision || item.event_type !== "duplicate_sample_skipped");
+export function assembleLineage(events: LiveControlEvent[], joined: JoinedEvidence | null): LineageState {
+  const joinedEvent = joined
+    ? [...events].reverse().find((item) => item.decision?.decision_id === joined.decision.decision_id)
+    : undefined;
+  const event = joinedEvent ?? (joined ? {
+    event_type: "decision_receipt",
+    decision: joined.decision,
+    receipt: joined.receipt,
+    input: joined.governor_input,
+  } : [...events].reverse().find((item) => item.decision || item.event_type !== "duplicate_sample_skipped"));
   if (!event) {
     return unavailable("No assurance control event has been published.");
   }
   const decision = event.decision ?? null;
   const receipt = event.receipt ?? null;
-  const embeddedInput = event.input ?? (event.input_summary ? summaryToInput(event.input_summary) : null);
-  const input = embeddedInput ?? (decision && latestInput && matchesInput(decision, latestInput) ? latestInput : null);
+  const joinedInput = decision && joined
+    && joined.decision.decision_id === decision.decision_id
+    && matchesInput(decision, joined.governor_input)
+    ? joined.governor_input : null;
+  const input = joinedInput ?? event.input ?? (event.input_summary ? summaryToInput(event.input_summary) : null);
+  const completeInput = joinedInput !== null || event.input !== undefined;
   const reasons = [...new Set([...(event.reason_codes ?? []), ...(decision?.reason_codes ?? []), ...(receipt?.reason_codes ?? [])])];
   const common = {
     eventType: event.event_type,
@@ -51,6 +63,9 @@ export function assembleLineage(events: LiveControlEvent[], latestInput: LiveGov
   }
   if (!receipt.accepted || receipt.actual_command === null) {
     return { ...common, status: "rejected", explanation: "The gate rejected the decision; no new command was issued." };
+  }
+  if (!input || !completeInput) {
+    return { ...common, status: "incomplete", explanation: "A historical accepted receipt is available, but its complete governor input is not currently available." };
   }
   return { ...common, status: "accepted", explanation: "The matching gate receipt confirms that the command reached actuation." };
 }
@@ -91,7 +106,7 @@ function eventExplanation(eventType: string): string {
     gate_unavailable: "The gate was unavailable; command issue is unknown.",
     gate_submission_failed: "The gate submission failed; command issue is unknown.",
     gate_epoch_synchronized: "The gate and plant epoch handshake completed.",
-    startup_recovery_primed: "Startup recovery was primed before autonomous proposals were accepted.",
+    startup_recovery_primed: "A startup recovery priming attempt was recorded; its result must be inspected before treating recovery as ready.",
   };
   return copy[eventType] ?? "The event does not contain a complete proposal-to-actuation chain.";
 }
@@ -128,7 +143,7 @@ export function fusionSnapshotToDisplay(input: LiveGovernorInput): SimulationSna
       speed_mps: Math.hypot(...contact.velocity_ne_mps),
       hull: contact.hull,
     })),
-    active_command_id: input.proposal.command_id,
+    active_command_id: null,
     display_only: true,
   };
 }
