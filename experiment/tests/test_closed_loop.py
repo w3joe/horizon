@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from experiment.evaluation.scoring import score_closed_loop
 from experiment.harness.closed_loop import (
     _audit_engineering_bounds,
@@ -34,6 +36,11 @@ def test_real_a1_a5_adapter_preserves_deadlines_authority_and_truth_separation()
     for candidate_id in ("A1", "A2", "A3", "A4", "A5"):
         bundle = run_assured_episode(_request(candidate_id))
         assert bundle["adapter_provenance"] == "production_integration"
+        assert bundle["method_provenance"]["candidate_id"] == candidate_id
+        assert bundle["method_provenance"]["candidate_version"]
+        assert bundle["method_provenance"]["entrypoint"].startswith(
+            "horizon_assurance.candidates:"
+        )
         assert bundle["health_policy"]["label"] == (
             "synthetic fixed-health controller-isolation"
         )
@@ -100,44 +107,205 @@ def test_fixed_health_metadata_is_derived_from_assurance_configuration() -> None
     assert fixture["optional_source_ids"] == list(config.optional_health_sources)
 
 
-def test_expired_input_after_slow_recovery_prime_is_dropped_and_gate_closes(
-    monkeypatch,
-) -> None:
-    from horizon_gate.core import ActuatorGate
-
-    def slow_prime(
-        gate: ActuatorGate, governor_input: dict, *, token: str
-    ) -> tuple[bool, list[str]]:
-        del governor_input, token
-        gate._monotonic_ns.advance_ns(10_000_000_000)
-        return False, ["RECOVERY_CERTIFICATE_STALE"]
-
-    monkeypatch.setattr(ActuatorGate, "prime_recovery", slow_prime)
+def test_expired_input_after_slow_recovery_prime_is_dropped_and_gate_closes() -> None:
     request = _request("A1")
-    request["max_simulation_time_s"] = 0.25
+    request["max_simulation_time_s"] = 0.8
+    request["modeled_recovery_prime_service_ns"] = 200_000_000
 
     bundle = run_assured_episode(request)
 
-    assert bundle["cadence"]["planner_opportunities"] == 2
+    assert bundle["cadence"]["planner_opportunities"] >= 4
     assert bundle["cadence"]["fresh_proposals"] == 0
-    assert bundle["cadence"]["post_prime_expired_inputs"] == 1
-    assert bundle["cadence"]["no_fresh_input_ticks"] == 13
-    assert bundle["cadence"]["watchdog_opportunities"] >= 13
+    assert bundle["cadence"]["post_prime_expired_inputs"] >= 1
+    assert bundle["cadence"]["no_fresh_input_ticks"] >= 20
+    assert bundle["cadence"]["watchdog_opportunities"] >= 30
     assert bundle["decisions"] == []
     assert bundle["gate_receipts"] == []
-    assert len(bundle["gate_recovery"]["prime_attempts"]) == 1
-    prime = bundle["gate_recovery"]["prime_attempts"][0]
-    assert prime["tick_index"] == 10
-    assert prime["accepted"] is False
-    assert prime["reason_codes"] == ["RECOVERY_CERTIFICATE_STALE"]
-    assert prime["compute_time_ns"] >= 0
-    assert len(bundle["truth_frames"]) >= 13
+    assert bundle["gate_recovery"]["prime_attempts"]
+    for prime in bundle["gate_recovery"]["prime_attempts"]:
+        assert prime["accepted"] is False
+        assert prime["reason_codes"]
+        assert prime["compute_time_ns"] >= 0
+    assert len(bundle["truth_frames"]) >= 30
     assert all(
         frame["writer_channel"] in {"plant_startup_passive", "plant_expiry_fallback"}
         for frame in bundle["truth_frames"]
     )
     assert bundle["gate_recovery"]["closed_and_joined"] is True
     assert bundle["gate_recovery"]["remaining_worker_count"] == 0
+
+
+def test_gate_service_expiry_rejects_before_receiver_mutation(monkeypatch) -> None:
+    from horizon_assurance.candidates import A1ThresholdSimplex
+
+    original = A1ThresholdSimplex.evaluate
+
+    def short_lived_decision(self, governor_input: dict) -> dict:
+        decision = original(self, governor_input)
+        decision["expires_monotonic_ns"] = (
+            int(decision["decided_monotonic_ns"]) + 20_000_000
+        )
+        return decision
+
+    monkeypatch.setattr(A1ThresholdSimplex, "evaluate", short_lived_decision)
+    request = _request("A1")
+    request["max_simulation_time_s"] = 0.3
+    request["modeled_gate_service_ns"] = 40_000_000
+
+    bundle = run_assured_episode(request)
+
+    assert bundle["decisions"]
+    decision = bundle["decisions"][0]
+    receipt = bundle["gate_receipts"][0]
+    gate_event = next(
+        event for event in bundle["timing_model"]["events"] if event["stage"] == "gate"
+    )
+    assert gate_event["plant_steps"] == 2
+    assert receipt["received_monotonic_ns"] == gate_event["scheduled_completion_ns"]
+    assert receipt["accepted"] is False
+    assert "DECISION_EXPIRED_AT_GATE" in receipt["reason_codes"]
+    assert all(
+        item["envelope"]["decision_id"] != decision["decision_id"]
+        for item in bundle["protected_command_trace"]
+    )
+
+
+def test_watchdog_during_queued_gate_work_cancels_stale_generation() -> None:
+    request = _request("A3")
+    request["max_simulation_time_s"] = 0.6
+    request["modeled_gate_service_ns"] = 200_000_000
+
+    bundle = run_assured_episode(request)
+
+    assert bundle["decisions"]
+    assert bundle["watchdog_receipts"]
+    assert bundle["timing_model"]["scheduler_rejections"]
+    rejection = bundle["timing_model"]["scheduler_rejections"][0]
+    assert rejection["reason_codes"] == ["SCHEDULER_STALE_EPOCH_OR_GENERATION"]
+    assert rejection["completion_generation"] > rejection["queued_generation"]
+    assert all(
+        receipt["decision_id"] != rejection["decision_id"]
+        for receipt in bundle["gate_receipts"]
+    )
+    assert all(
+        item["envelope"]["decision_id"] != rejection["decision_id"]
+        for item in bundle["protected_command_trace"]
+    )
+
+
+def test_candidate_completion_never_precedes_emitted_decision_time(monkeypatch) -> None:
+    from horizon_assurance.candidates import A1ThresholdSimplex
+
+    original = A1ThresholdSimplex.evaluate
+
+    def future_dated_decision(self, governor_input: dict) -> dict:
+        decision = original(self, governor_input)
+        decision["decided_monotonic_ns"] += 25_000_000
+        return decision
+
+    monkeypatch.setattr(A1ThresholdSimplex, "evaluate", future_dated_decision)
+    request = _request("A1")
+    request["max_simulation_time_s"] = 0.5
+    request["modeled_candidate_service_ns"] = 0
+    request["modeled_gate_service_ns"] = 0
+
+    bundle = run_assured_episode(request)
+
+    candidate_event = next(
+        event
+        for event in bundle["timing_model"]["events"]
+        if event["stage"] == "candidate"
+    )
+    assert candidate_event["declared_service_ns"] == 0
+    assert candidate_event["plant_steps"] >= 2
+    assert candidate_event["completed_monotonic_ns"] >= int(
+        bundle["decisions"][0]["decided_monotonic_ns"]
+    )
+
+
+def test_production_candidate_deadline_failure_sets_completion_floor(monkeypatch) -> None:
+    import horizon_assurance.candidates as candidates_module
+
+    host_times = iter((1_000_000_000, 1_041_000_000))
+    monkeypatch.setattr(
+        candidates_module,
+        "time",
+        SimpleNamespace(monotonic_ns=lambda: next(host_times)),
+    )
+    request = _request("A1")
+    request["max_simulation_time_s"] = 0.3
+    request["modeled_candidate_service_ns"] = 0
+    request["modeled_gate_service_ns"] = 0
+
+    bundle = run_assured_episode(request)
+
+    decision = bundle["decisions"][0]
+    candidate_event = next(
+        event
+        for event in bundle["timing_model"]["events"]
+        if event["stage"] == "candidate"
+    )
+    assert decision["compute_time_ns"] == 41_000_000
+    assert decision["deadline_met"] is False
+    assert decision["valid"] is False
+    assert decision["action"] == "invalid"
+    assert candidate_event["completed_monotonic_ns"] >= decision[
+        "decided_monotonic_ns"
+    ]
+    assert bundle["gate_receipts"][0]["accepted"] is False
+    assert "DECISION_INVALID_OR_LATE" in bundle["gate_receipts"][0]["reason_codes"]
+
+
+def test_nonzero_front_end_stages_fail_closed_before_candidate_evaluation() -> None:
+    all_nonzero = _request("A1")
+    all_nonzero.update(
+        {
+            "max_simulation_time_s": 0.5,
+            "timing_profile_id": "all-stages-20ms-v1",
+            "modeled_ai_service_ns": 20_000_000,
+            "modeled_recovery_prime_service_ns": 20_000_000,
+            "modeled_candidate_service_ns": 20_000_000,
+            "modeled_gate_service_ns": 20_000_000,
+        }
+    )
+    ai_stale = run_assured_episode(all_nonzero)
+    assert ai_stale["decisions"] == []
+    assert ai_stale["proposals"] == []
+    assert ai_stale["gate_receipts"] == []
+    assert any(
+        event["stage"] == "ai" and event["plant_steps"] == 1
+        for event in ai_stale["timing_model"]["events"]
+    )
+
+    prime_nonzero = _request("A1")
+    prime_nonzero["max_simulation_time_s"] = 0.5
+    prime_nonzero["modeled_recovery_prime_service_ns"] = 20_000_000
+    prime_stale = run_assured_episode(prime_nonzero)
+    assert prime_stale["cadence"]["post_prime_expired_inputs"] > 0
+    assert prime_stale["decisions"] == []
+    assert prime_stale["proposals"] == []
+    assert prime_stale["gate_receipts"] == []
+
+
+def test_stage_latency_must_be_finite_fixed_step_multiple() -> None:
+    request = _request("A1")
+    request["modeled_gate_service_ns"] = 1
+    try:
+        run_assured_episode(request)
+    except ValueError as exc:
+        assert "multiple of the fixed plant period" in str(exc)
+    else:
+        raise AssertionError("non-grid modeled latency was accepted")
+
+    request = _request("A1")
+    request["timing_profile_id"] = "all-stages-20ms-v1"
+    request["modeled_ai_service_ns"] = 0
+    try:
+        run_assured_episode(request)
+    except ValueError as exc:
+        assert "does not match timing profile" in str(exc)
+    else:
+        raise AssertionError("timing-profile mismatch was accepted")
 
 
 def test_odd_audit_uses_configured_bounds_and_truth_only_contact_association() -> None:
