@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 import copy
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 import math
 import secrets
 from typing import Any
@@ -24,7 +24,7 @@ from .model import (
     integrate_step,
     wrap_angle,
 )
-from .scenario import Scenario, TrafficSpec
+from .scenario import FaultSpec, Scenario, TrafficSpec
 from .sensors import SensorSuite
 
 
@@ -91,10 +91,12 @@ class AuthoritativeSimulator:
         self.truth_log: list[dict[str, Any]] = []
         self.observations: deque[dict[str, Any]] = deque(maxlen=20_000)
         self.sensors = SensorSuite(self.seed, self.parameters.fixed_step_s)
+        self.sensors.initialize_prior(self.ownship)
         self.path_length_m = 0.0
         self._collision_pairs: set[tuple[str, str]] = set()
         self._boundary_violating = False
         self._grounding = False
+        self.manual_faults: list[FaultSpec] = []
         self._sample_sensors()
         self._record_truth(0.0)
 
@@ -190,7 +192,29 @@ class AuthoritativeSimulator:
         return copy.deepcopy(receipt)
 
     def _active_faults(self):
-        return tuple(item for item in self.scenario.faults if item.active(self.simulation_time_s))
+        scheduled = [item for item in self.scenario.faults if item.active(self.simulation_time_s)]
+        manual = [item for item in self.manual_faults if item.active(self.simulation_time_s)]
+        return tuple(scheduled + manual)
+
+    def inject_declared_fault(self, fault_id: str) -> None:
+        """Activate only a fault template declared by the loaded scenario."""
+        template = next((item for item in self.scenario.faults if item.fault_id == fault_id), None)
+        if template is None:
+            raise ValueError("fault is not in the scenario's permitted fault set")
+        duration = None if template.end_s is None else max(0.0, template.end_s - template.start_s)
+        self.manual_faults = [item for item in self.manual_faults if item.fault_id != fault_id]
+        self.manual_faults.append(
+            FaultSpec(
+                fault_id=f"operator:{fault_id}",
+                kind=template.kind,
+                start_s=self.simulation_time_s,
+                end_s=None if duration is None else self.simulation_time_s + duration,
+                parameters=copy.deepcopy(template.parameters),
+            )
+        )
+
+    def clear_manual_faults(self) -> None:
+        self.manual_faults.clear()
 
     def _fault_adjusted_parameters(self) -> PlantParameters:
         parameters = self.base_parameters
@@ -260,13 +284,19 @@ class AuthoritativeSimulator:
                 self._event("collision", {"vessel_ids": list(pair)})
             elif not collided:
                 self._collision_pairs.discard(pair)
-        boundary_margin = signed_boundary_margin(
-            hull_polygon(self.ownship, own_hull), self.scenario.water_boundary_ne_m
+        own_polygon = hull_polygon(self.ownship, own_hull)
+        boundary_margin = min(
+            signed_boundary_margin(own_polygon, self.scenario.water_boundary_ne_m),
+            signed_boundary_margin(own_polygon, self.scenario.corridor_ne_m),
         )
         if boundary_margin < 0.0 and not self._boundary_violating:
             self._event("boundary_violation", {"margin_m": boundary_margin})
         self._boundary_violating = boundary_margin < 0.0
-        ukc = self.scenario.nominal_depth_m - own_hull.draft_m - self.scenario.chart_uncertainty_m
+        ukc = (
+            self.scenario.depth_at(self.ownship.north_m, self.ownship.east_m)
+            - own_hull.draft_m
+            - self.scenario.chart_uncertainty_m
+        )
         if ukc < 0.0 and not self._grounding:
             self._event("grounding", {"ukc_m": ukc})
         self._grounding = ukc < 0.0
@@ -292,9 +322,9 @@ class AuthoritativeSimulator:
             simulation_time_s=self.simulation_time_s,
             ownship=self.ownship,
             traffic=[(item.spec, item.state) for item in self.traffic],
-            depth_m=self.scenario.nominal_depth_m,
+            depth_m=self.scenario.depth_at(self.ownship.north_m, self.ownship.east_m),
             parameters=self.parameters,
-            faults=self.scenario.faults,
+            faults=self._active_faults(),
         )
         self.observations.extend(delivered)
 
@@ -305,8 +335,15 @@ class AuthoritativeSimulator:
             hull_clearance = min(
                 hull_clearance, signed_polygon_clearance(own_polygon, hull_polygon(item.state, item.spec.hull))
             )
-        boundary = signed_boundary_margin(own_polygon, self.scenario.water_boundary_ne_m)
-        ukc = self.scenario.nominal_depth_m - self.parameters.hull.draft_m - self.scenario.chart_uncertainty_m
+        boundary = min(
+            signed_boundary_margin(own_polygon, self.scenario.water_boundary_ne_m),
+            signed_boundary_margin(own_polygon, self.scenario.corridor_ne_m),
+        )
+        ukc = (
+            self.scenario.depth_at(self.ownship.north_m, self.ownship.east_m)
+            - self.parameters.hull.draft_m
+            - self.scenario.chart_uncertainty_m
+        )
         return hull_clearance, boundary, ukc
 
     def _record_truth(self, path_increment_m: float) -> None:
@@ -392,6 +429,44 @@ class AuthoritativeSimulator:
             ],
             "active_command_id": self.active_command.command_id,
             "display_only": True,
+        }
+
+    def public_reference(self) -> dict[str, Any]:
+        """Static online safety reference with no truth state or fault labels."""
+        return {
+            "reference_type": "SimulatorReference",
+            "schema_version": "0.1.0",
+            "scenario_id": self.scenario.scenario_id,
+            "scenario_version": self.scenario.scenario_version,
+            "frame": "NED",
+            "model_version": self.parameters.model_version,
+            "plant_parameters": asdict(self.base_parameters),
+            "water_boundary": {
+                "boundary_id": f"{self.scenario.scenario_id}:water",
+                "polygon_ne_m": [list(point) for point in self.scenario.water_boundary_ne_m],
+            },
+            "corridor": {
+                "corridor_id": f"{self.scenario.scenario_id}:corridor",
+                "polygon_ne_m": [list(point) for point in self.scenario.corridor_ne_m],
+            },
+            "depth_field": {
+                "depth_field_id": f"{self.scenario.scenario_id}:depth",
+                "nominal_depth_m": self.scenario.nominal_depth_m,
+                "chart_uncertainty_m": self.scenario.chart_uncertainty_m,
+                "zones": [
+                    {
+                        "zone_id": zone.zone_id,
+                        "polygon_ne_m": [list(point) for point in zone.polygon_ne_m],
+                        "depth_m": zone.depth_m,
+                    }
+                    for zone in self.scenario.depth_zones
+                ],
+            },
+            "configured_clearance_m": 20.0,
+            "disturbance_bounds": {
+                "current_speed_mps": 0.5,
+                "qualification": "configured bound, not current truth",
+            },
         }
 
     def observation_batch(self, after_sequence: int = -1) -> list[dict[str, Any]]:

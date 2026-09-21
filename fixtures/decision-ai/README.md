@@ -16,5 +16,7 @@ Run it with Python 3.12:
 /opt/homebrew/bin/python3.12 fixtures/decision-ai/service.py --policy nominal
 ```
 
+The default fixture port is `8101`; the simulator defaults to `8100`.
+
 The process receives only the public/noisy display snapshot. It has no plant
 authority and no evaluation-truth capability.

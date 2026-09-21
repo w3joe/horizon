@@ -30,53 +30,6 @@ def _hash_json(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _finite_library_feasible(reference: AuthoritativeSimulator) -> bool:
-    """Offline sampled recovery oracle, evaluated only on the reference branch."""
-    commands = (
-        (reference.ownship.heading_rad, 0.0),
-        (reference.ownship.heading_rad, 4.0),
-        (reference.ownship.heading_rad + math.radians(35.0), 2.0),
-        (reference.ownship.heading_rad - math.radians(35.0), 2.0),
-        (reference.ownship.heading_rad + math.radians(70.0), 2.0),
-        (reference.ownship.heading_rad - math.radians(70.0), 2.0),
-    )
-    for index, (heading, speed) in enumerate(commands):
-        trial = reference.clone(f"offline-library-{index}", protected=False)
-        trial.truth_log.clear()
-        trial.events.clear()
-        trial.receipts.clear()
-        trial.observations.clear()
-        trial.sensors.definitions = ()
-        trial.sensors._pending.clear()
-        trial.submit_counterfactual_command(
-            {
-                "run_id": trial.run_id,
-                "branch_id": trial.branch_id,
-                "decision_id": f"offline-recovery-{index}",
-                "command_id": f"offline-recovery-{index}",
-                "authority": "recovery",
-                "sequence": trial.last_sequence + 1,
-                "expires_simulation_time_s": trial.simulation_time_s + 8.0,
-                "command": {"heading_rad": heading, "speed_mps": speed},
-            },
-            token=trial.evaluation_token,
-        )
-        trial.step(round(8.0 / trial.parameters.fixed_step_s))
-        has_violation = any(
-            event["kind"] in {"collision", "boundary_violation", "grounding"}
-            for event in trial.events
-        )
-        margins_valid = all(
-            frame["signed_margins"]["hull_clearance_m"] >= 20.0
-            and frame["signed_margins"]["boundary_clearance_m"] >= 0.0
-            and frame["signed_margins"]["ukc_m"] >= 0.0
-            for frame in trial.truth_log
-        )
-        if not has_violation and margins_valid:
-            return True
-    return False
-
-
 def run_episode(request: dict[str, Any]) -> dict[str, Any]:
     """Run a deterministic closed-loop STUB episode for harness verification."""
     required = {
@@ -111,14 +64,11 @@ def run_episode(request: dict[str, Any]) -> dict[str, Any]:
         run_id=str(request["run_id"]),
         branch_id=str(request["branch_id"]),
     )
-    reference = simulator.clone(f"{simulator.branch_id}-recovery-reference", protected=False)
     max_time = min(float(request["max_simulation_time_s"]), scenario.duration_s)
     planner_period_ticks = round(0.2 / simulator.parameters.fixed_step_s)
     decisions: list[dict[str, Any]] = []
     proposals: list[dict[str, Any]] = []
-    recovery_samples: list[dict[str, Any]] = []
     sequence = 0
-    reference_sequence = 0
     while simulator.simulation_time_s < max_time:
         if simulator.tick_index % planner_period_ticks == 0:
             command_id = f"{request['episode_id']}:stub:{sequence}"
@@ -160,33 +110,8 @@ def run_episode(request: dict[str, Any]) -> dict[str, Any]:
                     "valid": True,
                 }
             )
-            reference.submit_counterfactual_command(
-                {
-                    "run_id": reference.run_id,
-                    "branch_id": reference.branch_id,
-                    "decision_id": f"reference-decision-{reference_sequence}",
-                    "command_id": f"reference-command-{reference_sequence}",
-                    "authority": "recovery",
-                    "sequence": reference_sequence,
-                    "expires_simulation_time_s": reference.simulation_time_s + 0.4,
-                    "command": {
-                        "heading_rad": scenario.ownship.heading_rad,
-                        "speed_mps": 2.0,
-                    },
-                },
-                token=reference.evaluation_token,
-            )
-            reference_sequence += 1
             sequence += 1
-        if simulator.tick_index % round(2.0 / simulator.parameters.fixed_step_s) == 0:
-            recovery_samples.append(
-                {
-                    "simulation_time_s": reference.simulation_time_s,
-                    "feasible": _finite_library_feasible(reference),
-                }
-            )
         simulator.step()
-        reference.step()
 
     cumulative_path = 0.0
     truth_frames: list[dict[str, Any]] = []
@@ -238,12 +163,10 @@ def run_episode(request: dict[str, Any]) -> dict[str, Any]:
         "nominal_duration_s": scenario.duration_s,
         "nominal_distance_m": nominal_distance,
         "truth_frames": truth_frames,
-        "recovery_reference": {
-            "source_branch_id": reference.branch_id,
-            "method": "offline_finite_library",
-            "independent_of_candidate": True,
-            "feasible_samples": recovery_samples,
-        },
+        # The STUB path has no independently validated recovery boundary.
+        # Scoring therefore reports lead time as unknown rather than treating a
+        # short sampled rollout as viability evidence.
+        "recovery_reference": None,
         "violation_events": [
             {"event_id": item["event_id"], "kind": item["kind"]} for item in simulator.events
         ],

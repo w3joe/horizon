@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import copy
+import secrets
 from socketserver import TCPServer
 import threading
 import time
@@ -30,6 +31,7 @@ class SimulatorRuntime:
         self.realtime = realtime
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
+        self.paused = threading.Event()
         self.thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -48,9 +50,10 @@ class SimulatorRuntime:
         deadline = time.monotonic()
         while not self.stop_event.is_set():
             deadline += period
-            with self.lock:
-                for branch in self.branches.values():
-                    branch.step()
+            if not self.paused.is_set():
+                with self.lock:
+                    for branch in self.branches.values():
+                        branch.step()
             self.stop_event.wait(max(0.0, deadline - time.monotonic()))
 
     def branch(self, branch_id: str) -> AuthoritativeSimulator:
@@ -77,11 +80,27 @@ class SimulatorHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._cors()
         self.end_headers()
         self.wfile.write(body)
 
     def _error(self, status: HTTPStatus, code: str, message: str) -> None:
         self._json(status, {"error": code, "message": message})
+
+    def _cors(self) -> None:
+        if self.headers.get("Origin") == "http://localhost:5176":
+            self.send_header("Access-Control-Allow-Origin", "http://localhost:5176")
+            self.send_header("Vary", "Origin")
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        if self.headers.get("Origin") != "http://localhost:5176":
+            self._error(HTTPStatus.FORBIDDEN, "CORS_ORIGIN_DENIED", "origin is not permitted")
+            return
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self._cors()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.end_headers()
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -118,6 +137,11 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                     snapshot = branch.public_snapshot()
                 self._json(HTTPStatus.OK, snapshot)
                 return
+            if path == "/v1/reference":
+                with self.server.runtime.lock:
+                    reference = branch.public_reference()
+                self._json(HTTPStatus.OK, reference)
+                return
             if path == "/v1/public/stream":
                 self._stream(branch, int(query.get("events", ["0"])[0]))
                 return
@@ -145,6 +169,7 @@ class SimulatorHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
+        self._cors()
         self.end_headers()
         sent = 0
         last_tick = -1
@@ -167,6 +192,32 @@ class SimulatorHandler(BaseHTTPRequestHandler):
         try:
             body = self._body()
             branch = self.server.runtime.branch(self._branch_id(query))
+            if path.startswith("/v1/operator/"):
+                if not secrets.compare_digest(self._token(), self.server.operator_token):
+                    raise AuthorityError("valid local-operator capability required")
+                with self.server.runtime.lock:
+                    if path == "/v1/operator/pause":
+                        self.server.runtime.paused.set()
+                    elif path == "/v1/operator/resume":
+                        self.server.runtime.paused.clear()
+                    elif path == "/v1/operator/reset":
+                        branch.reset()
+                    elif path == "/v1/operator/fault":
+                        if bool(body.get("enabled", True)):
+                            branch.inject_declared_fault(str(body["fault_id"]))
+                        else:
+                            branch.clear_manual_faults()
+                    else:
+                        self._error(HTTPStatus.NOT_FOUND, "NOT_FOUND", path)
+                        return
+                    status = {
+                        "branch_id": branch.branch_id,
+                        "paused": self.server.runtime.paused.is_set(),
+                        "simulation_time_s": branch.simulation_time_s,
+                        "manual_fault_active": bool(branch.manual_faults),
+                    }
+                self._json(HTTPStatus.OK, status)
+                return
             if path == "/v1/gate/command":
                 with self.server.runtime.lock:
                     receipt = branch.submit_gate_command(body, token=self._token())
@@ -217,8 +268,11 @@ class SimulatorHandler(BaseHTTPRequestHandler):
 
 
 class SimulatorHTTPServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], runtime: SimulatorRuntime):
+    def __init__(
+        self, address: tuple[str, int], runtime: SimulatorRuntime, operator_token: str | None = None
+    ):
         self.runtime = runtime
+        self.operator_token = operator_token or secrets.token_urlsafe(32)
         super().__init__(address, SimulatorHandler)
 
     def server_bind(self) -> None:
@@ -251,6 +305,7 @@ def main() -> None:
     parser.add_argument("--manual-step", action="store_true")
     parser.add_argument("--gate-token-file")
     parser.add_argument("--evaluation-token-file")
+    parser.add_argument("--operator-token-file")
     args = parser.parse_args()
 
     simulator = AuthoritativeSimulator(
@@ -260,6 +315,7 @@ def main() -> None:
     _write_capability(args.evaluation_token_file, simulator.evaluation_token)
     runtime = SimulatorRuntime(simulator, realtime=not args.manual_step)
     server = SimulatorHTTPServer((args.host, args.port), runtime)
+    _write_capability(args.operator_token_file, server.operator_token)
     runtime.start()
     try:
         server.serve_forever(poll_interval=0.2)

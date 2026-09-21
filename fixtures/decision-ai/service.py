@@ -64,7 +64,7 @@ class DecisionAIServer(ThreadingHTTPServer):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Horizon external decision-AI fixture")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8200)
+    parser.add_argument("--port", type=int, default=8101)
     parser.add_argument("--policy", default="nominal", choices=("nominal", "unsafe_straight", "expired", "stale_lineage"))
     args = parser.parse_args()
     server = DecisionAIServer((args.host, args.port), FixturePolicy(args.policy))

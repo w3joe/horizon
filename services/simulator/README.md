@@ -35,6 +35,7 @@ Public routes:
 - `GET /v1/public/snapshot?branch=protected`
 - `GET /v1/public/stream?branch=protected&events=0` (SSE, `snapshot` events)
 - `GET /v1/observations?branch=protected`
+- `GET /v1/reference?branch=protected` (static geometry/model assumptions; no truth/faults)
 
 Privileged routes:
 
@@ -42,6 +43,12 @@ Privileged routes:
 - `GET /v1/evaluation/truth?branch=protected&after_tick=-1`
 - `POST /v1/evaluation/{step,reset,clone}` with the evaluation capability
 - `POST /v1/evaluation/command` only for an explicitly unprotected branch
+
+Local console controls use a third bearer capability supplied through
+`--operator-token-file`: `POST /v1/operator/{pause,resume,reset}` and
+`POST /v1/operator/fault` with a scenario-declared `fault_id`. The operator
+capability grants neither actuation nor evaluation truth. CORS is restricted to
+`http://localhost:5176`.
 
 The pure `horizon_sim.rollout.rollout_from_estimate` function shares the same
 physical model with assurance code, but accepts only an estimated-state record

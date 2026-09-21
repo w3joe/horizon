@@ -88,6 +88,46 @@ def test_public_snapshot_is_noisy_and_truth_is_private() -> None:
     assert sim.private_truth(token=sim.evaluation_token)[0]["ownship"]["position_ne_m"] == [0.0, 0.0]
 
 
+def test_public_position_prior_does_not_follow_truth_before_gnss_delivery() -> None:
+    sim = simulator()
+    initial_public_position = sim.public_snapshot()["ownship"]["position_ne_m"]
+    sim.step(2)
+    assert sim.ownship.north_m > 0.0
+    assert sim.public_snapshot()["ownship"]["position_ne_m"] == initial_public_position
+
+
+def test_public_reference_excludes_truth_contacts_and_fault_labels() -> None:
+    sim = simulator()
+    reference = sim.public_reference()
+    encoded = json.dumps(reference).lower()
+    assert reference["model_version"] == sim.parameters.model_version
+    assert reference["water_boundary"]["polygon_ne_m"]
+    assert "traffic" not in encoded
+    assert "fault" not in encoded
+    assert "ownship" not in encoded
+
+
+def test_operator_fault_injection_is_limited_to_declared_templates() -> None:
+    degraded = AuthoritativeSimulator(
+        load_scenario(ROOT / "scenarios" / "vessel_degradation.json"),
+        seed=17,
+        run_id="fault-control-test",
+    )
+    with pytest.raises(ValueError):
+        degraded.inject_declared_fault("arbitrary-new-fault")
+    degraded.inject_declared_fault("slow-rudder")
+    assert degraded.manual_faults[0].kind == "slow_rudder"
+    degraded.clear_manual_faults()
+    assert degraded.manual_faults == []
+
+
+def test_depth_zone_and_corridor_are_distinct_scenario_geometry() -> None:
+    scenario = load_scenario(ROOT / "scenarios" / "boundary_depth.json")
+    assert scenario.corridor_ne_m != scenario.water_boundary_ne_m
+    assert scenario.depth_at(250.0, 20.0) == 1.2
+    assert scenario.depth_at(0.0, 0.0) == 2.0
+
+
 def test_commands_change_real_actuator_and_motion() -> None:
     sim = simulator()
     before = sim.ownship.copy()

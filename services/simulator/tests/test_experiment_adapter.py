@@ -29,7 +29,4 @@ def test_normalized_episode_bundle_has_independent_evidence() -> None:
     assert bundle["decisions"]
     assert bundle["gate_receipts"]
     assert bundle["authorized_proposal_sources"] == ["stub-replay-fixture"]
-    reference = bundle["recovery_reference"]
-    assert reference["independent_of_candidate"] is True
-    assert reference["source_branch_id"] != bundle["branch_id"]
-    assert reference["feasible_samples"]
+    assert bundle["recovery_reference"] is None

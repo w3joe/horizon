@@ -10,7 +10,11 @@
   "traffic": [],
   "environment": {"current_ne_mps": [0.0, 0.45], "wind_force_ne_n": [0.0, 150.0]},
   "water_boundary_ne_m": [[-100.0, -35.0], [500.0, -35.0], [500.0, 35.0], [-100.0, 35.0]],
+  "corridor_ne_m": [[-50.0, -25.0], [420.0, -25.0], [420.0, 25.0], [-50.0, 25.0]],
   "nominal_depth_m": 2.0,
+  "depth_zones": [
+    {"zone_id": "shallow-bank", "polygon_ne_m": [[200.0, 5.0], [420.0, 5.0], [420.0, 35.0], [200.0, 35.0]], "depth_m": 1.2}
+  ],
   "chart_uncertainty_m": 0.6,
   "waypoints_ne_m": [[0.0, 0.0], [350.0, 50.0]],
   "faults": []

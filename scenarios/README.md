@@ -8,6 +8,8 @@ observation-tape hash (when replayed), and exogenous fault schedule hash.
 The initial suite covers crossing, head-on, overtaking, benign close pass,
 dense traffic, sensor timing, AIS/radar source conflict, actuator degradation,
 boundary/depth constraints, and an explicitly initially unrecoverable case.
+Physical water boundaries, operational corridors, and polygonal depth zones are
+represented separately; the boundary/depth fixture exercises all three.
 Parameter sweeps generate the larger development and held-out manifests; those
 manifests belong to the experiment harness.
 

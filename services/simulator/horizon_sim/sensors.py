@@ -65,6 +65,20 @@ class SensorSuite:
             "rudder_rad": bootstrap.gauss(0.0, math.radians(0.08)),
             "thrust_fraction": bootstrap.gauss(0.0, 0.004),
         }
+        self._initial_prior: VesselState | None = None
+
+    def initialize_prior(self, ownship: VesselState) -> None:
+        """Freeze a noisy initial prior; it never follows later truth state."""
+        self._initial_prior = VesselState(
+            north_m=ownship.north_m + self._bootstrap_error["north_m"],
+            east_m=ownship.east_m + self._bootstrap_error["east_m"],
+            heading_rad=ownship.heading_rad + self._bootstrap_error["heading_rad"],
+            surge_mps=ownship.surge_mps + self._bootstrap_error["surge_mps"],
+            sway_mps=ownship.sway_mps + self._bootstrap_error["sway_mps"],
+            yaw_rate_rps=ownship.yaw_rate_rps + self._bootstrap_error["yaw_rate_rps"],
+            rudder_rad=ownship.rudder_rad + self._bootstrap_error["rudder_rad"],
+            thrust_fraction=ownship.thrust_fraction + self._bootstrap_error["thrust_fraction"],
+        )
 
     def _period_ticks(self, definition: SensorDefinition) -> int:
         return max(1, round(1.0 / (definition.rate_hz * self.fixed_step_s)))
@@ -207,25 +221,28 @@ class SensorSuite:
         raise ValueError(f"unsupported sensor: {source_id}")
 
     def estimated_ownship(self, fallback: VesselState) -> VesselState:
+        if self._initial_prior is None:
+            raise RuntimeError("sensor initial prior has not been initialized")
+        prior = self._initial_prior
         gnss = self.latest.get("gnss", {}).get("payload", {})
         imu = self.latest.get("imu", {}).get("payload", {})
         actuator = self.latest.get("actuator", {}).get("payload", {})
         position = gnss.get(
             "position_ne_m",
             [
-                fallback.north_m + self._bootstrap_error["north_m"],
-                fallback.east_m + self._bootstrap_error["east_m"],
+                prior.north_m,
+                prior.east_m,
             ],
         )
         return VesselState(
             north_m=float(position[0]),
             east_m=float(position[1]),
-            heading_rad=float(imu.get("heading_rad", fallback.heading_rad + self._bootstrap_error["heading_rad"])),
-            surge_mps=float(imu.get("surge_mps", fallback.surge_mps + self._bootstrap_error["surge_mps"])),
-            sway_mps=float(imu.get("sway_mps", fallback.sway_mps + self._bootstrap_error["sway_mps"])),
-            yaw_rate_rps=float(imu.get("yaw_rate_rps", fallback.yaw_rate_rps + self._bootstrap_error["yaw_rate_rps"])),
-            rudder_rad=float(actuator.get("rudder_rad", fallback.rudder_rad + self._bootstrap_error["rudder_rad"])),
-            thrust_fraction=float(actuator.get("thrust_fraction", fallback.thrust_fraction + self._bootstrap_error["thrust_fraction"])),
+            heading_rad=float(imu.get("heading_rad", prior.heading_rad)),
+            surge_mps=float(imu.get("surge_mps", prior.surge_mps)),
+            sway_mps=float(imu.get("sway_mps", prior.sway_mps)),
+            yaw_rate_rps=float(imu.get("yaw_rate_rps", prior.yaw_rate_rps)),
+            rudder_rad=float(actuator.get("rudder_rad", prior.rudder_rad)),
+            thrust_fraction=float(actuator.get("thrust_fraction", prior.thrust_fraction)),
         )
 
     def estimated_traffic(self) -> list[dict[str, Any]]:
