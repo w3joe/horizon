@@ -5,6 +5,8 @@ import math
 import threading
 import time
 
+import pytest
+
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
 from horizon_gate.core import ActuatorGate, GateConfig, StoredRecovery
@@ -181,6 +183,135 @@ def test_delayed_self_consistent_packet_does_not_regain_lifetime(reference, gove
     )
     assert not delayed["accepted"]
     assert "DECISION_EXPIRED_AT_GATE" in delayed["reason_codes"]
+    assert not plant.envelopes
+
+
+def test_gate_rejects_string_boolean_decision_flags(reference, governor_input) -> None:
+    plant = FakePlant()
+    runtime = gate(reference, plant)
+    decision = A1ThresholdSimplex(
+        reference, AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    ).evaluate(governor_input)
+    decision["valid"] = "false"
+    decision["deadline_met"] = "false"
+
+    receipt = runtime.submit(
+        decision, governor_input, token="decision-secret", now_ns=4_210_000_000
+    )
+
+    assert not receipt["accepted"]
+    assert "DECISION_FLAG_TYPE_INVALID" in receipt["reason_codes"]
+    assert "DECISION_SCHEMA_INVALID" in receipt["reason_codes"]
+    assert not plant.envelopes
+
+
+def test_gate_returns_rejections_for_malformed_contracts(reference, governor_input) -> None:
+    valid_decision = A1ThresholdSimplex(
+        reference, AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    ).evaluate(governor_input)
+    cases = (
+        (None, governor_input, "DECISION_SCHEMA_INVALID"),
+        ([], governor_input, "DECISION_SCHEMA_INVALID"),
+        ({"valid": True}, governor_input, "DECISION_SCHEMA_INVALID"),
+        (valid_decision, None, "GOVERNOR_INPUT_SCHEMA_INVALID"),
+        (valid_decision, [], "GOVERNOR_INPUT_SCHEMA_INVALID"),
+        (valid_decision, {}, "SCHEMA_INVALID"),
+    )
+
+    for decision, message, expected_reason in cases:
+        plant = FakePlant()
+        receipt = gate(reference, plant).submit(
+            decision, message, token="decision-secret", now_ns=4_210_000_000
+        )
+        assert not receipt["accepted"]
+        assert expected_reason in receipt["reason_codes"]
+        assert not plant.envelopes
+
+
+@pytest.mark.parametrize("expiring_source", ["snapshot", "proposal", "recovery"])
+def test_decision_cannot_extend_source_evidence_validity(
+    reference, governor_input, expiring_source
+) -> None:
+    plant = FakePlant()
+    runtime = gate(reference, plant)
+    decision = A1ThresholdSimplex(
+        reference, AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    ).evaluate(governor_input)
+    source_expiry = 4_220_000_000
+    if expiring_source == "snapshot":
+        governor_input["snapshot"]["valid_until_monotonic_ns"] = source_expiry
+    elif expiring_source == "proposal":
+        governor_input["proposal"]["expires_monotonic_ns"] = source_expiry
+    else:
+        decision["recovery"] = copy.deepcopy(governor_input["recovery_options"][0])
+        decision["recovery"]["valid_until_monotonic_ns"] = source_expiry
+    decision["expires_monotonic_ns"] = source_expiry + 100_000_000
+
+    receipt = runtime.submit(
+        decision,
+        governor_input,
+        token="decision-secret",
+        now_ns=source_expiry + 1,
+    )
+
+    assert not receipt["accepted"]
+    assert "DECISION_EXPIRY_EXCEEDS_SOURCE_VALIDITY" in receipt["reason_codes"]
+    assert "SOURCE_EVIDENCE_EXPIRED_AT_GATE" in receipt["reason_codes"]
+    assert not plant.envelopes
+
+
+def test_recovery_action_requires_a_validity_certificate(reference, governor_input) -> None:
+    plant = FakePlant()
+    decision = A1ThresholdSimplex(
+        reference, AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    ).evaluate(governor_input)
+    decision["action"] = "recover"
+    decision["authority"] = "recovery"
+    decision["recovery"] = None
+
+    receipt = gate(reference, plant).submit(
+        decision, governor_input, token="decision-secret", now_ns=4_210_000_000
+    )
+
+    assert not receipt["accepted"]
+    assert "RECOVERY_CERTIFICATE_MISSING" in receipt["reason_codes"]
+    assert not plant.envelopes
+
+
+def test_source_expiry_is_rechecked_after_command_assessment(reference, governor_input) -> None:
+    plant = FakePlant()
+    arrival = 4_210_000_000
+    source_expiry = arrival + 5_000_000
+    governor_input["snapshot"]["valid_until_monotonic_ns"] = source_expiry
+    governor_input["proposal"]["expires_monotonic_ns"] = source_expiry
+    decision = A1ThresholdSimplex(
+        reference, AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    ).evaluate(governor_input)
+    clock = ManualMonotonicClock(arrival)
+    runtime = ActuatorGate(
+        run_id="fixture-run-001",
+        branch_id="protected",
+        plant=plant,
+        reference=reference,
+        decision_token="decision-secret",
+        monotonic_ns=clock,
+        config=GateConfig(startup_interlock_required=False),
+        assurance_config=AssuranceConfig(
+            prediction_horizon_s=5.0, recovery_horizon_s=5.0
+        ),
+    )
+    assess = runtime.checker.assess
+
+    def expiring_assessment(*args, **kwargs):
+        result = assess(*args, **kwargs)
+        clock.advance_ns(6_000_000)
+        return result
+
+    runtime.checker.assess = expiring_assessment
+    receipt = runtime.submit(decision, governor_input, token="decision-secret")
+
+    assert not receipt["accepted"]
+    assert "SOURCE_EVIDENCE_EXPIRED_BEFORE_ACTUATION" in receipt["reason_codes"]
     assert not plant.envelopes
 
 
@@ -368,6 +499,39 @@ def test_reserved_command_can_expire_while_queued(reference) -> None:
     assert not plant.envelopes
 
 
+def test_reserved_command_rechecks_source_validity_before_dispatch(reference) -> None:
+    plant = FakePlant()
+    clock = ManualMonotonicClock(9_000_000_000)
+    runtime = ActuatorGate(
+        run_id="fixture-run-001",
+        branch_id="protected",
+        plant=plant,
+        reference=reference,
+        monotonic_ns=clock,
+        config=GateConfig(startup_interlock_required=False),
+    )
+    with runtime.lock:
+        reservation = runtime._reserve_actuation(
+            decision_id="source-expiry",
+            command={"heading_rad": 0.0, "speed_mps": 1.0},
+            authority="recovery",
+            simulation_time_s=4.2,
+            reason_codes=["TEST_SOURCE_EXPIRY"],
+            assurance_status="safe",
+            now_ns=clock(),
+            host_valid_until_ns=clock() + 100_000_000,
+            source_valid_until_ns=clock() + 5_000_000,
+        )
+    clock.advance_ns(6_000_000)
+
+    receipt = runtime._send_reserved(reservation)
+
+    assert not receipt["accepted"]
+    assert "SOURCE_EVIDENCE_EXPIRED_BEFORE_DISPATCH" in receipt["reason_codes"]
+    assert "RESERVED_COMMAND_EXPIRED" not in receipt["reason_codes"]
+    assert not plant.envelopes
+
+
 def test_watchdog_rechecks_certificate_after_slow_snapshot(reference, governor_input) -> None:
     plant = SlowSnapshotPlant()
     runtime = gate(reference, plant)
@@ -535,6 +699,10 @@ def test_watchdog_continues_fresh_recovery_then_reports_unknown(reference, gover
     decision["action"] = "recover"
     decision["authority"] = "recovery"
     decision["recovery"] = governor_input["recovery_options"][0]
+    decision["expires_monotonic_ns"] = min(
+        decision["expires_monotonic_ns"],
+        decision["recovery"]["valid_until_monotonic_ns"],
+    )
     accepted = runtime.submit(decision, governor_input, token="decision-secret", now_ns=4_210_000_000)
     assert accepted["accepted"]
     assert runtime.stored_recovery is not None

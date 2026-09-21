@@ -83,6 +83,7 @@ class ReservedActuation:
     epoch: int
     generation: int
     host_valid_until_ns: int
+    source_valid_until_ns: int | None
 
 
 def _finite(value: Any) -> bool:
@@ -178,8 +179,15 @@ class ActuatorGate:
                     )
                 )
                 now = self._monotonic_ns()
+                source_valid_until = min(
+                    int(source["snapshot"]["valid_until_monotonic_ns"]),
+                    int(source["proposal"]["expires_monotonic_ns"]),
+                    option_expiry,
+                )
                 valid_until = self._map_remote_expiry(
-                    source, min(int(decision["expires_monotonic_ns"]), option_expiry), now
+                    source,
+                    min(int(decision["expires_monotonic_ns"]), source_valid_until),
+                    now,
                 )
                 with self.lock:
                     if self.epoch != epoch or now >= valid_until or self.recovery_latched:
@@ -253,7 +261,12 @@ class ActuatorGate:
                 "valid_until_monotonic_ns", governor_input["snapshot"]["valid_until_monotonic_ns"]
             )
         )
-        valid_until = self._map_remote_expiry(governor_input, option_expiry, now)
+        source_valid_until = min(
+            int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
+            int(governor_input["proposal"]["expires_monotonic_ns"]),
+            option_expiry,
+        )
+        valid_until = self._map_remote_expiry(governor_input, source_valid_until, now)
         with self.lock:
             if self.epoch != epoch or now >= valid_until:
                 return False, ["RECOVERY_CERTIFICATE_STALE"]
@@ -303,11 +316,12 @@ class ActuatorGate:
 
     def _local_rejection(
         self,
-        decision: dict[str, Any] | None,
+        decision: Any,
         reasons: list[str],
         now_ns: int,
     ) -> dict[str, Any]:
-        authority = (decision or {}).get("authority", "recovery")
+        decision_fields = decision if isinstance(decision, dict) else {}
+        authority = decision_fields.get("authority", "recovery")
         if authority not in {"autonomy", "filtered_autonomy", "recovery", "gate_watchdog"}:
             authority = "recovery"
         receipt = {
@@ -318,8 +332,8 @@ class ActuatorGate:
             ),
             "run_id": self.run_id,
             "branch_id": self.branch_id,
-            "decision_id": str((decision or {}).get("decision_id", "unknown")),
-            "command_id": f"{(decision or {}).get('decision_id', 'unknown')}:issued",
+            "decision_id": str(decision_fields.get("decision_id", "unknown")),
+            "command_id": f"{decision_fields.get('decision_id', 'unknown')}:issued",
             "authority": authority,
             "accepted": False,
             "reason_codes": list(dict.fromkeys(reasons)),
@@ -333,10 +347,12 @@ class ActuatorGate:
 
     def _validate_submission(
         self, decision: dict[str, Any], governor_input: dict[str, Any], arrival_ns: int
-    ) -> Assessment:
+    ) -> tuple[Assessment, int]:
         validate_governor_input(governor_input)
         if governor_input.get("configuration_hash") != self.reference.digest():
             raise InputRejected(("CONFIGURATION_HASH_MISMATCH",))
+        if not isinstance(decision, dict):
+            raise InputRejected(("DECISION_SCHEMA_INVALID",))
         candidate_id = str(decision.get("candidate_id"))
         validate_decision_identity(decision, governor_input, candidate_id=candidate_id)
         reasons: list[str] = []
@@ -348,7 +364,7 @@ class ActuatorGate:
             reasons.append("UNAUTHORIZED_CANDIDATE")
         if not _finite(decision):
             reasons.append("NON_FINITE_DECISION")
-        if not bool(decision.get("valid")) or not bool(decision.get("deadline_met")):
+        if decision.get("valid") is not True or decision.get("deadline_met") is not True:
             reasons.append("DECISION_INVALID_OR_LATE")
         logical_now = int(governor_input["monotonic_time_ns"])
         if int(decision.get("decided_monotonic_ns", -1)) < logical_now:
@@ -359,6 +375,17 @@ class ActuatorGate:
             reasons.append("DECISION_DEADLINE_MISSED")
         if int(decision.get("expires_monotonic_ns", -1)) <= logical_now:
             reasons.append("DECISION_EXPIRED")
+        source_valid_until_ns = min(
+            int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
+            int(governor_input["proposal"]["expires_monotonic_ns"]),
+            *(
+                [int(decision["recovery"]["valid_until_monotonic_ns"])]
+                if isinstance(decision.get("recovery"), dict)
+                else []
+            ),
+        )
+        if int(decision.get("expires_monotonic_ns", -1)) > source_valid_until_ns:
+            reasons.append("DECISION_EXPIRY_EXCEEDS_SOURCE_VALIDITY")
         command = decision.get("issued_command")
         if not isinstance(command, dict):
             reasons.append("MISSING_ISSUED_COMMAND")
@@ -370,6 +397,8 @@ class ActuatorGate:
             reasons.append("AUTHORITY_ACTION_MISMATCH")
         if action in {"recover", "minimum_risk"} and authority != "recovery":
             reasons.append("AUTHORITY_ACTION_MISMATCH")
+        if action == "recover" and not isinstance(decision.get("recovery"), dict):
+            reasons.append("RECOVERY_CERTIFICATE_MISSING")
         if action == "minimum_risk" and isinstance(command, dict):
             ownship = governor_input["snapshot"]["ownship"]
             canonical = {
@@ -398,9 +427,11 @@ class ActuatorGate:
                     reasons.append("SOLVER_RESIDUAL_INVALID")
         if arrival_ns >= int(decision.get("expires_monotonic_ns", -1)):
             reasons.append("DECISION_EXPIRED_AT_GATE")
+        if arrival_ns >= source_valid_until_ns:
+            reasons.append("SOURCE_EVIDENCE_EXPIRED_AT_GATE")
         if reasons:
             raise InputRejected(reasons)
-        return self.checker.assess(governor_input, command)
+        return self.checker.assess(governor_input, command), source_valid_until_ns
 
     def _reserve_actuation(
         self,
@@ -413,6 +444,7 @@ class ActuatorGate:
         assurance_status: str,
         now_ns: int,
         host_valid_until_ns: int,
+        source_valid_until_ns: int | None = None,
     ) -> ReservedActuation:
         envelope = {
             "run_id": self.run_id,
@@ -443,6 +475,7 @@ class ActuatorGate:
             epoch=self.epoch,
             generation=self.control_generation,
             host_valid_until_ns=host_valid_until_ns,
+            source_valid_until_ns=source_valid_until_ns,
         )
 
     def _send_reserved(
@@ -459,6 +492,11 @@ class ActuatorGate:
                         reasons.append("STALE_RESERVED_GENERATION")
                     if send_time >= reservation.host_valid_until_ns:
                         reasons.append("RESERVED_COMMAND_EXPIRED")
+                    if (
+                        reservation.source_valid_until_ns is not None
+                        and send_time >= reservation.source_valid_until_ns
+                    ):
+                        reasons.append("SOURCE_EVIDENCE_EXPIRED_BEFORE_DISPATCH")
                     if reasons:
                         envelope = reservation.envelope
                         return self._local_rejection(
@@ -506,7 +544,9 @@ class ActuatorGate:
             start_generation = self.control_generation
 
         try:
-            assessment = self._validate_submission(decision, governor_input, arrival)
+            assessment, source_valid_until_ns = self._validate_submission(
+                decision, governor_input, arrival
+            )
         except InputRejected as exc:
             with self.lock:
                 self.invalid_count += 1
@@ -514,6 +554,14 @@ class ActuatorGate:
                     self.quarantined = True
                     self.quarantine_reasons.extend(exc.reason_codes)
                 return self._local_rejection(decision, list(exc.reason_codes), arrival)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            with self.lock:
+                self.invalid_count += 1
+                reasons = ["MALFORMED_SUBMISSION"]
+                if self.invalid_count >= self.config.invalid_quarantine_threshold:
+                    self.quarantined = True
+                    self.quarantine_reasons.extend(reasons)
+                return self._local_rejection(decision, reasons, arrival)
 
         with self.lock:
             completion = clock()
@@ -526,6 +574,8 @@ class ActuatorGate:
                 sequence_reasons.append("RESET_OR_REPLAY_DETECTED")
             if completion >= int(decision["expires_monotonic_ns"]):
                 sequence_reasons.append("DECISION_EXPIRED_BEFORE_ACTUATION")
+            if completion >= source_valid_until_ns:
+                sequence_reasons.append("SOURCE_EVIDENCE_EXPIRED_BEFORE_ACTUATION")
             if sequence_reasons:
                 if "RESET_OR_REPLAY_DETECTED" in sequence_reasons:
                     self.quarantined = True
@@ -575,6 +625,8 @@ class ActuatorGate:
                 stale_reasons.append("STALE_VALIDATION_COMPLETION")
             if completion >= int(decision["expires_monotonic_ns"]):
                 stale_reasons.append("DECISION_EXPIRED_BEFORE_ACTUATION")
+            if completion >= source_valid_until_ns:
+                stale_reasons.append("SOURCE_EVIDENCE_EXPIRED_BEFORE_ACTUATION")
             if int(decision["tick_index"]) <= self.last_tick:
                 stale_reasons.append("RESET_OR_REPLAY_DETECTED")
             if stale_reasons:
@@ -642,8 +694,10 @@ class ActuatorGate:
                 now_ns=completion,
                 host_valid_until_ns=min(
                     int(decision["expires_monotonic_ns"]),
+                    source_valid_until_ns,
                     completion + int(self.config.command_validity_s * 1e9),
                 ),
+                source_valid_until_ns=source_valid_until_ns,
             )
             schedule_cache = original_action in {"pass", "modify"} and not self.recovery_latched
             cache_epoch = self.epoch
