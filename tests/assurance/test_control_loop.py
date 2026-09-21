@@ -126,6 +126,7 @@ def test_loop_primes_before_first_autonomy_and_skips_duplicate(reference, govern
 
 def test_loop_synchronizes_epoch_before_evaluation(reference, governor_input) -> None:
     message = live_input(governor_input, tick=0, epoch=1)
+    message["decision_deadline_monotonic_ns"] = time.monotonic_ns() + 40_000_000
     gate = FakeGate(epoch=0, ready=True)
     loop = AssuranceControlLoop(
         fusion=FakeFusion([message]),
@@ -133,9 +134,32 @@ def test_loop_synchronizes_epoch_before_evaluation(reference, governor_input) ->
         candidate=A1ThresholdSimplex(reference),
     )
     event = loop.run_once()
-    assert event["event_type"] == "gate_epoch_synchronized"
+    assert event["event_type"] == "startup_recovery_primed"
+    assert event["epoch_synchronized"] is True
     assert gate.resets == 1
+    assert gate.primes == [message["snapshot"]["snapshot_id"]]
+    assert gate.ready is True
     assert not gate.submissions
+    time.sleep(0.05)
+    assert loop.run_once()["event_type"] == "duplicate_sample_skipped"
+
+
+def test_epoch_reset_never_primes_from_expired_source_validity(
+    reference, governor_input
+) -> None:
+    message = live_input(governor_input, tick=0, epoch=1)
+    message["snapshot"]["valid_until_monotonic_ns"] = time.monotonic_ns() - 1
+    gate = FakeGate(epoch=0, ready=True)
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([message]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+    event = loop.run_once()
+    assert event["event_type"] == "startup_recovery_input_stale"
+    assert event["epoch_synchronized"] is True
+    assert gate.resets == 1
+    assert gate.primes == []
 
 
 def test_loop_does_not_publish_rejected_receipt_as_latest_evidence(

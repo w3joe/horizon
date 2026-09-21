@@ -164,6 +164,22 @@ class AssuranceControlLoop:
         return max(0.001, min(cap_s, (deadline_ns - time.monotonic_ns()) / 1e9))
 
     @staticmethod
+    def _permission_valid_until_ns(governor_input: dict[str, Any]) -> int:
+        values = [
+            int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
+            int(governor_input["proposal"]["expires_monotonic_ns"]),
+        ]
+        values.extend(
+            int(item["valid_until_monotonic_ns"])
+            for item in governor_input["health"].get("summaries", [])
+        )
+        values.extend(
+            int(item["valid_until_monotonic_ns"])
+            for item in governor_input.get("recovery_options", [])
+        )
+        return min(values)
+
+    @staticmethod
     def _input_summary(governor_input: dict[str, Any]) -> dict[str, Any]:
         """Bounded public lineage/state context for an assurance event."""
 
@@ -218,38 +234,38 @@ class AssuranceControlLoop:
                 }
             )
         deadline_ns = int(governor_input["decision_deadline_monotonic_ns"])
+        permission_valid_until_ns = self._permission_valid_until_ns(governor_input)
         input_summary = self._input_summary(governor_input)
-        if time.monotonic_ns() >= deadline_ns:
-            self.last_sample_id = sample_id
-            return self._record(
-                {
-                    "event_type": "input_expired",
-                    "host_monotonic_ns": time.monotonic_ns(),
-                    "sample_id": sample_id,
-                    "input_summary": input_summary,
-                }
-            )
         epoch = input_epoch(governor_input)
+        epoch_synchronized = False
         try:
-            gate_status = self.gate.status(timeout_s=self._remaining_s(deadline_ns))
+            gate_status = self.gate.status(
+                timeout_s=self._remaining_s(permission_valid_until_ns)
+            )
             if int(gate_status["epoch"]) != epoch:
-                reset = self.gate.reset(timeout_s=self._remaining_s(deadline_ns))
+                reset = self.gate.reset(
+                    timeout_s=self._remaining_s(permission_valid_until_ns)
+                )
                 if not reset.get("accepted") or int(reset["epoch"]) != epoch:
                     raise EndpointError(None, {"error": "GATE_EPOCH_SYNC_FAILED", "reset": reset})
-                self.last_sample_id = sample_id
-                return self._record(
-                    {
-                        "event_type": "gate_epoch_synchronized",
-                        "host_monotonic_ns": time.monotonic_ns(),
-                        "sample_id": sample_id,
-                        "epoch": epoch,
-                        "input_summary": input_summary,
-                    }
-                )
+                epoch_synchronized = True
+                gate_status = {"epoch": epoch, "startup_recovery_ready": False}
             if not gate_status.get("startup_recovery_ready", False):
+                if time.monotonic_ns() >= permission_valid_until_ns:
+                    self.last_sample_id = sample_id
+                    return self._record(
+                        {
+                            "event_type": "startup_recovery_input_stale",
+                            "host_monotonic_ns": time.monotonic_ns(),
+                            "sample_id": sample_id,
+                            "epoch": epoch,
+                            "epoch_synchronized": epoch_synchronized,
+                            "input_summary": input_summary,
+                        }
+                    )
                 prime = self.gate.prime(
                     governor_input,
-                    timeout_s=max(0.2, self._remaining_s(deadline_ns, cap_s=2.0)),
+                    timeout_s=self._remaining_s(permission_valid_until_ns, cap_s=2.0),
                 )
                 self.last_sample_id = sample_id
                 return self._record(
@@ -262,12 +278,12 @@ class AssuranceControlLoop:
                         "host_monotonic_ns": time.monotonic_ns(),
                         "sample_id": sample_id,
                         "epoch": epoch,
+                        "epoch_synchronized": epoch_synchronized,
                         "input_summary": input_summary,
                         "result": prime,
                     }
                 )
         except EndpointError as exc:
-            self.last_sample_id = sample_id
             return self._record(
                 {
                     "event_type": "gate_unavailable",
@@ -276,6 +292,17 @@ class AssuranceControlLoop:
                     "input_summary": input_summary,
                     "status": exc.status,
                     "detail": exc.payload,
+                }
+            )
+
+        if time.monotonic_ns() >= deadline_ns:
+            self.last_sample_id = sample_id
+            return self._record(
+                {
+                    "event_type": "input_expired",
+                    "host_monotonic_ns": time.monotonic_ns(),
+                    "sample_id": sample_id,
+                    "input_summary": input_summary,
                 }
             )
 
