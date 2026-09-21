@@ -49,7 +49,6 @@ image = (
     .add_local_dir(LOCAL_SERVICE, remote_path="/opt/horizon/services/perception", copy=True)
     .add_local_dir(FRAMES, remote_path=f"/opt/input/{SEQUENCE_NAME}/frames", copy=True)
     .add_local_file(SPLIT_MANIFEST, remote_path="/opt/input/modd2-splits.json", copy=True)
-    .add_local_file(WEIGHTS, remote_path="/opt/weights/wasrt_mastr1325.pth", copy=False)
     .env(
         {
             "HORIZON_MODAL_RUN_ID": RUN_ID,
@@ -57,6 +56,7 @@ image = (
             **launch_provenance,
         }
     )
+    .add_local_file(WEIGHTS, remote_path="/opt/weights/wasrt_mastr1325.pth", copy=False)
 )
 artifacts = modal.Volume.from_name(VOLUME_NAME, create_if_missing=False)
 app = modal.App("horizon-a07-wasrt-modd2-dev", image=image)
