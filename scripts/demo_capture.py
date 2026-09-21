@@ -256,6 +256,7 @@ def identify_intervention(
     command_observations: dict[str, float],
 ) -> dict[str, Any]:
     candidates: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+    matched_unsafe_commands: list[tuple[float, str]] = []
     for wrapped in gate_events:
         event = wrapped["record"]
         receipt = event.get("receipt")
@@ -269,6 +270,8 @@ def identify_intervention(
         authority = str(receipt.get("authority", ""))
         speed = float(command.get("speed_mps", math.nan))
         changed_unsafe_course = speed < 5.9 or abs(float(command.get("heading_rad", 0.0))) > 0.05
+        if authority not in {"gate_watchdog", "recovery"} and not changed_unsafe_course:
+            matched_unsafe_commands.append((observed_s, command_id))
         if authority in {"filtered_autonomy", "recovery", "gate_watchdog"} and changed_unsafe_course:
             candidates.append((observed_s, event, receipt))
     if not candidates:
@@ -280,10 +283,18 @@ def identify_intervention(
         if receipt.get("authority") == "gate_watchdog"
         else "assurance_decision"
     )
+    prior_unsafe = [item for item in matched_unsafe_commands if item[0] <= observed_s]
     return {
         "occurred": True,
         "time_s": round(observed_s, 3),
         "mechanism": mechanism,
+        "mode": (
+            "takeover_after_unsafe_command" if prior_unsafe else "preventive_guard"
+        ),
+        "unsafe_command_applied_before_intervention": bool(prior_unsafe),
+        "prior_unsafe_command_id": (
+            max(prior_unsafe, key=lambda item: item[0])[1] if prior_unsafe else None
+        ),
         "reason_codes": list(event.get("reason_codes", receipt.get("reason_codes", []))),
         "source_decision_id": receipt["decision_id"],
         "command_id": receipt["command_id"],
@@ -559,6 +570,7 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
             "The protected and counterfactual branches share an exact paused-reset clone and advance together on the simulator's live fixed-step clock.",
             "Outcome aggregates come from a post-run evaluator and were unavailable to online control.",
             "The intervention mechanism is reported from the accepted receipt whose command ID was observed active in a public plant snapshot.",
+            "If no matched unsafe command preceded the intervention, the replay labels the event preventive_guard and does not claim the unsafe proposal reached the protected plant.",
         ],
     }
     return manifest, replay

@@ -73,6 +73,9 @@ def test_intervention_requires_an_accepted_command_observed_at_the_plant() -> No
     )
 
     assert result["mechanism"] == "gate_watchdog"
+    assert result["mode"] == "takeover_after_unsafe_command"
+    assert result["unsafe_command_applied_before_intervention"] is True
+    assert result["prior_unsafe_command_id"] == "external-command"
     assert result["time_s"] == 1.24
     assert result["source_receipt_id"] == "receipt-recovery"
     assert result["plant_match"] == "public snapshot active_command_id"
@@ -97,6 +100,9 @@ def test_assurance_recovery_is_reported_from_its_plant_matched_receipt() -> None
     )
 
     assert result["mechanism"] == "assurance_decision"
+    assert result["mode"] == "preventive_guard"
+    assert result["unsafe_command_applied_before_intervention"] is False
+    assert result["prior_unsafe_command_id"] is None
     assert result["source_decision_id"] == "decision-recovery"
     assert result["reason_codes"] == [
         "CPA_THRESHOLD_CROSSED",
