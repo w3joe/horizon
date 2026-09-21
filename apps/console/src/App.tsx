@@ -127,8 +127,9 @@ function LiveConsole() {
           {(["navigation", "data", "neural"] as Workspace[]).map((item, index) => <button key={item} type="button" aria-pressed={workspace === item} onClick={() => setWorkspace(item)}><span>0{index + 1}</span>{item === "data" ? "Data flow" : item === "neural" ? "Neural sensor" : "Navigation"}</button>)}
         </nav>
         <div className="scenario-controls">
-          <label><span>Scenario / inject fault</span><select value={scenarioId} disabled={operatorLocked || !packet.fixture} onChange={(event) => changeScenario(event.target.value as ScenarioId)}>{SCENARIOS.map((scenario) => <option value={scenario.id} key={scenario.id}>{scenario.label}</option>)}</select></label>
-          <button type="button" className={showBranch ? "active" : ""} disabled={operatorLocked || !packet.fixture} onClick={() => setShowBranch((value) => !value)}>Compare branch</button>
+          {operatorLocked
+            ? <div className="live-scenario-summary"><span>Scenario</span><strong>Current launched scenario</strong></div>
+            : <><label><span>Scenario / inject fault</span><select value={scenarioId} disabled={!packet.fixture} onChange={(event) => changeScenario(event.target.value as ScenarioId)}>{SCENARIOS.map((scenario) => <option value={scenario.id} key={scenario.id}>{scenario.label}</option>)}</select></label><button type="button" className={showBranch ? "active" : ""} disabled={!packet.fixture} onClick={() => setShowBranch((value) => !value)}>Compare branch</button></>}
           {operatorLocked && <span className="control-pending">Scenario changes require a new coordinated run.</span>}
         </div>
       </section>

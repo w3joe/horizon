@@ -45,6 +45,9 @@
 }
 
 .app-header .runtime-status { margin-right: 236px; }
+.live-scenario-summary { display: flex; align-items: center; gap: 9px; }
+.live-scenario-summary span { color: var(--muted); font-size: 12px; }
+.live-scenario-summary strong { padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--text); background: #0b1b24; font-size: 12px; font-weight: 500; }
 
 .demo-shell {
   min-height: 100vh;
