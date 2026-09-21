@@ -95,6 +95,15 @@ function interpolateSnapshot(replay: DemoReplay, timeS: number, branch: DemoBran
       ],
       heading_rad: mixAngle(start.ownship.heading_rad, end.ownship.heading_rad, amount),
       speed_mps: mix(start.ownship.speed_mps, end.ownship.speed_mps, amount),
+      ...(start.ownship.heave_down_m !== undefined && end.ownship.heave_down_m !== undefined ? {
+        heave_down_m: mix(start.ownship.heave_down_m, end.ownship.heave_down_m, amount),
+      } : {}),
+      ...(start.ownship.attitude_rp_rad && end.ownship.attitude_rp_rad ? {
+        attitude_rp_rad: [
+          mixAngle(start.ownship.attitude_rp_rad[0], end.ownship.attitude_rp_rad[0], amount),
+          mixAngle(start.ownship.attitude_rp_rad[1], end.ownship.attitude_rp_rad[1], amount),
+        ] as [number, number],
+      } : {}),
     },
     traffic,
   };

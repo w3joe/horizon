@@ -28,6 +28,10 @@ function yaw(headingRad: number): number {
 
 const oceanVertex = /* glsl */ `
   uniform float uTime;
+  uniform bool uMarine;
+  uniform int uWaveCount;
+  uniform vec4 uWaves[16];
+  uniform float uWavePhases[16];
   varying float vHeight;
   varying vec3 vSeaNormal;
   varying vec3 vSeaPosition;
@@ -50,6 +54,20 @@ const oceanVertex = /* glsl */ `
       + cos(phaseB) * 0.11 * 0.058
       + cos(phaseC) * 0.055 * -0.049
       + cos(phaseD) * 0.035 * -0.022;
+    if (uMarine) {
+      height = 0.0;
+      dx = 0.0;
+      dy = 0.0;
+      for (int i = 0; i < 16; i++) {
+        if (i >= uWaveCount) break;
+        vec4 wave = uWaves[i];
+        // Plane x=east, y=north; sea height is positive upward.
+        float phase = wave.y * p.y + wave.z * p.x - wave.w * uTime + uWavePhases[i];
+        height += wave.x * cos(phase);
+        dx -= wave.x * wave.z * sin(phase);
+        dy -= wave.x * wave.y * sin(phase);
+      }
+    }
     p.z += height;
     vHeight = height;
     vSeaNormal = normalize(normalMatrix * vec3(-dx, -dy, 1.0));
@@ -84,7 +102,7 @@ const oceanFragment = /* glsl */ `
   }
 `;
 
-function Ocean({ timeS, branch }: Pick<DemoSceneProps, "timeS" | "branch">) {
+function Ocean({ timeS, branch, snapshot }: Pick<DemoSceneProps, "timeS" | "branch" | "snapshot">) {
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -92,6 +110,10 @@ function Ocean({ timeS, branch }: Pick<DemoSceneProps, "timeS" | "branch">) {
         fragmentShader: oceanFragment,
         uniforms: {
           uTime: { value: timeS },
+          uMarine: { value: false },
+          uWaveCount: { value: 0 },
+          uWaves: { value: Array.from({ length: 16 }, () => new THREE.Vector4()) },
+          uWavePhases: { value: new Float32Array(16) },
           uDeep: { value: new THREE.Color(branch === "protected" ? "#062b3a" : "#102b38") },
           uShallow: { value: new THREE.Color(branch === "protected" ? "#176a7d" : "#356878") },
           uAccent: { value: new THREE.Color(branch === "protected" ? "#b7f5ef" : "#f5c697") },
@@ -102,7 +124,20 @@ function Ocean({ timeS, branch }: Pick<DemoSceneProps, "timeS" | "branch">) {
     [branch],
   );
   useFrame(() => {
-    material.uniforms.uTime.value = timeS;
+    const marine = snapshot.marine_environment;
+    material.uniforms.uTime.value = marine ? snapshot.simulation_time_s : timeS;
+    material.uniforms.uMarine.value = Boolean(marine);
+    const components = marine?.wave_components ?? [];
+    material.uniforms.uWaveCount.value = Math.min(components.length, 16);
+    components.slice(0, 16).forEach((wave, index) => {
+      material.uniforms.uWaves.value[index].set(
+        wave.amplitude_m,
+        wave.wave_number_per_m * Math.cos(wave.direction_rad),
+        wave.wave_number_per_m * Math.sin(wave.direction_rad),
+        wave.angular_frequency_rad_s,
+      );
+      material.uniforms.uWavePhases.value[index] = wave.phase_rad;
+    });
   });
   useEffect(() => () => material.dispose(), [material]);
   return (
@@ -243,10 +278,11 @@ class RibAssetBoundary extends Component<{
   }
 }
 
-function LicensedRib({ position, heading, timeS }: {
+function LicensedRib({ position, heading, timeS, physicalPose }: {
   position: [number, number, number];
   heading: number;
   timeS: number;
+  physicalPose?: { heaveDown: number; roll: number; pitch: number };
 }) {
   const gltf = useLoader(GLTFLoader, RIB_ASSET_URL);
   const model = useMemo(() => {
@@ -259,12 +295,12 @@ function LicensedRib({ position, heading, timeS }: {
     });
     return clone;
   }, [gltf.scene]);
-  const heave = Math.sin(timeS * 0.72) * 0.055;
-  const pitch = Math.sin(timeS * 0.51 + 0.8) * 0.012;
-  const roll = Math.sin(timeS * 0.64) * 0.018;
+  const heave = physicalPose ? -physicalPose.heaveDown : Math.sin(timeS * 0.72) * 0.055;
+  const pitch = physicalPose?.pitch ?? Math.sin(timeS * 0.51 + 0.8) * 0.012;
+  const roll = physicalPose ? -physicalPose.roll : Math.sin(timeS * 0.64) * 0.018;
   return (
-    <group position={[position[0], position[1] + heave, position[2]]} rotation={[pitch, yaw(heading), roll]}>
-      <primitive object={model} />
+    <group position={[position[0], position[1] + heave, position[2]]} rotation-y={yaw(heading)}>
+      <group rotation={[pitch, 0, roll]}><primitive object={model} /></group>
     </group>
   );
 }
@@ -275,7 +311,12 @@ function Ownship({ snapshot, timeS }: Pick<DemoSceneProps, "snapshot" | "timeS">
   return (
     <RibAssetBoundary position={position} heading={own.heading_rad}>
       <Suspense fallback={<group position={position} rotation-y={yaw(own.heading_rad)}><FallbackRib /></group>}>
-        <LicensedRib position={position} heading={own.heading_rad} timeS={timeS} />
+        <LicensedRib position={position} heading={own.heading_rad} timeS={timeS}
+          physicalPose={snapshot.marine_environment ? {
+            heaveDown: own.heave_down_m ?? 0,
+            roll: own.attitude_rp_rad?.[0] ?? 0,
+            pitch: own.attitude_rp_rad?.[1] ?? 0,
+          } : undefined} />
       </Suspense>
     </RibAssetBoundary>
   );
@@ -442,7 +483,7 @@ function Scene({ snapshot, trail, timeS, branch, cameraMode, collision, interven
         shadow-camera-top={130}
         shadow-camera-bottom={-130}
       />
-      <Ocean timeS={timeS} branch={branch} />
+      <Ocean timeS={timeS} branch={branch} snapshot={snapshot} />
       <TrailWake trail={trail} protectedBranch={branch === "protected"} playing={playing} />
       <SternWake snapshot={snapshot} branch={branch} />
       <Ownship snapshot={snapshot} timeS={timeS} />
@@ -490,7 +531,9 @@ export function DemoScene(props: DemoSceneProps): JSX.Element {
         {props.collision && <span style={{ padding: "5px 8px", borderRadius: 999, color: "#fff", background: "#c94142", font: "700 10px/1.2 system-ui", letterSpacing: ".06em", textTransform: "uppercase" }}>Evaluated collision</span>}
       </div>
       <div style={{ position: "absolute", right: 11, bottom: 9, maxWidth: "70%", padding: "5px 7px", borderRadius: 6, color: "rgba(235, 248, 248, .82)", background: "rgba(4, 24, 31, .68)", font: "500 9px/1.3 system-ui", textAlign: "right", pointerEvents: "auto" }}>
-        Visual sea and vessel motion only · RIB “Assault Boat” © tnnv ·{" "}
+        {props.snapshot.marine_environment
+          ? `Marine motion: ${props.snapshot.marine_environment.qualification} · assurance unqualified`
+          : "Visual sea and vessel motion only"} · RIB “Assault Boat” © tnnv ·{" "}
         <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer" style={{ color: "#b7f5ef" }}>CC BY 4.0</a>
       </div>
     </div>

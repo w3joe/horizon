@@ -528,6 +528,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke-seconds", type=float, default=0.0)
     parser.add_argument("--scenario", default="scenarios/crossing_recoverable.json")
+    parser.add_argument("--marine-config", help="Optional versioned marine plant configuration; assurance remains unqualified")
     parser.add_argument("--run-id")
     parser.add_argument(
         "--verify-reset",
@@ -559,6 +560,7 @@ def main() -> int:
             "--gate-token-file", str(secrets_dir / "gate.token"),
             "--evaluation-token-file", str(secrets_dir / "evaluation.token"),
             "--operator-token-file", str(secrets_dir / "operator.token"),
+            *(["--marine-config", str(ROOT / args.marine_config)] if args.marine_config else []),
         ],
         "decision_ai": [
             str(ROOT / ".venv/bin/python"), str(ROOT / "fixtures/decision-ai/service.py"),
