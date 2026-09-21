@@ -292,12 +292,21 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             plant_epoch = self._snapshot_epoch(snapshot)
             gate_epoch = int(gate["epoch"])
             startup_ready = gate.get("startup_recovery_ready") is True
-            resume_permitted = plant_epoch == gate_epoch and startup_ready
+            certificate = gate.get("startup_recovery_certificate")
+            certificate_epoch = (
+                certificate.get("plant_epoch") if isinstance(certificate, dict) else None
+            )
+            resume_permitted = (
+                plant_epoch == gate_epoch == certificate_epoch
+                and startup_ready
+                and isinstance(certificate, dict)
+            )
             state = "ready" if resume_permitted else "reset_in_progress"
         except (KeyError, OSError, TypeError, ValueError, URLError, TimeoutError):
             plant_epoch = None
             gate_epoch = None
             startup_ready = None
+            certificate = None
             resume_permitted = False
             state = "unavailable"
         return {
@@ -307,6 +316,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             "plant_epoch": plant_epoch,
             "gate_epoch": gate_epoch,
             "startup_recovery_ready": startup_ready,
+            "startup_recovery_certificate": certificate,
             "resume_permitted": resume_permitted,
             "required_header": {"X-Horizon-Operator": "1"},
             "declared_fault_ids": sorted(self.declared_fault_ids),
@@ -332,6 +342,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     "error": "STARTUP_RECOVERY_NOT_READY",
                     "control": readiness,
                 }
+            resume_certificate = readiness["startup_recovery_certificate"]
         if action == "fault":
             fault_id = body.get("fault_id")
             enabled = body.get("enabled", True)
@@ -352,6 +363,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 "enabled": enabled,
                 "fault_id": fault_id,
             }
+        elif action == "resume":
+            upstream_body = {"startup_recovery_certificate": resume_certificate}
         else:
             upstream_body = {}
         if action == "reset":

@@ -141,7 +141,11 @@ def test_reset_pauses_then_resets_and_never_auto_resumes(
         if path.startswith("/v1/public/snapshot"):
             return 200, {"snapshot_id": "run:protected:epoch-2:snapshot:0"}
         if path == "/health":
-            return 200, {"epoch": 1, "startup_recovery_ready": False}
+            return 200, {
+                "epoch": 1,
+                "startup_recovery_ready": False,
+                "startup_recovery_certificate": None,
+            }
         return 200, {"plant_epoch": 2, "paused": True}
 
     monkeypatch.setattr(ConsoleHandler, "_json_upstream", fake_upstream)
@@ -176,11 +180,24 @@ def test_explicit_resume_waits_for_bounded_recovery_window_then_calls_plant_once
     handler = object.__new__(ConsoleHandler)
     handler.resume_readiness_timeout_s = 1.0
     handler.resume_readiness_poll_s = 0.0
+    certificate = {
+        "run_id": "run-7",
+        "branch_id": "protected",
+        "decision_id": "recovery-7",
+        "input_snapshot_id": "snapshot-7",
+        "proposal_id": "proposal-7",
+        "plant_epoch": 2,
+        "original_host_valid_until_ns": 4_000_000_000,
+    }
     statuses = iter(
         [
             {"resume_permitted": False, "state": "reset_in_progress"},
             {"resume_permitted": False, "state": "reset_in_progress"},
-            {"resume_permitted": True, "state": "ready"},
+            {
+                "resume_permitted": True,
+                "state": "ready",
+                "startup_recovery_certificate": certificate,
+            },
             {"resume_permitted": True, "state": "ready"},
         ]
     )
@@ -189,15 +206,21 @@ def test_explicit_resume_waits_for_bounded_recovery_window_then_calls_plant_once
     monkeypatch.setattr(ConsoleHandler, "_operator_status", lambda self: next(statuses))
 
     def fake_upstream(self, service, path, *, body=None, token_file=None):
-        del self, body, token_file
-        calls.append((service, path))
+        del self, token_file
+        calls.append((service, path, body))
         return 200, {"accepted": True, "paused": False}
 
     monkeypatch.setattr(ConsoleHandler, "_json_upstream", fake_upstream)
     status, payload = handler._operator_action("resume", {})
     assert status == HTTPStatus.OK
     assert payload["accepted"] is True
-    assert calls == [("simulator", "/v1/operator/resume?branch=protected")]
+    assert calls == [
+        (
+            "simulator",
+            "/v1/operator/resume?branch=protected",
+            {"startup_recovery_certificate": certificate},
+        )
+    ]
 
 
 def test_fault_requires_declared_id_and_boolean_enabled() -> None:
