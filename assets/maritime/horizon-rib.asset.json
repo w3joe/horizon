@@ -1,0 +1,46 @@
+{
+  "schema_version": "horizon.maritime-asset.v1",
+  "asset_id": "horizon-rib-tnnv-12x3-v1",
+  "file": "horizon-rib.glb",
+  "sha256": "3c8f6ccab43abc4fe74157b23ddd51300b425b0daea05331abb3aeed32c55733",
+  "bytes": 3646200,
+  "source": {
+    "title": "Assault Boat",
+    "author": "tnnv",
+    "original_page": "https://sketchfab.com/3d-models/assault-boat-0d4fca4f2e014cd7b6aefd4653b1508c",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "acquired_file": "tnnv-assault-boat-1k.glb",
+    "acquired_sha256": "faef6ed67af626757ec1d4c0a15a747f046d92c60cb56af225bf0c7aaa67af01",
+    "acquisition_record_sha256": "38d6af3bcbae88474192d2203a1ec90c2123176782ae362025c414c9bc5c0215",
+    "mirror_repository": "https://github.com/bob6664569/open-water",
+    "mirror_commit": "285b6ce32057c70191a7fe16c31d979fa383ac64",
+    "mirror_change": "textures downscaled to 1K"
+  },
+  "modifications": {
+    "tool": "Blender 4.5.14 LTS",
+    "tool_release_sha256": "65134d9b07b20e2fa8d3c9e44f6f44ffb5c9774dd521b95f50387310241ca170",
+    "script": "tools/assets/normalize_tnnv_rib.py",
+    "description": "Centered laterally and longitudinally; nonuniformly scaled to a 12 m length by 3 m beam display proxy; retained the authored Z=0 waterline; re-exported as GLB with attribution extras.",
+    "source_extent_xyz": [180.31878662109375, 402.39300537109375, 85.92340087890625],
+    "scale_xyz_blender": [0.016637201570704554, 0.029821591925867086, 0.029821591925867086],
+    "roundtrip_extent_xyz_blender": [2.999999761581421, 11.999996185302734, 2.5623717308044434],
+    "gltf_local_forward_axis": "-Z",
+    "waterline_scene_y_m": 0.0
+  },
+  "geometry": {
+    "meshes": 8,
+    "vertices": 24298,
+    "triangles": 40036,
+    "textures": 3,
+    "texture_resolution": "1024x1024"
+  },
+  "physical_binding": {
+    "visual_proxy_length_m": 12.0,
+    "visual_proxy_beam_m": 3.0,
+    "simulator_hull_unchanged": true,
+    "collision_geometry_unchanged": true,
+    "hydrodynamics_unchanged": true,
+    "scope": "presentation asset only"
+  }
+}
