@@ -243,16 +243,29 @@ class FusionEngine:
         priority = {"radar": 0, "lidar": 1, "camera": 2, "ais": 3}
         evidence = sorted(
             self._contact_evidence(now_ns),
-            key=lambda item: (item.sigma, priority.get(item.source_id, 9), item.observation_id),
+            key=lambda item: (priority.get(item.source_id, 9), item.sigma, item.observation_id),
         )
         clusters: list[list[ContactEvidence]] = []
         for candidate in evidence:
             best: tuple[float, list[ContactEvidence]] | None = None
             for cluster in clusters:
+                # One frame can contain several nearby vessels. A single
+                # detection may support at most one cluster, and detections
+                # from the same frame must never support each other.
+                if any(item.observation_id == candidate.observation_id for item in cluster):
+                    continue
                 centre_n = sum(item.position[0] for item in cluster) / len(cluster)
                 centre_e = sum(item.position[1] for item in cluster) / len(cluster)
                 distance = math.hypot(candidate.position[0] - centre_n, candidate.position[1] - centre_e)
                 gate = max(self.association_gate_m, 3.0 * (candidate.sigma + min(item.sigma for item in cluster)))
+                primary = cluster[0]
+                high_integrity_disagreement = (
+                    candidate.source_id in {"radar", "lidar"}
+                    and primary.source_id in {"radar", "lidar"}
+                    and distance > 3.0 * math.hypot(candidate.sigma, primary.sigma)
+                )
+                if high_integrity_disagreement:
+                    continue
                 if distance <= gate and (best is None or distance < best[0]):
                     best = (distance, cluster)
             if best is None:

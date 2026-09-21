@@ -157,3 +157,45 @@ def test_ai_transport_delay_is_subtracted_from_proposal_lifetime() -> None:
             request_monotonic_ns=now_ns,
             now_ns=now_ns + 100_000_000,
         )
+
+
+def test_claimed_tiny_ais_sigma_cannot_displace_radar_supported_geometry() -> None:
+    now_ns = time.monotonic_ns()
+    engine = FusionEngine(association_gate_m=20.0)
+    engine.last_run_branch = ("run", "protected")
+    radar = contact_observation("radar", 0, [100.0, 0.0], "radar", "radar", now_ns, sigma=1.0)
+    false_ais = contact_observation("ais", 0, [119.0, 0.0], "ais", "ais", now_ns, sigma=0.001)
+    engine.update_batch({"observations": [false_ais, radar]}, now_ns=now_ns)
+    tracks = engine.fuse_tracks(now_ns)
+    assert len(tracks) == 1
+    assert tracks[0]["position_ne_m"] == pytest.approx([100.0, 0.0])
+    assert tracks[0]["supporting_observation_ids"] == ["radar"]
+    assert tracks[0]["contradicting_observation_ids"] == ["ais"]
+
+
+def test_two_nearby_radar_detections_in_one_frame_remain_two_tracks() -> None:
+    now_ns = time.monotonic_ns()
+    engine = FusionEngine(association_gate_m=20.0)
+    engine.last_run_branch = ("run", "protected")
+    radar = contact_observation("radar", 0, [100.0, 0.0], "radar-frame", "radar-frame", now_ns)
+    second = deepcopy(radar["payload"]["contacts"][0])
+    second["contact_id"] = "second-untrusted-id"
+    second["position_ne_m"] = [110.0, 0.0]
+    radar["payload"]["contacts"].append(second)
+    engine.update_batch({"observations": [radar]}, now_ns=now_ns)
+    tracks = engine.fuse_tracks(now_ns)
+    assert len(tracks) == 2
+    assert sorted(track["position_ne_m"][0] for track in tracks) == [100.0, 110.0]
+    assert all(track["supporting_observation_ids"] == ["radar-frame"] for track in tracks)
+
+
+def test_contradictory_radar_and_lidar_remain_separate_hypotheses() -> None:
+    now_ns = time.monotonic_ns()
+    engine = FusionEngine(association_gate_m=30.0)
+    engine.last_run_branch = ("run", "protected")
+    radar = contact_observation("radar", 0, [100.0, 0.0], "radar", "radar", now_ns, sigma=1.0)
+    lidar = contact_observation("lidar", 0, [120.0, 0.0], "lidar", "lidar", now_ns, sigma=1.0)
+    engine.update_batch({"observations": [radar, lidar]}, now_ns=now_ns)
+    tracks = engine.fuse_tracks(now_ns)
+    assert len(tracks) == 2
+    assert sorted(track["position_ne_m"][0] for track in tracks) == [100.0, 120.0]
