@@ -613,6 +613,7 @@ def main() -> int:
             "--artifact-source", str(
                 data_root() / "sources/WaSR-T/examples/sequence"
             ),
+            "--demo-root", str(runs_root() / "demo"),
             "--simulator-operator-token-file", str(secrets_dir / "operator.token"),
             "--gate-operator-token-file", str(secrets_dir / "gate-operator.token"),
         ],

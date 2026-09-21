@@ -15,9 +15,107 @@ from console_proxy import (  # noqa: E402
     compact_frame,
     copy_upstream_body,
     load_artifact_frames,
+    load_demo_catalog,
+    load_demo_run,
     resolve_public_route,
     validate_artifact,
 )
+
+
+def _demo_fixture(root: Path, run_id: str = "unsafe-route-v1") -> tuple[Path, dict, dict]:
+    directory = root / run_id
+    directory.mkdir(parents=True)
+    replay = {
+        "schema_version": "horizon.demo-replay.v1",
+        "run_id": run_id,
+        "timeline": {"frames": []},
+    }
+    replay_bytes = (json.dumps(replay, separators=(",", ":")) + "\n").encode()
+    manifest = {
+        "schema_version": "horizon.demo-manifest.v1",
+        "run_id": run_id,
+        "title": "Unsafe course · safety takeover",
+        "source_dirty": False,
+        "replay_sha256": hashlib.sha256(replay_bytes).hexdigest(),
+    }
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    (directory / "replay.json").write_bytes(replay_bytes)
+    return directory, manifest, replay
+
+
+def test_demo_catalog_and_run_are_exact_hash_checked_allowlisted_json(tmp_path: Path) -> None:
+    directory, manifest, replay = _demo_fixture(tmp_path)
+
+    assert load_demo_run(tmp_path, "../unsafe-route-v1") is None
+    assert load_demo_run(tmp_path, "unsafe-route-v1") == (manifest, replay)
+    assert load_demo_catalog(tmp_path) == {
+        "schema_version": "horizon.demo-catalog.v1",
+        "runs": [
+            {
+                **manifest,
+                "replay_url": "/api/demo/runs/unsafe-route-v1",
+            }
+        ],
+    }
+
+    (directory / "replay.json").write_text("{}\n")
+    assert load_demo_run(tmp_path, "unsafe-route-v1") is None
+    assert load_demo_catalog(tmp_path)["runs"] == []
+
+
+def test_proxy_does_not_emit_a_second_http_status_after_stream_headers(monkeypatch) -> None:
+    class Response:
+        status = 200
+        headers = {"Content-Type": "text/event-stream"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def readline(self):
+            raise TimeoutError
+
+    class Destination:
+        closed = False
+
+        def write(self, _value):
+            return None
+
+        def flush(self):
+            return None
+
+    class Handler:
+        upstreams = {"simulator": "http://127.0.0.1:1"}
+        headers = {"Accept": "text/event-stream"}
+        wfile = Destination()
+        close_connection = False
+
+        def __init__(self):
+            self.statuses = []
+            self.json_calls = []
+
+        def send_response(self, status):
+            self.statuses.append(status)
+
+        def send_header(self, *_args):
+            return None
+
+        def end_headers(self):
+            return None
+
+        def _json(self, *args):
+            self.json_calls.append(args)
+
+    monkeypatch.setattr("console_proxy.urlopen", lambda *_args, **_kwargs: Response())
+    handler = Handler()
+
+    ConsoleHandler._proxy_get(handler, "simulator", "/v1/public/stream")
+
+    assert handler.statuses == [200]
+    assert handler.json_calls == []
+    assert handler.close_connection is True
 
 
 def test_sse_proxy_flushes_each_line_without_waiting_for_a_large_read() -> None:
