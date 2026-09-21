@@ -5,7 +5,7 @@ import time
 
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
-from horizon_assurance.control_loop import AssuranceControlLoop
+from horizon_assurance.control_loop import AssuranceControlLoop, EndpointError
 from horizon_assurance.http_api import AssuranceHTTPServer, AssuranceRuntime
 
 
@@ -44,7 +44,13 @@ class FakeFusion:
 
 class FakeGate:
     def __init__(
-        self, *, epoch=0, ready=False, prime_accepted=True, submit_accepted=True
+        self,
+        *,
+        epoch=0,
+        ready=False,
+        prime_accepted=True,
+        submit_accepted=True,
+        prime_transport_error=False,
     ):
         self.epoch = epoch
         self.ready = ready
@@ -53,6 +59,7 @@ class FakeGate:
         self.resets = 0
         self.prime_accepted = prime_accepted
         self.submit_accepted = submit_accepted
+        self.prime_transport_error = prime_transport_error
 
     def status(self, *, timeout_s):
         del timeout_s
@@ -68,6 +75,8 @@ class FakeGate:
     def prime(self, governor_input, *, timeout_s):
         del timeout_s
         self.primes.append(governor_input["snapshot"]["snapshot_id"])
+        if self.prime_transport_error:
+            raise EndpointError(None, {"error": "TRANSPORT_ERROR"})
         self.ready = self.prime_accepted
         return {
             "accepted": self.prime_accepted,
@@ -160,6 +169,42 @@ def test_epoch_reset_never_primes_from_expired_source_validity(
     assert event["epoch_synchronized"] is True
     assert gate.resets == 1
     assert gate.primes == []
+
+
+def test_prime_transport_failure_after_epoch_sync_clears_old_evidence(
+    reference, governor_input
+) -> None:
+    runtime = AssuranceRuntime(reference)
+    old_input = live_input(governor_input, tick=42, epoch=0)
+    old_decision = A1ThresholdSimplex(reference).evaluate(old_input)
+    runtime.record_evidence(
+        {
+            "governor_input": old_input,
+            "decision": old_decision,
+            "receipt": {
+                "run_id": old_input["run_id"],
+                "branch_id": old_input["branch_id"],
+                "decision_id": old_decision["decision_id"],
+                "accepted": True,
+            },
+        }
+    )
+    assert runtime.latest_evidence is not None
+
+    reset_input = live_input(governor_input, tick=0, epoch=1)
+    gate = FakeGate(epoch=0, ready=True, prime_transport_error=True)
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([reset_input]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+        event_sink=runtime.record_control_event,
+    )
+    event = loop.run_once()
+    assert event["event_type"] == "gate_unavailable"
+    assert event["epoch"] == 1
+    assert event["epoch_synchronized"] is True
+    assert runtime.latest_evidence is None
+    assert runtime.latest_evidence_epoch == 1
 
 
 def test_loop_does_not_publish_rejected_receipt_as_latest_evidence(

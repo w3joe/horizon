@@ -289,6 +289,8 @@ class AssuranceControlLoop:
                     "event_type": "gate_unavailable",
                     "host_monotonic_ns": time.monotonic_ns(),
                     "sample_id": sample_id,
+                    "epoch": epoch,
+                    "epoch_synchronized": epoch_synchronized,
                     "input_summary": input_summary,
                     "status": exc.status,
                     "detail": exc.payload,
