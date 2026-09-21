@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
+import json
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -30,8 +32,42 @@ def _all_finite(value: Any) -> bool:
     return False
 
 
+@lru_cache(maxsize=1)
+def _contract_validator() -> Any | None:
+    if jsonschema is None:
+        return None
+    schema_path = (
+        Path(__file__).resolve().parents[3]
+        / "packages"
+        / "contracts"
+        / "schema"
+        / "horizon.schema.json"
+    )
+    if not schema_path.exists():
+        return None
+    schema = json.loads(schema_path.read_text())
+    return jsonschema.Draft202012Validator(schema)
+
+
+def _validate_contract(message: Any, *, invalid_reason: str, reasons: list[str]) -> None:
+    validator = _contract_validator()
+    if validator is None:
+        reasons.append("SCHEMA_VALIDATION_UNAVAILABLE")
+        return
+    try:
+        validator.validate(message)
+    except jsonschema.ValidationError:
+        reasons.append(invalid_reason)
+
+
 def validate_governor_input(message: dict[str, Any], *, validate_schema: bool = True) -> None:
     reasons: list[str] = []
+    if not isinstance(message, dict):
+        raise InputRejected(("GOVERNOR_INPUT_SCHEMA_INVALID",))
+    if validate_schema:
+        _validate_contract(message, invalid_reason="SCHEMA_INVALID", reasons=reasons)
+        if reasons:
+            raise InputRejected(reasons)
     if not _all_finite(message):
         reasons.append("NON_FINITE_INPUT")
     proposal = message.get("proposal", {})
@@ -70,23 +106,30 @@ def validate_governor_input(message: dict[str, Any], *, validate_schema: bool = 
         reasons.append("INVALID_SPEED")
     if not isinstance(heading, (int, float)):
         reasons.append("INVALID_HEADING")
-    if validate_schema and jsonschema is not None:
-        schema_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "schema" / "horizon.schema.json"
-        if schema_path.exists():
-            import json
-
-            try:
-                jsonschema.Draft202012Validator(json.loads(schema_path.read_text())).validate(message)
-            except jsonschema.ValidationError:
-                reasons.append("SCHEMA_INVALID")
     if reasons:
         raise InputRejected(reasons)
 
 
 def validate_decision_identity(
-    decision: dict[str, Any], governor_input: dict[str, Any], *, candidate_id: str
+    decision: dict[str, Any],
+    governor_input: dict[str, Any],
+    *,
+    candidate_id: str,
+    validate_schema: bool = True,
 ) -> None:
     reasons: list[str] = []
+    if not isinstance(decision, dict):
+        raise InputRejected(("DECISION_SCHEMA_INVALID",))
+    if any(type(decision.get(field)) is not bool for field in ("valid", "deadline_met")):
+        reasons.append("DECISION_FLAG_TYPE_INVALID")
+    if validate_schema:
+        _validate_contract(
+            decision,
+            invalid_reason="DECISION_SCHEMA_INVALID",
+            reasons=reasons,
+        )
+    if reasons:
+        raise InputRejected(reasons)
     expected = {
         "run_id": governor_input.get("run_id"),
         "episode_id": governor_input.get("episode_id"),
@@ -103,4 +146,3 @@ def validate_decision_identity(
         reasons.append("NON_FINITE_DECISION")
     if reasons:
         raise InputRejected(reasons)
-

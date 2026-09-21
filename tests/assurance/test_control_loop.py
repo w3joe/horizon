@@ -5,8 +5,8 @@ import time
 
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
-from horizon_assurance.control_loop import AssuranceControlLoop
-from horizon_assurance.http_api import AssuranceRuntime
+from horizon_assurance.control_loop import AssuranceControlLoop, EndpointError
+from horizon_assurance.http_api import AssuranceHTTPServer, AssuranceRuntime
 
 
 def live_input(message, *, tick: int, epoch: int = 0):
@@ -43,12 +43,23 @@ class FakeFusion:
 
 
 class FakeGate:
-    def __init__(self, *, epoch=0, ready=False):
+    def __init__(
+        self,
+        *,
+        epoch=0,
+        ready=False,
+        prime_accepted=True,
+        submit_accepted=True,
+        prime_transport_error=False,
+    ):
         self.epoch = epoch
         self.ready = ready
         self.primes = []
         self.submissions = []
         self.resets = 0
+        self.prime_accepted = prime_accepted
+        self.submit_accepted = submit_accepted
+        self.prime_transport_error = prime_transport_error
 
     def status(self, *, timeout_s):
         del timeout_s
@@ -64,13 +75,25 @@ class FakeGate:
     def prime(self, governor_input, *, timeout_s):
         del timeout_s
         self.primes.append(governor_input["snapshot"]["snapshot_id"])
-        self.ready = True
-        return {"accepted": True, "reason_codes": ["STARTUP_RECOVERY_VALIDATED"]}
+        if self.prime_transport_error:
+            raise EndpointError(None, {"error": "TRANSPORT_ERROR"})
+        self.ready = self.prime_accepted
+        return {
+            "accepted": self.prime_accepted,
+            "reason_codes": [
+                "STARTUP_RECOVERY_VALIDATED"
+                if self.prime_accepted
+                else "NO_VALIDATED_RECOVERY"
+            ],
+        }
 
     def submit(self, governor_input, decision, *, timeout_s):
         del timeout_s
         self.submissions.append((governor_input, decision))
-        return {"accepted": True, "decision_id": decision["decision_id"]}
+        return {
+            "accepted": self.submit_accepted,
+            "decision_id": decision["decision_id"],
+        }
 
 
 def test_loop_primes_before_first_autonomy_and_skips_duplicate(reference, governor_input) -> None:
@@ -112,6 +135,7 @@ def test_loop_primes_before_first_autonomy_and_skips_duplicate(reference, govern
 
 def test_loop_synchronizes_epoch_before_evaluation(reference, governor_input) -> None:
     message = live_input(governor_input, tick=0, epoch=1)
+    message["decision_deadline_monotonic_ns"] = time.monotonic_ns() + 40_000_000
     gate = FakeGate(epoch=0, ready=True)
     loop = AssuranceControlLoop(
         fusion=FakeFusion([message]),
@@ -119,9 +143,102 @@ def test_loop_synchronizes_epoch_before_evaluation(reference, governor_input) ->
         candidate=A1ThresholdSimplex(reference),
     )
     event = loop.run_once()
-    assert event["event_type"] == "gate_epoch_synchronized"
+    assert event["event_type"] == "startup_recovery_primed"
+    assert event["epoch_synchronized"] is True
     assert gate.resets == 1
+    assert gate.primes == [message["snapshot"]["snapshot_id"]]
+    assert gate.ready is True
     assert not gate.submissions
+    time.sleep(0.05)
+    assert loop.run_once()["event_type"] == "duplicate_sample_skipped"
+
+
+def test_epoch_reset_never_primes_from_expired_source_validity(
+    reference, governor_input
+) -> None:
+    message = live_input(governor_input, tick=0, epoch=1)
+    message["snapshot"]["valid_until_monotonic_ns"] = time.monotonic_ns() - 1
+    gate = FakeGate(epoch=0, ready=True)
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([message]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+    event = loop.run_once()
+    assert event["event_type"] == "startup_recovery_input_stale"
+    assert event["epoch_synchronized"] is True
+    assert gate.resets == 1
+    assert gate.primes == []
+
+
+def test_prime_transport_failure_after_epoch_sync_clears_old_evidence(
+    reference, governor_input
+) -> None:
+    runtime = AssuranceRuntime(reference)
+    old_input = live_input(governor_input, tick=42, epoch=0)
+    old_decision = A1ThresholdSimplex(reference).evaluate(old_input)
+    runtime.record_evidence(
+        {
+            "governor_input": old_input,
+            "decision": old_decision,
+            "receipt": {
+                "run_id": old_input["run_id"],
+                "branch_id": old_input["branch_id"],
+                "decision_id": old_decision["decision_id"],
+                "accepted": True,
+            },
+        }
+    )
+    assert runtime.latest_evidence is not None
+
+    reset_input = live_input(governor_input, tick=0, epoch=1)
+    gate = FakeGate(epoch=0, ready=True, prime_transport_error=True)
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([reset_input]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+        event_sink=runtime.record_control_event,
+    )
+    event = loop.run_once()
+    assert event["event_type"] == "gate_unavailable"
+    assert event["epoch"] == 1
+    assert event["epoch_synchronized"] is True
+    assert runtime.latest_evidence is None
+    assert runtime.latest_evidence_epoch == 1
+
+
+def test_loop_does_not_publish_rejected_receipt_as_latest_evidence(
+    reference, governor_input
+) -> None:
+    message = live_input(governor_input, tick=42)
+    gate = FakeGate(ready=True, submit_accepted=False)
+    evidence = []
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([message]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+        evidence_sink=evidence.append,
+    )
+    event = loop.run_once()
+    assert event["event_type"] == "decision_receipt"
+    assert event["receipt"]["accepted"] is False
+    assert evidence == []
+
+
+def test_loop_reports_rejected_startup_recovery_without_claiming_prime(
+    reference, governor_input
+) -> None:
+    message = live_input(governor_input, tick=0)
+    gate = FakeGate(prime_accepted=False)
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([message]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+    event = loop.run_once()
+    assert event["event_type"] == "startup_recovery_rejected"
+    assert event["result"]["accepted"] is False
+    assert gate.ready is False
 
 
 def test_loop_never_submits_expired_input(reference, governor_input) -> None:
@@ -141,8 +258,11 @@ def test_latest_evidence_store_requires_exact_joined_identities(
     reference, governor_input
 ) -> None:
     runtime = AssuranceRuntime(reference)
+    governor_input = live_input(governor_input, tick=42, epoch=0)
     decision = A1ThresholdSimplex(reference).evaluate(governor_input)
     receipt = {
+        "run_id": governor_input["run_id"],
+        "branch_id": governor_input["branch_id"],
         "decision_id": decision["decision_id"],
         "accepted": True,
     }
@@ -159,6 +279,33 @@ def test_latest_evidence_store_requires_exact_joined_identities(
     try:
         runtime.record_evidence(mismatched)
     except ValueError as exc:
-        assert "identity mismatch" in str(exc)
+        assert "identity match" in str(exc)
     else:
         raise AssertionError("mismatched evidence should be rejected")
+
+    rejected = copy.deepcopy(evidence)
+    rejected["receipt"]["accepted"] = False
+    try:
+        runtime.record_evidence(rejected)
+    except ValueError as exc:
+        assert "accepted receipt" in str(exc)
+    else:
+        raise AssertionError("rejected evidence should not be cached")
+
+    runtime.record_control_event({"event_type": "gate_epoch_synchronized", "epoch": 1})
+    assert runtime.latest_evidence is None
+    try:
+        runtime.record_evidence(evidence)
+    except ValueError as exc:
+        assert "older than" in str(exc)
+    else:
+        raise AssertionError("prior-epoch evidence should not return after reset")
+
+
+def test_assurance_server_binds_numeric_loopback_without_name_lookup(reference) -> None:
+    server = AssuranceHTTPServer(("127.0.0.1", 0), AssuranceRuntime(reference))
+    try:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1]
+    finally:
+        server.server_close()

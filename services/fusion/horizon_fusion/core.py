@@ -8,6 +8,8 @@ import math
 import time
 from typing import Any
 
+from .actuator import assess_actuator_response
+
 
 INPUT_GROUPS = (
     "navigation_environment",
@@ -88,13 +90,15 @@ class FusionEngine:
         self.last_evidence: dict[str, Any] | None = None
         self.dropped = 0
         self.common_ancestry_suppressed = 0
+        self.collection_interruptions = 0
+        self.last_collection_interruption: str | None = None
 
     def update_batch(self, batch: dict[str, Any], *, now_ns: int | None = None) -> None:
         current = time.monotonic_ns() if now_ns is None else now_ns
         batch_epoch = batch.get("plant_epoch")
         if batch_epoch is not None:
             parsed_epoch = int(batch_epoch)
-            if self.plant_epoch is not None and parsed_epoch != self.plant_epoch:
+            if parsed_epoch != self.plant_epoch:
                 self._reset_epoch(new_epoch=parsed_epoch)
             self.plant_epoch = parsed_epoch
         snapshot = batch.get("snapshot")
@@ -147,6 +151,13 @@ class FusionEngine:
         self.peer_intents.clear()
         self.snapshot = None
         self.last_tick = -1
+
+    def invalidate_collection(self, reason: str) -> None:
+        """Discard partial lineage after collector history loss."""
+        self.collection_interruptions += 1
+        self.last_collection_interruption = reason
+        # Capture loss invalidates evidence, not the plant's reset identity.
+        self._reset_epoch(new_epoch=self.plant_epoch if self.plant_epoch is not None else self.epoch)
 
     def _expire(self, now_ns: int) -> None:
         stale = [key for key, value in self.observations.items() if int(value["time"]["valid_until_monotonic_ns"]) < now_ns - 5_000_000_000]
@@ -395,7 +406,8 @@ class FusionEngine:
         def source_age(value: dict[str, Any]) -> float:
             collector = value.get("payload", {}).get("_collector", {})
             mapped = collector.get("mapped_event_monotonic_ns")
-            anchor = mapped if isinstance(mapped, int) else int(value["time"]["received_monotonic_ns"])
+            original_received = collector.get("original_received_monotonic_ns")
+            anchor = mapped if isinstance(mapped, int) else original_received if isinstance(original_received, int) else int(value["time"]["received_monotonic_ns"])
             return max(0.0, (now_ns - anchor) / 1e9) + float(value["time"]["clock_uncertainty_ms"]) / 1000.0
 
         statuses: list[str] = []
@@ -546,6 +558,11 @@ class FusionEngine:
             )
         actual = actuator["payload"]
         params = self.reference["plant_parameters"]
+        actuator_assessment = assess_actuator_response(
+            self.observations.values(),
+            configured_rate_rps=float(params["rudder_rate_limit_rps"]),
+            configured_lag_s=float(params["rudder_lag_s"]),
+        )
         capability = {
             "contract_type": "ActuatorCapability",
             "schema_version": "0.1.0",
@@ -553,15 +570,12 @@ class FusionEngine:
             "rudder_rad": float(actual["rudder_rad"]),
             "thrust_fraction": float(actual["thrust_fraction"]),
             "rudder_limits_rad": [-float(params["rudder_limit_rad"]), float(params["rudder_limit_rad"])],
-            "rudder_rate_limit_rps": float(params["rudder_rate_limit_rps"]),
+            "rudder_rate_limit_rps": actuator_assessment.rudder_rate_limit_rps,
             "thrust_limits": [-1.0, 1.0],
-            "steering_lag_s": float(params["rudder_lag_s"]),
+            "steering_lag_s": actuator_assessment.steering_lag_s,
             "propulsion_lag_s": float(params["thrust_lag_s"]),
-            "status": "degraded",
-            "degradation_reasons": [
-                "configured_limits_only",
-                "online_capability_degradation_state_unavailable",
-            ],
+            "status": actuator_assessment.status,
+            "degradation_reasons": list(actuator_assessment.reasons),
         }
         health, health_status = self._health(current, trace)
         validity = min(
@@ -642,6 +656,7 @@ class FusionEngine:
             "health": health,
             "peer_intents": copy.deepcopy(self.peer_intents),
             "ai_trace": copy.deepcopy(trace),
+            "actuator_response": copy.deepcopy(actuator_assessment.evidence),
         }
         return governor
 
@@ -660,5 +675,7 @@ class FusionEngine:
             "track_count": len(self.tracks),
             "common_ancestry_suppressed": self.common_ancestry_suppressed,
             "peer_intent_claims": len(self.peer_intents),
+            "collection_interruptions": self.collection_interruptions,
+            "last_collection_interruption": self.last_collection_interruption,
             "plant_authority": False,
         }

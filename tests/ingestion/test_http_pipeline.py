@@ -12,6 +12,7 @@ import jsonschema
 from horizon_collector.http_api import CollectorServer, SimulatorPoller
 from horizon_collector.store import CollectorStore
 from horizon_fusion.core import FusionEngine
+from horizon_fusion import http_api as fusion_http_api
 from horizon_fusion.http_api import FusionLoop, FusionServer
 from horizon_sim.engine import AuthoritativeSimulator
 from horizon_sim.http_api import SimulatorHTTPServer, SimulatorRuntime
@@ -97,6 +98,20 @@ def test_real_http_observation_fusion_ai_governor_pipeline() -> None:
         except HTTPError as exc:
             assert exc.code == 400
             assert json.load(exc)["error"] == "BAD_REQUEST"
+        huge_clock = simulator.observation_batch()[0]
+        huge_clock["time"]["event_time_s"] = 1e300
+        oversized_clock_request = Request(
+            f"{collector_url}/v1/ingest",
+            data=json.dumps(huge_clock).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urlopen(oversized_clock_request, timeout=0.5)
+            raise AssertionError("unbounded collector clock unexpectedly succeeded")
+        except HTTPError as exc:
+            assert exc.code == 400
+            assert json.load(exc)["error"] == "BAD_REQUEST"
         assert _json(f"{collector_url}/health")[0] == 200
     finally:
         fusion_loop.stop()
@@ -107,3 +122,88 @@ def test_real_http_observation_fusion_ai_governor_pipeline() -> None:
             server.server_close()
         for thread in threads:
             thread.join(timeout=1.0)
+
+
+def test_fusion_loop_never_serves_through_collector_backlog_or_cursor_loss(monkeypatch) -> None:
+    engine = FusionEngine()
+    loop = FusionLoop(engine, "http://collector", "http://decision", "protected")
+    loop.latest = {"branch_id": "protected"}
+    post_calls = []
+    monkeypatch.setattr(fusion_http_api, "_post_json", lambda *_args, **_kwargs: post_calls.append(True))
+
+    monkeypatch.setattr(fusion_http_api, "_get_json", lambda *_args, **_kwargs: {
+        "cursor": 3,
+        "cursor_lost": False,
+        "has_more": True,
+        "observations": [],
+        "snapshot": None,
+        "reference": None,
+        "plant_epoch": 0,
+    })
+    loop.cycle_once()
+    assert loop.latest is None
+    assert loop.last_error_reasons == ["COLLECTOR_BACKLOG"]
+    assert post_calls == []
+
+    loop.latest = {"branch_id": "protected"}
+    monkeypatch.setattr(fusion_http_api, "_get_json", lambda *_args, **_kwargs: {
+        "cursor": 8,
+        "cursor_lost": True,
+        "has_more": False,
+        "observations": [],
+        "snapshot": None,
+        "reference": None,
+        "plant_epoch": 0,
+    })
+    loop.cycle_once()
+    assert loop.latest is None
+    assert loop.last_error_reasons == ["COLLECTOR_CURSOR_LOSS"]
+    assert engine.collection_interruptions == 1
+    assert engine.last_collection_interruption == "COLLECTOR_CURSOR_LOSS"
+    assert post_calls == []
+
+
+def test_fusion_consumes_complete_new_epoch_page_after_history_purge(monkeypatch) -> None:
+    simulator = AuthoritativeSimulator(
+        load_scenario(ROOT / "scenarios/crossing_recoverable.json"),
+        seed=3, run_id="reset-page-test",
+    )
+    store = CollectorStore()
+    engine = FusionEngine()
+    loop = FusionLoop(engine, "http://collector", "http://decision", "protected")
+
+    def collect() -> dict:
+        store.update_plant_epoch("protected", simulator.run_id, simulator.plant_epoch)
+        store.update_reference("protected", simulator.public_reference())
+        store.update_snapshot("protected", simulator.public_snapshot())
+        for item in simulator.observation_batch():
+            store.ingest(item, simulation_time_s=simulator.simulation_time_s)
+        return store.batch(branch="protected", after_cursor=0)
+
+    simulator.step(80)
+    engine.update_batch(collect())
+    assert engine.epoch == 0
+    simulator.reset()
+    simulator.step(80)
+    page = collect()
+    assert page["cursor_lost"] and page["plant_epoch"] == 1
+    policy = FixturePolicy("nominal")
+
+    def propose(_url: str, body: dict) -> dict:
+        proposal, trace = policy.propose(body["snapshot"])
+        return {"proposal": proposal, "inference_trace": trace}
+
+    monkeypatch.setattr(fusion_http_api, "_get_json", lambda *_args: page)
+    monkeypatch.setattr(fusion_http_api, "_post_json", propose)
+    loop.cycle_once()
+    assert loop.latest is not None
+    assert ":epoch-1:" in loop.latest["snapshot"]["snapshot_id"]
+    assert engine.epoch == engine.plant_epoch == 1
+    engine.invalidate_collection("TEST_CAPTURE_LOSS")
+    assert engine.epoch == engine.plant_epoch == 1
+
+
+def test_fusion_attaches_to_existing_nonzero_plant_epoch() -> None:
+    engine = FusionEngine()
+    engine.update_batch({"plant_epoch": 7, "observations": []})
+    assert engine.epoch == engine.plant_epoch == 7

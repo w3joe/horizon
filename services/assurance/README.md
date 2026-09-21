@@ -85,6 +85,16 @@ feed exposes no truth state, capability token, or fabricated trajectory.
 `GET /v1/evidence/latest` returns the latest accepted, identity-checked
 `{governor_input, decision, receipt}` triplet and returns 503 until one exists.
 It is the race-free source for a UI that needs the complete consumed input.
+Rejected receipts are never cached. Run, branch, tick, proposal, snapshot, and
+decision identities must all join, and an epoch synchronization clears the
+prior cache before any result from the new epoch is available.
+
+After an epoch reset rotates the gate token, the loop immediately attempts
+startup recovery priming from that same GovernorInput while its snapshot,
+proposal, health, and recovery-option expiries remain valid. This permission
+step is separate from the 40 ms decision-computation deadline and never submits
+a decision from the retained input. An expired source-validity window produces
+`startup_recovery_input_stale`; the loop never extends an old expiry.
 
 ## Local latency characterization
 
@@ -101,8 +111,12 @@ did not receive a safe label.
 
 This small development characterization includes serialization and gate
 validation but uses a local in-memory plant client, so it does not establish a
-deployment-wide 40 ms bound. The candidate reserves 10 ms for dispatch and
-stops finite geometry/recovery work at its configured host-work limit. A late
-result remains invalid and is never submitted. Startup recovery priming is a
-separate permission step: an unrecoverable hazardous or dense initial state
-can take much longer to reject and never releases protected autonomy.
+deployment-wide 40 ms bound or a sensor-to-actuation deadline. The 40 ms value
+bounds candidate computation and submission eligibility. Command validity is a
+separate monotonic deadline enforced again by the gate and plant receiver;
+actual cycle and actuation latency comes from receipts. The candidate reserves
+10 ms for dispatch and stops finite geometry/recovery work at its configured
+host-work limit. A late result remains invalid and is never submitted. Startup
+recovery priming is a separate permission step: an unrecoverable hazardous or
+dense initial state is reported as rejected and never releases protected
+autonomy.

@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+import copy
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+from socketserver import TCPServer
 import threading
 from typing import Any
 from urllib.request import urlopen
 
 from .candidates import Candidate, candidate
 from .configuration import AssuranceConfig, NavigationReference
-from .control_loop import AssuranceControlLoop, FusionClient, GateClient
+from .control_loop import AssuranceControlLoop, FusionClient, GateClient, input_epoch
 from .validation import InputRejected
 
 
@@ -34,6 +36,7 @@ class AssuranceRuntime:
         self.control_loop: AssuranceControlLoop | None = None
         self.control_thread: threading.Thread | None = None
         self.latest_evidence: dict[str, Any] | None = None
+        self.latest_evidence_epoch: int | None = None
         self.lock = threading.RLock()
 
     def evaluate(self, candidate_id: str, governor_input: dict[str, Any]) -> dict[str, Any]:
@@ -49,6 +52,13 @@ class AssuranceRuntime:
     def record_control_event(self, event: dict[str, Any]) -> None:
         with self.lock:
             self.control_events.append(event)
+            if (
+                event.get("event_type") == "gate_epoch_synchronized"
+                or event.get("epoch_synchronized") is True
+            ):
+                epoch = int(event["epoch"])
+                self.latest_evidence = None
+                self.latest_evidence_epoch = epoch
             decision = event.get("decision")
             if isinstance(decision, dict):
                 self.decisions.append(decision)
@@ -57,15 +67,31 @@ class AssuranceRuntime:
         governor_input = evidence["governor_input"]
         decision = evidence["decision"]
         receipt = evidence["receipt"]
+        epoch = input_epoch(governor_input)
+        identities_match = (
+            decision.get("run_id") == governor_input.get("run_id")
+            and decision.get("branch_id") == governor_input.get("branch_id")
+            and decision.get("tick_index") == governor_input.get("tick_index")
+            and receipt.get("run_id") == governor_input.get("run_id")
+            and receipt.get("branch_id") == governor_input.get("branch_id")
+            and decision.get("input_snapshot_id")
+            == governor_input.get("snapshot", {}).get("snapshot_id")
+            and decision.get("proposal_id")
+            == governor_input.get("proposal", {}).get("command_id")
+            and receipt.get("decision_id") == decision.get("decision_id")
+        )
         if (
-            decision["input_snapshot_id"]
-            != governor_input["snapshot"]["snapshot_id"]
-            or decision["proposal_id"] != governor_input["proposal"]["command_id"]
-            or receipt["decision_id"] != decision["decision_id"]
+            receipt.get("accepted") is not True
+            or not identities_match
         ):
-            raise ValueError("joined evidence identity mismatch")
+            raise ValueError("joined evidence must have an accepted receipt and full identity match")
         with self.lock:
-            self.latest_evidence = evidence
+            if self.latest_evidence_epoch is not None and epoch < self.latest_evidence_epoch:
+                raise ValueError("joined evidence epoch is older than the active gate epoch")
+            if self.latest_evidence_epoch != epoch:
+                self.latest_evidence = None
+                self.latest_evidence_epoch = epoch
+            self.latest_evidence = copy.deepcopy(evidence)
 
     def start_control_loop(self, loop: AssuranceControlLoop) -> None:
         self.control_loop = loop
@@ -160,6 +186,11 @@ class AssuranceHTTPServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], runtime: AssuranceRuntime):
         self.runtime = runtime
         super().__init__(address, AssuranceHandler)
+
+    def server_bind(self) -> None:
+        TCPServer.server_bind(self)
+        self.server_name = str(self.server_address[0])
+        self.server_port = int(self.server_address[1])
 
 
 def _load_reference(*, path: str | None, url: str | None) -> NavigationReference:

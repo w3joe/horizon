@@ -12,8 +12,8 @@ recorded/synthetic/unavailable sources
 authoritative simulator truth -> evaluation-only scorer -> EvaluationRecord
 ```
 
-The current CPU launch starts the simulator, separate Decision AI fixture, collector, fusion, and console. Gate and assurance ports are stable assignments, but the launcher reports those components as unavailable until their owner packet is merged. It never substitutes success fixtures for an absent service.
+The current CPU launch starts the simulator, separate Decision AI fixture, collector, fusion, exclusive gate, assurance control loop, and console as separate processes. The gate retains its own watchdog if the supervisor or renderer stops. The launcher never restarts a failed complete run or substitutes a success fixture for an unavailable service.
 
 `packages/contracts/schema/horizon.schema.json` is authoritative. Generated Python and TypeScript declarations are convenience types. Contract records carry explicit lineage, monotonic validity, simulation time, uncertainty semantics, and provenance. A covariance coverage level does not imply a hard bound; a bounded set names its assumption separately.
 
-The console proxy exposes only the simulator's public routes under `/api`. It holds no plant, operator, or evaluation capability. Run-specific gate, evaluation, and operator capabilities are written outside Git with mode `0600` and are never printed.
+The console proxy exposes an explicit read-only route allowlist. Its narrow operator facade holds only simulator and gate operator capabilities so it can mediate declared local actions; it never exposes these tokens or holds the gate decision or evaluation capabilities. Run-specific capabilities are written outside Git with mode `0600` and are never printed.
