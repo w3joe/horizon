@@ -20,6 +20,11 @@ def verify_pairing(jobs: list[Job]) -> None:
     incomplete = [key for key, candidates in candidates_by_pair.items() if candidates != expected]
     if incomplete:
         raise ValueError(f"unpaired jobs for {len(incomplete)} episode/health cells")
+    identities = [
+        (job.key.pair_key, job.candidate_id, job.health_id, job.mode, job.split) for job in jobs
+    ]
+    if len(identities) != len(set(identities)):
+        raise ValueError("duplicate experiment jobs are not permitted")
 
 
 def run_fixture_jobs(jobs: list[Job], output_dir: str | Path) -> list[dict[str, Any]]:
@@ -31,12 +36,18 @@ def run_fixture_jobs(jobs: list[Job], output_dir: str | Path) -> list[dict[str, 
         raise ValueError("fixture smoke is a synthetic closed-loop plumbing check")
     verify_pairing(jobs)
     destination = Path(output_dir)
+    index_path = destination / "index.json"
+    if index_path.exists():
+        raise FileExistsError(f"refusing to overwrite existing output: {index_path}")
     records = []
     for job in jobs:
         record = score_closed_loop(run_fixture(job))
         records.append(record)
-        write_json(destination / f"{record['branch_id']}.evaluation.json", record)
-    write_json(destination / "index.json", {"records": records, "fixture_only": True})
+        record_path = destination / f"{record['branch_id']}.evaluation.json"
+        if record_path.exists():
+            raise FileExistsError(f"refusing to overwrite existing output: {record_path}")
+        write_json(record_path, record)
+    write_json(index_path, {"records": records, "fixture_only": True})
     return records
 
 
@@ -79,15 +90,52 @@ def run_adapter_jobs(
     run_id: str,
     max_simulation_time_s: float,
 ) -> list[dict[str, Any]]:
+    if not jobs:
+        raise ValueError("no jobs to run")
     verify_pairing(jobs)
     destination = Path(output_dir)
+    index_path = destination / "index.json"
+    if index_path.exists():
+        raise FileExistsError(f"refusing to overwrite existing output: {index_path}")
+    requests = [build_episode_request(job, run_id, max_simulation_time_s) for job in jobs]
+    collisions = [
+        path
+        for request in requests
+        for path in (
+            destination / f"{request['branch_id']}.json",
+            destination / f"{request['branch_id']}.assumption-audit.json",
+        )
+        if path.exists()
+    ]
+    if collisions:
+        raise FileExistsError(f"refusing to overwrite existing output: {collisions[0]}")
     records = []
-    for job in jobs:
-        request = build_episode_request(job, run_id, max_simulation_time_s)
+    adapter_provenances: list[str] = []
+    assumption_audits: list[dict[str, Any]] = []
+    for job, request in zip(jobs, requests):
         bundle = run_episode(request)
-        for field in ("branch_id", "candidate_id", "health_id", "scenario_id", "seed"):
+        for field in (
+            "run_id",
+            "episode_id",
+            "branch_id",
+            "experiment_mode",
+            "split",
+            "candidate_id",
+            "health_id",
+            "scenario_id",
+            "seed",
+            "observation_tape_hash",
+            "fault_schedule_hash",
+            "ai_policy_version",
+        ):
             if bundle.get(field) != request[field]:
                 raise ValueError(f"adapter response {field} does not match request")
+        if bundle.get("adapter_provenance") not in {
+            "production_integration",
+            "synthetic_fixture",
+        }:
+            raise ValueError("adapter response lacks explicit provenance")
+        adapter_provenances.append(str(bundle["adapter_provenance"]))
         if job.mode == "full_pipeline_closed_loop":
             record = score_closed_loop(bundle)
         else:
@@ -102,6 +150,29 @@ def run_adapter_jobs(
                 "seed": request["seed"],
             }
         records.append(record)
-        write_json(destination / f"{request['branch_id']}.json", record)
-    write_json(destination / "index.json", {"records": records, "fixture_only": False})
+        record_path = destination / f"{request['branch_id']}.json"
+        if record_path.exists():
+            raise FileExistsError(f"refusing to overwrite existing output: {record_path}")
+        write_json(record_path, record)
+        if "assumption_audit" in bundle:
+            audit = {
+                "run_id": request["run_id"],
+                "episode_id": request["episode_id"],
+                "branch_id": request["branch_id"],
+                "candidate_id": request["candidate_id"],
+                "health_id": request["health_id"],
+                **bundle["assumption_audit"],
+            }
+            assumption_audits.append(audit)
+            write_json(destination / f"{request['branch_id']}.assumption-audit.json", audit)
+    write_json(
+        index_path,
+        {
+            "records": records,
+            "fixture_only": all(
+                provenance == "synthetic_fixture" for provenance in adapter_provenances
+            ),
+            "assumption_audits": assumption_audits,
+        },
+    )
     return records

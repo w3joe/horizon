@@ -11,12 +11,13 @@
   "protected_reserve_usd": 20.0,
   "maximum_usable_budget_usd": 80.0,
   "maximum_concurrent_l4": 10,
-  "status": "not_launched",
-  "spent_usd": 0.0,
+  "status": "central_attempt_002_stopped_provider_billing_block_no_gpu_evidence",
+  "spent_usd": 0.00515378,
   "required_job_limits": ["wall_clock", "attempt_count", "container_count", "dollar_estimate"],
   "notes": [
     "GPU-only arithmetic gives at most 100 usable L4-hours, but every launch cap must use all-in GPU, CPU, and memory cost.",
     "Preserve the USD 20 reserve until the complete pipeline has run once.",
-    "No provisioning or spend is authorized by this manifest."
+    "The first centrally managed preflight stopped before producing GPU evidence; the reconciled charge was USD 0.00515378.",
+    "No additional provisioning or spend is authorized by this manifest."
   ]
 }

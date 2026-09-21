@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from experiment.harness.fixture import run_fixture
 from experiment.harness.manifests import expand_jobs, load_splits
-from experiment.harness.runner import build_episode_request, run_fixture_jobs
+from experiment.harness.runner import build_episode_request, run_adapter_jobs, run_fixture_jobs
 from experiment.io import load_json
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,3 +37,43 @@ def test_production_adapter_request_preserves_pair_identity() -> None:
         assert left[field] == right[field]
     assert left["candidate_id"] != right["candidate_id"]
     assert left["branch_id"] != right["branch_id"]
+
+
+def _fixture_adapter(job):
+    def run(request: dict) -> dict:
+        return {
+            **run_fixture(job),
+            **{key: value for key, value in request.items() if key != "max_simulation_time_s"},
+        }
+
+    return run
+
+
+def test_adapter_rejects_full_identity_mismatch(tmp_path: Path) -> None:
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+    job = expand_jobs(load_json(ROOT / "manifests" / "smoke-study.json"), splits)[0]
+
+    def wrong_tape(request: dict) -> dict:
+        bundle = _fixture_adapter(job)(request)
+        bundle["observation_tape_hash"] = "wrong"
+        return bundle
+
+    with pytest.raises(ValueError, match="observation_tape_hash"):
+        run_adapter_jobs([job], wrong_tape, tmp_path, "run-1", 1.0)
+
+
+def test_adapter_refuses_existing_record_before_execution(tmp_path: Path) -> None:
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+    job = expand_jobs(load_json(ROOT / "manifests" / "smoke-study.json"), splits)[0]
+    request = build_episode_request(job, "run-1", 1.0)
+    (tmp_path / f"{request['branch_id']}.json").write_text("occupied")
+    called = False
+
+    def adapter(_request: dict) -> dict:
+        nonlocal called
+        called = True
+        return {}
+
+    with pytest.raises(FileExistsError):
+        run_adapter_jobs([job], adapter, tmp_path, "run-1", 1.0)
+    assert called is False

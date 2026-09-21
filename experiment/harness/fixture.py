@@ -67,6 +67,9 @@ def run_fixture(job: Job) -> dict[str, Any]:
             "source_branch_id": f"fixture-unprotected-{job.key.seed}",
             "method": "offline_finite_library",
             "independent_of_candidate": True,
+            "hazard_id": "fixture-crossing-hazard",
+            "hazard_window_end_s": 2.0,
+            "window_end_reason": "first_unprotected_violation",
             "feasible_samples": [
                 {"simulation_time_s": 0.0, "feasible": True},
                 {"simulation_time_s": 1.0, "feasible": True},
@@ -74,6 +77,10 @@ def run_fixture(job: Job) -> dict[str, Any]:
                 {"simulation_time_s": 3.0, "feasible": False}
             ]
         },
+        "observation_tape_hash": job.key.observation_tape_hash,
+        "fault_schedule_hash": job.key.fault_schedule_hash,
+        "ai_policy_version": job.key.ai_policy_version,
+        "adapter_provenance": "synthetic_fixture",
     }
     if job.candidate_id == "STUB_PASS":
         common.update(

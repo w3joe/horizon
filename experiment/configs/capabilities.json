@@ -4,8 +4,8 @@
     {
       "id": "A1",
       "name": "rule_threshold_simplex",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_assurance.candidates:A1ThresholdSimplex",
       "alias_of": null,
       "required_input_representations": ["point_estimate"],
       "required_failure_behavior": ["stale_input_recovery", "deadline_recovery"]
@@ -22,8 +22,8 @@
     {
       "id": "A3",
       "name": "bounded_predictive_recoverability",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_assurance.candidates:A3PredictiveBounded",
       "alias_of": null,
       "required_input_representations": ["bounded_set", "bounded_error_assumption"],
       "required_failure_behavior": ["no_valid_continuation_minimum_risk", "deadline_recovery"]
@@ -48,45 +48,60 @@
       "required_failure_behavior": ["diagnostics_missing_policy", "independent_recovery", "final_command_revalidation"]
     }
   ],
+  "fixed_health_policies": [
+    {
+      "id": "H_FIXED",
+      "name": "controller_isolation_fixed_nominal_health",
+      "availability": "implemented",
+      "entrypoint": "experiment.harness.closed_loop:fixed_health_summary",
+      "alias_of": null,
+      "research_health_method": false
+    }
+  ],
   "health_methods": [
     {
       "id": "H0",
       "name": "output_confidence_entropy",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_neural_health.entrypoints:h0",
       "alias_of": null,
+      "risk_authorization_requires_frozen_artifact": true,
       "evidence": ["output_confidence", "entropy"]
     },
     {
       "id": "H1",
       "name": "conventional_input_temporal_geometry",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_neural_health.entrypoints:h1",
       "alias_of": null,
+      "risk_authorization_requires_frozen_artifact": true,
       "evidence": ["H0", "exposure", "blur", "occlusion", "frozen_frame", "timestamp", "horizon", "temporal_output"]
     },
     {
       "id": "H2",
       "name": "fixed_embedding_distance",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_neural_health.entrypoints:h2",
       "alias_of": null,
+      "risk_authorization_requires_frozen_artifact": true,
       "evidence": ["H1", "embedding_distance", "mahalanobis"]
     },
     {
       "id": "H3",
       "name": "pca_dictionary_reconstruction",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_neural_health.entrypoints:h3",
       "alias_of": null,
+      "risk_authorization_requires_frozen_artifact": true,
       "evidence": ["H1", "pca_reconstruction", "dictionary_reconstruction", "activation_novelty"]
     },
     {
       "id": "H4",
       "name": "sparse_autoencoder_and_interventions",
-      "availability": "missing",
-      "entrypoint": null,
+      "availability": "implemented",
+      "entrypoint": "horizon_neural_health.entrypoints:h4",
       "alias_of": null,
+      "risk_authorization_requires_frozen_artifact": true,
       "evidence": ["H1", "sparse_autoencoder_features", "offline_feature_interventions"]
     }
   ]

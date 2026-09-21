@@ -38,6 +38,14 @@ def test_calibration_selects_best_threshold_within_false_alarm_budget() -> None:
     assert result.detection_rate == 0.5
 
 
+def test_calibration_never_splits_tied_benign_scores() -> None:
+    result = calibrate_threshold(
+        [(0.5, False), (0.5, False), (0.9, True)], max_false_alarm_rate=0.25
+    )
+    assert result.threshold == 0.9
+    assert result.false_alarm_rate == 0.0
+
+
 def test_threshold_fitting_rejects_development_and_heldout() -> None:
     with pytest.raises(ValueError, match="calibration split"):
         require_calibration_split("development")
