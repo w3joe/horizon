@@ -4,7 +4,7 @@
   "title": "Valid snapshot with unsafe AI action",
   "private_evaluation_configuration": true,
   "physical_fixtures": [
-    "crossing_recoverable.json"
+    "static_obstacle_approach.json"
   ],
   "decision_ai_policies": [
     "unsafe_straight"
