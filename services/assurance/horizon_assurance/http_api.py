@@ -14,6 +14,7 @@ from urllib.request import urlopen
 
 from .candidates import Candidate, candidate
 from .configuration import AssuranceConfig, NavigationReference
+from .control_loop import AssuranceControlLoop, FusionClient, GateClient
 from .validation import InputRejected
 
 
@@ -26,9 +27,13 @@ class AssuranceRuntime:
         self.config = config or AssuranceConfig()
         self.candidates: dict[str, Candidate] = {
             candidate_id: candidate(candidate_id, reference, self.config)
-            for candidate_id in ("A1", "A3")
+            for candidate_id in ("A1", "A2", "A3", "A4", "A5")
         }
         self.decisions: deque[dict[str, Any]] = deque(maxlen=2_000)
+        self.control_events: deque[dict[str, Any]] = deque(maxlen=2_000)
+        self.control_loop: AssuranceControlLoop | None = None
+        self.control_thread: threading.Thread | None = None
+        self.latest_evidence: dict[str, Any] | None = None
         self.lock = threading.RLock()
 
     def evaluate(self, candidate_id: str, governor_input: dict[str, Any]) -> dict[str, Any]:
@@ -40,6 +45,40 @@ class AssuranceRuntime:
             decision = implementation.evaluate(governor_input)
             self.decisions.append(decision)
             return decision
+
+    def record_control_event(self, event: dict[str, Any]) -> None:
+        with self.lock:
+            self.control_events.append(event)
+            decision = event.get("decision")
+            if isinstance(decision, dict):
+                self.decisions.append(decision)
+
+    def record_evidence(self, evidence: dict[str, Any]) -> None:
+        governor_input = evidence["governor_input"]
+        decision = evidence["decision"]
+        receipt = evidence["receipt"]
+        if (
+            decision["input_snapshot_id"]
+            != governor_input["snapshot"]["snapshot_id"]
+            or decision["proposal_id"] != governor_input["proposal"]["command_id"]
+            or receipt["decision_id"] != decision["decision_id"]
+        ):
+            raise ValueError("joined evidence identity mismatch")
+        with self.lock:
+            self.latest_evidence = evidence
+
+    def start_control_loop(self, loop: AssuranceControlLoop) -> None:
+        self.control_loop = loop
+        self.control_thread = threading.Thread(
+            target=loop.run, name="assurance-control-loop", daemon=True
+        )
+        self.control_thread.start()
+
+    def stop(self) -> None:
+        if self.control_loop is not None:
+            self.control_loop.stop()
+        if self.control_thread is not None:
+            self.control_thread.join(timeout=1.0)
 
 
 class AssuranceHandler(BaseHTTPRequestHandler):
@@ -67,19 +106,33 @@ class AssuranceHandler(BaseHTTPRequestHandler):
                     "port": self.server.server_port,
                     "candidates": sorted(self.server.runtime.candidates),
                     "reference_version": self.server.runtime.reference.reference_version,
+                    "control_loop": self.server.runtime.control_loop is not None,
                 },
             )
             return
         if self.path.startswith("/v1/telemetry"):
             with self.server.runtime.lock:
                 decisions = list(self.server.runtime.decisions)
+                control_events = list(self.server.runtime.control_events)
             self._json(
                 HTTPStatus.OK,
                 {
                     "reference_version": self.server.runtime.reference.reference_version,
                     "decisions": decisions,
+                    "control_events": control_events,
                 },
             )
+            return
+        if self.path == "/v1/evidence/latest":
+            with self.server.runtime.lock:
+                evidence = self.server.runtime.latest_evidence
+            if evidence is None:
+                self._json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"error": "NOT_READY", "reason_codes": ["NO_ACCEPTED_GATE_RECEIPT"]},
+                )
+            else:
+                self._json(HTTPStatus.OK, evidence)
             return
         self._json(HTTPStatus.NOT_FOUND, {"error": "NOT_FOUND"})
 
@@ -128,17 +181,40 @@ def main() -> None:
     parser.add_argument(
         "--reference-url", default="http://127.0.0.1:8100/v1/reference?branch=protected"
     )
+    parser.add_argument("--fusion-url")
+    parser.add_argument("--gate-url", default="http://127.0.0.1:8102")
+    parser.add_argument(
+        "--candidate", choices=("A1", "A2", "A3", "A4", "A5"), default="A1"
+    )
+    parser.add_argument("--gate-decision-token-file")
+    parser.add_argument("--gate-operator-token-file")
     args = parser.parse_args()
     reference = _load_reference(path=args.reference_file, url=args.reference_url)
-    server = AssuranceHTTPServer((args.host, args.port), AssuranceRuntime(reference))
+    runtime = AssuranceRuntime(reference)
+    if args.fusion_url:
+        if not args.gate_decision_token_file or not args.gate_operator_token_file:
+            parser.error("fusion loop requires both gate token files")
+        loop = AssuranceControlLoop(
+            fusion=FusionClient(args.fusion_url),
+            gate=GateClient(
+                args.gate_url,
+                decision_token_file=args.gate_decision_token_file,
+                operator_token_file=args.gate_operator_token_file,
+            ),
+            candidate=runtime.candidates[args.candidate],
+            event_sink=runtime.record_control_event,
+            evidence_sink=runtime.record_evidence,
+        )
+        runtime.start_control_loop(loop)
+    server = AssuranceHTTPServer((args.host, args.port), runtime)
     try:
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         pass
     finally:
+        runtime.stop()
         server.server_close()
 
 
 if __name__ == "__main__":
     main()
-

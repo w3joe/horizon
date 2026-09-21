@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import math
+import time
 from typing import Any
 
-from .configuration import AssuranceConfig, NavigationReference
+from .configuration import AssuranceConfig, EngineeringBound, NavigationReference
+
+
+UNKNOWN_MARGIN = -1.0e9
 
 
 @dataclass(frozen=True)
@@ -15,6 +19,7 @@ class Assessment:
     reason_codes: tuple[str, ...]
     constraints: tuple[dict[str, Any], ...]
     minimum_margin_m: float
+    handoff_sample: dict[str, float] | None = None
 
     @property
     def safe(self) -> bool:
@@ -34,10 +39,18 @@ def _bounded_radius(
     *,
     hull_radius_m: float,
     heading_coupled_speed_mps: float = 0.0,
+    configured_bound: EngineeringBound | None = None,
 ) -> tuple[float, str | None]:
     bounded = uncertainty.get("bounded_error")
     if not isinstance(bounded, dict):
-        return math.inf, None
+        if configured_bound is None:
+            return math.inf, None
+        bounded = {
+            "position_radius_m": configured_bound.position_radius_m,
+            "heading_rad": configured_bound.heading_rad,
+            "speed_mps": configured_bound.speed_mps,
+            "assumption_id": configured_bound.assumption_id,
+        }
     position = bounded.get("position_radius_m")
     speed = bounded.get("speed_mps")
     if not isinstance(position, (int, float)) or not isinstance(speed, (int, float)):
@@ -93,6 +106,43 @@ class BoundedPredictiveChecker:
         self.reference = reference
         self.config = config or AssuranceConfig()
 
+    def declared_bound(
+        self,
+        uncertainty: dict[str, Any],
+        *,
+        ownship: bool,
+        source_ids: list[str] | tuple[str, ...] | None = None,
+    ) -> dict[str, Any] | None:
+        """Return an explicit hard bound without deriving one from covariance."""
+
+        bounded = uncertainty.get("bounded_error")
+        if isinstance(bounded, dict):
+            return dict(bounded)
+        configured = (
+            self.config.ownship_odd_bound if ownship else self.config.contact_odd_bound
+        )
+        if configured is None:
+            return None
+        if (
+            configured.eligible_model_versions
+            and self.reference.model_version not in configured.eligible_model_versions
+        ):
+            return None
+        if configured.required_source_prefixes:
+            normalized = tuple(str(item).lower() for item in (source_ids or ()))
+            if not any(
+                value.startswith(prefix.lower())
+                for value in normalized
+                for prefix in configured.required_source_prefixes
+            ):
+                return None
+        return {
+            "position_radius_m": configured.position_radius_m,
+            "heading_rad": configured.heading_rad,
+            "speed_mps": configured.speed_mps,
+            "assumption_id": configured.assumption_id,
+        }
+
     def _parameters(self, actuator: dict[str, Any]):
         from horizon_sim.model import Hull, PlantParameters
 
@@ -147,14 +197,10 @@ class BoundedPredictiveChecker:
         ownship: dict[str, Any] | None = None,
         actuator: dict[str, Any] | None = None,
         time_offset_s: float = 0.0,
+        capture_time_s: float | None = None,
+        host_deadline_ns: int | None = None,
     ) -> Assessment:
-        from horizon_sim.geometry import (
-            convex_hull,
-            hull_polygon,
-            signed_polygon_clearance,
-            signed_boundary_margin,
-            swept_hulls_intersect,
-        )
+        from horizon_sim.geometry import convex_hull, hull_polygon, signed_boundary_margin, signed_polygon_clearance
         from horizon_sim.model import Hull, VesselState
 
         horizon = self.config.prediction_horizon_s if horizon_s is None else horizon_s
@@ -174,7 +220,7 @@ class BoundedPredictiveChecker:
         if capability.get("status") == "invalid":
             reasons.append("ACTUATOR_CAPABILITY_INVALID")
         if reasons:
-            return Assessment("unsafe", tuple(reasons), (), -math.inf)
+            return Assessment("unsafe", tuple(reasons), (), UNKNOWN_MARGIN)
 
         requested_hull = (ownship or snapshot["ownship"])["hull"]
         own_hull = Hull(float(requested_hull["length_m"]), float(requested_hull["beam_m"]), self.config.ownship_draft_m)
@@ -188,6 +234,8 @@ class BoundedPredictiveChecker:
         own_uncertainty = (ownship or snapshot["ownship"])["uncertainty"]
         current_bound = snapshot["environment"]["current_bounded_error_ne_mps"]
         current_rate = math.hypot(float(current_bound[0]), float(current_bound[1]))
+        current_estimate = snapshot["environment"]["current_estimate_ne_mps"]
+        current_speed = math.hypot(float(current_estimate[0]), float(current_estimate[1]))
         collision_required, collision_assumption = _collision_margin_constraint(governor_input)
 
         boundary_constraints = [
@@ -197,6 +245,26 @@ class BoundedPredictiveChecker:
         unsupported = [item for item in governor_input["constraints"] if item["kind"] == "navigation_rule"]
         if unsupported:
             reasons.append("NAVIGATION_RULE_CHECK_UNAVAILABLE")
+
+        own_hull_radius = math.hypot(own_hull.length_m, own_hull.beam_m) / 2.0
+        final_elapsed = time_offset_s + horizon
+        final_own_radius, final_own_assumption = _bounded_radius(
+            own_uncertainty,
+            final_elapsed,
+            hull_radius_m=own_hull_radius,
+            heading_coupled_speed_mps=self.config.maximum_command_speed_mps,
+            configured_bound=(
+                self.config.ownship_odd_bound
+                if self.declared_bound(own_uncertainty, ownship=True) is not None
+                else None
+            ),
+        )
+        maximum_own_translation = (
+            self.config.maximum_command_speed_mps + current_speed
+        ) * horizon
+        initial_state = _state_from_sample(rollout[0])
+        initial_polygon = hull_polygon(initial_state, own_hull)
+        active_boundary_ids: set[str] = set()
 
         for constraint in boundary_constraints:
             ref = constraint.get("geometry_ref")
@@ -213,7 +281,20 @@ class BoundedPredictiveChecker:
                 "representation": "bounded",
                 "coverage": None,
             }
+            conservative_margin = (
+                signed_boundary_margin(initial_polygon, boundary)
+                - maximum_own_translation
+                - final_own_radius
+                - current_rate * final_elapsed
+                - float(constraint["minimum_margin"])
+            )
+            if conservative_margin >= 0.0:
+                evidence[constraint["constraint_id"]]["minimum_margin"] = conservative_margin
+                minimum_margin = min(minimum_margin, conservative_margin)
+            else:
+                active_boundary_ids.add(str(constraint["constraint_id"]))
 
+        active_depth_ids: set[str] = set()
         for constraint in depth_constraints:
             ref = str(constraint.get("geometry_ref"))
             if ref not in self.reference.depth_fields_m:
@@ -228,39 +309,134 @@ class BoundedPredictiveChecker:
                 "representation": "bounded",
                 "coverage": None,
             }
+            if self.reference.depth_zones.get(ref):
+                active_depth_ids.add(str(constraint["constraint_id"]))
+            else:
+                margin = (
+                    self.reference.depth_fields_m[ref]
+                    - self.reference.depth_uncertainty_m.get(ref, 0.0)
+                    - own_hull.draft_m
+                    - float(constraint["minimum_margin"])
+                )
+                evidence[constraint["constraint_id"]]["minimum_margin"] = margin
+                minimum_margin = min(minimum_margin, margin)
+                if margin < 0.0:
+                    reasons.append("DEPTH_MARGIN_VIOLATION")
 
         collision_evidence: dict[str, dict[str, Any]] = {}
-        previous_own = None
-        previous_own_polygon = None
-        previous_inflation = None
-        previous_contacts: dict[str, Any] = {}
-        stride = max(1, round(0.1 / self._parameters(capability).fixed_step_s))
+        active_contact_ids: set[str] = set()
+        own_position = snapshot["ownship"]["position_ne_m"]
+        for contact in snapshot["contacts"]:
+            contact_id = str(contact["contact_id"])
+            contact_hull_radius = math.hypot(
+                float(contact["hull"]["length_m"]), float(contact["hull"]["beam_m"])
+            ) / 2.0
+            contact_radius, contact_assumption = _bounded_radius(
+                contact["uncertainty"],
+                final_elapsed + float(contact["age_s"]),
+                hull_radius_m=contact_hull_radius,
+                configured_bound=(
+                    self.config.contact_odd_bound
+                    if self.declared_bound(
+                        contact["uncertainty"],
+                        ownship=False,
+                        source_ids=contact.get("source_ids"),
+                    )
+                    is not None
+                    else None
+                ),
+            )
+            distance = math.hypot(
+                float(contact["position_ne_m"][0]) - float(own_position[0]),
+                float(contact["position_ne_m"][1]) - float(own_position[1]),
+            )
+            contact_speed = math.hypot(
+                float(contact["velocity_ne_mps"][0]),
+                float(contact["velocity_ne_mps"][1]),
+            )
+            lower_bound = (
+                distance
+                - own_hull_radius
+                - contact_hull_radius
+                - collision_required
+                - final_own_radius
+                - contact_radius
+                - current_rate * final_elapsed
+                - maximum_own_translation
+                - contact_speed * horizon
+            )
+            constraint_id = f"collision:{contact_id}"
+            assumption = "+".join(
+                item
+                for item in (collision_assumption, final_own_assumption, contact_assumption)
+                if item
+            )
+            collision_evidence[constraint_id] = {
+                "constraint_id": constraint_id,
+                "kind": "collision",
+                "minimum_margin": lower_bound if lower_bound >= 0.0 else math.inf,
+                "units": "m",
+                "assumption_id": assumption,
+                "representation": "bounded",
+                "coverage": None,
+            }
+            if lower_bound >= 0.0:
+                minimum_margin = min(minimum_margin, lower_bound)
+            else:
+                active_contact_ids.add(contact_id)
+
+        parameters = self._parameters(capability)
+        stride = max(1, round(self.config.geometry_chunk_s / parameters.fixed_step_s))
         sample_indexes = list(range(0, len(rollout), stride))
         if sample_indexes[-1] != len(rollout) - 1:
             sample_indexes.append(len(rollout) - 1)
-        for sample_index in sample_indexes:
+        previous_index = 0
+        needs_geometry = bool(active_boundary_ids or active_depth_ids or active_contact_ids)
+        deadline_exhausted = False
+        for sample_index in sample_indexes if needs_geometry else ():
+            if host_deadline_ns is not None and time.monotonic_ns() >= host_deadline_ns:
+                reasons.append("PREDICTION_DEADLINE_EXHAUSTED")
+                deadline_exhausted = True
+                break
             sample = rollout[sample_index]
-            own_state = _state_from_sample(sample)
             elapsed = time_offset_s + sample["time_s"]
-            own_hull_radius = math.hypot(own_hull.length_m, own_hull.beam_m) / 2.0
             own_radius, own_assumption = _bounded_radius(
                 own_uncertainty,
                 elapsed,
                 hull_radius_m=own_hull_radius,
                 heading_coupled_speed_mps=self.config.maximum_command_speed_mps,
+                configured_bound=(
+                    self.config.ownship_odd_bound
+                    if self.declared_bound(own_uncertainty, ownship=True) is not None
+                    else None
+                ),
             )
             if not math.isfinite(own_radius):
                 reasons.append("OWNSHIP_BOUND_UNAVAILABLE")
                 own_radius = math.inf
             inflation = own_radius + current_rate * elapsed
-            own_polygon = hull_polygon(own_state, own_hull)
-            swept_own_polygon = (
-                convex_hull((*previous_own_polygon, *own_polygon))
-                if previous_own_polygon is not None
-                else own_polygon
+            chunk_states = [_state_from_sample(item) for item in rollout[previous_index : sample_index + 1]]
+            swept_own_polygon = convex_hull(
+                point
+                for state in chunk_states
+                for point in hull_polygon(state, own_hull)
             )
-            swept_inflation = max(inflation, previous_inflation or inflation)
+            chunk_start_elapsed = time_offset_s + rollout[previous_index]["time_s"]
+            start_radius, _ = _bounded_radius(
+                own_uncertainty,
+                chunk_start_elapsed,
+                hull_radius_m=own_hull_radius,
+                heading_coupled_speed_mps=self.config.maximum_command_speed_mps,
+                configured_bound=(
+                    self.config.ownship_odd_bound
+                    if self.declared_bound(own_uncertainty, ownship=True) is not None
+                    else None
+                ),
+            )
+            swept_inflation = max(inflation, start_radius + current_rate * chunk_start_elapsed)
             for constraint in depth_constraints:
+                if constraint["constraint_id"] not in active_depth_ids:
+                    continue
                 ref = str(constraint.get("geometry_ref"))
                 if ref not in self.reference.depth_fields_m:
                     continue
@@ -283,6 +459,8 @@ class BoundedPredictiveChecker:
                 if margin < 0.0:
                     reasons.append("DEPTH_MARGIN_VIOLATION")
             for constraint in boundary_constraints:
+                if constraint["constraint_id"] not in active_boundary_ids:
+                    continue
                 ref = constraint.get("geometry_ref")
                 boundary = self.reference.water_boundaries.get(str(ref))
                 if boundary is None:
@@ -299,7 +477,13 @@ class BoundedPredictiveChecker:
                     reasons.append("BOUNDARY_MARGIN_VIOLATION")
 
             for contact in snapshot["contacts"]:
+                if host_deadline_ns is not None and time.monotonic_ns() >= host_deadline_ns:
+                    reasons.append("PREDICTION_DEADLINE_EXHAUSTED")
+                    deadline_exhausted = True
+                    break
                 contact_id = str(contact["contact_id"])
+                if contact_id not in active_contact_ids:
+                    continue
                 velocity = contact["velocity_ne_mps"]
                 contact_position = contact["position_ne_m"]
                 contact_heading = contact.get("heading_rad")
@@ -321,48 +505,45 @@ class BoundedPredictiveChecker:
                     contact["uncertainty"],
                     elapsed + float(contact["age_s"]),
                     hull_radius_m=contact_hull_radius,
+                    configured_bound=(
+                        self.config.contact_odd_bound
+                        if self.declared_bound(
+                            contact["uncertainty"],
+                            ownship=False,
+                            source_ids=contact.get("source_ids"),
+                        )
+                        is not None
+                        else None
+                    ),
                 )
                 if not math.isfinite(contact_radius):
                     reasons.append("CONTACT_BOUND_UNAVAILABLE")
                     contact_radius = math.inf
-                clearance = signed_polygon_clearance(
-                    own_polygon, hull_polygon(contact_state, contact_hull)
+                start_elapsed = time_offset_s + rollout[previous_index]["time_s"]
+                contact_start = VesselState(
+                    north_m=float(contact_position[0]) + float(velocity[0]) * start_elapsed,
+                    east_m=float(contact_position[1]) + float(velocity[1]) * start_elapsed,
+                    heading_rad=float(contact_heading),
+                    surge_mps=math.hypot(float(velocity[0]), float(velocity[1])),
                 )
-                if previous_own is not None and contact_id in previous_contacts:
-                    if swept_hulls_intersect(
-                        previous_own,
-                        own_state,
-                        own_hull,
-                        previous_contacts[contact_id],
-                        contact_state,
-                        contact_hull,
-                    ):
-                        clearance = min(clearance, 0.0)
+                swept_contact_polygon = convex_hull(
+                    (*hull_polygon(contact_start, contact_hull), *hull_polygon(contact_state, contact_hull))
+                )
+                clearance = signed_polygon_clearance(swept_own_polygon, swept_contact_polygon)
                 margin = clearance - inflation - contact_radius - collision_required
                 constraint_id = f"collision:{contact_id}"
                 assumption = "+".join(
                     item for item in (collision_assumption, own_assumption, contact_assumption) if item
                 )
-                record = collision_evidence.setdefault(
-                    constraint_id,
-                    {
-                        "constraint_id": constraint_id,
-                        "kind": "collision",
-                        "minimum_margin": math.inf,
-                        "units": "m",
-                        "assumption_id": assumption,
-                        "representation": "bounded",
-                        "coverage": None,
-                    },
-                )
+                record = collision_evidence[constraint_id]
+                record["assumption_id"] = assumption
                 record["minimum_margin"] = min(record["minimum_margin"], margin)
                 minimum_margin = min(minimum_margin, margin)
                 if margin < 0.0:
                     reasons.append("COLLISION_MARGIN_VIOLATION")
-                previous_contacts[contact_id] = contact_state
-            previous_own = own_state
-            previous_own_polygon = own_polygon
-            previous_inflation = inflation
+            previous_index = sample_index
+            if deadline_exhausted:
+                break
 
         rudder_low, rudder_high = map(float, capability["rudder_limits_rad"])
         thrust_low, thrust_high = map(float, capability["thrust_limits"])
@@ -388,15 +569,44 @@ class BoundedPredictiveChecker:
         if actuator_margin < -1e-9:
             reasons.append("ACTUATOR_LIMIT_VIOLATION")
 
-        if math.isinf(minimum_margin) and minimum_margin > 0:
+        for record in (*evidence.values(), *collision_evidence.values()):
+            if not math.isfinite(float(record["minimum_margin"])):
+                record["minimum_margin"] = UNKNOWN_MARGIN
+        if not math.isfinite(minimum_margin) and minimum_margin > 0:
             minimum_margin = 1.0e9
+        elif not math.isfinite(minimum_margin):
+            minimum_margin = UNKNOWN_MARGIN
         unique_reasons = tuple(dict.fromkeys(reasons))
-        unknown_prefixes = ("BOUNDARY_REFERENCE_", "DEPTH_REFERENCE_", "OWNSHIP_BOUND_", "CONTACT_BOUND_", "NAVIGATION_RULE_")
+        unknown_prefixes = (
+            "BOUNDARY_REFERENCE_",
+            "DEPTH_REFERENCE_",
+            "OWNSHIP_BOUND_",
+            "CONTACT_BOUND_",
+            "NAVIGATION_RULE_",
+            "PREDICTION_DEADLINE_",
+        )
         status = "unknown" if any(reason.startswith(unknown_prefixes) for reason in unique_reasons) else ("unsafe" if unique_reasons else "safe")
-        return Assessment(status, unique_reasons, tuple((*evidence.values(), *collision_evidence.values())), minimum_margin)
+        handoff_sample = None
+        if capture_time_s is not None:
+            index = min(
+                len(rollout) - 1,
+                max(0, round(capture_time_s / parameters.fixed_step_s)),
+            )
+            handoff_sample = rollout[index]
+        return Assessment(
+            status,
+            unique_reasons,
+            tuple((*evidence.values(), *collision_evidence.values())),
+            minimum_margin,
+            handoff_sample,
+        )
 
-    def recovery_from_current(self, governor_input: dict[str, Any]) -> RecoverySelection:
-        return self.recovery_from_state(governor_input)
+    def recovery_from_current(
+        self, governor_input: dict[str, Any], *, host_deadline_ns: int | None = None
+    ) -> RecoverySelection:
+        return self.recovery_from_state(
+            governor_input, host_deadline_ns=host_deadline_ns
+        )
 
     def recovery_after_prefix(
         self,
@@ -404,6 +614,7 @@ class BoundedPredictiveChecker:
         prefix_command: dict[str, Any],
         *,
         prefix_s: float,
+        host_deadline_ns: int | None = None,
     ) -> RecoverySelection:
         prefix = self.rollout(governor_input, prefix_command, horizon_s=prefix_s)
         terminal = prefix[-1]
@@ -420,7 +631,39 @@ class BoundedPredictiveChecker:
         actuator["rudder_rad"] = terminal["rudder_rad"]
         actuator["thrust_fraction"] = terminal["thrust_fraction"]
         return self.recovery_from_state(
-            governor_input, ownship=ownship, actuator=actuator, time_offset_s=prefix_s
+            governor_input,
+            ownship=ownship,
+            actuator=actuator,
+            time_offset_s=prefix_s,
+            host_deadline_ns=host_deadline_ns,
+        )
+
+    def recovery_from_handoff(
+        self,
+        governor_input: dict[str, Any],
+        handoff: dict[str, float],
+        *,
+        time_offset_s: float,
+        host_deadline_ns: int | None = None,
+    ) -> RecoverySelection:
+        original = governor_input["snapshot"]["ownship"]
+        ownship = {
+            "position_ne_m": [handoff["north_m"], handoff["east_m"]],
+            "heading_rad": handoff["heading_rad"],
+            "velocity_body_mps": [handoff["surge_mps"], handoff["sway_mps"]],
+            "yaw_rate_rps": handoff["yaw_rate_rps"],
+            "hull": original["hull"],
+            "uncertainty": original["uncertainty"],
+        }
+        actuator = dict(governor_input["snapshot"]["actuator"])
+        actuator["rudder_rad"] = handoff["rudder_rad"]
+        actuator["thrust_fraction"] = handoff["thrust_fraction"]
+        return self.recovery_from_state(
+            governor_input,
+            ownship=ownship,
+            actuator=actuator,
+            time_offset_s=time_offset_s,
+            host_deadline_ns=host_deadline_ns,
         )
 
     def recovery_from_state(
@@ -430,21 +673,46 @@ class BoundedPredictiveChecker:
         ownship: dict[str, Any] | None = None,
         actuator: dict[str, Any] | None = None,
         time_offset_s: float = 0.0,
+        host_deadline_ns: int | None = None,
     ) -> RecoverySelection:
         state = ownship or governor_input["snapshot"]["ownship"]
         requested_options = {
             str(item["recovery_id"]): item for item in governor_input["recovery_options"]
             if int(item["valid_until_monotonic_ns"]) > int(governor_input["monotonic_time_ns"])
         }
+        generic_options = [
+            item
+            for key, item in requested_options.items()
+            if "independent-recovery-controller" in key.lower()
+        ]
         best_any: tuple[dict[str, float], dict[str, Any], Assessment] | None = None
         for turn in self.config.recovery_turns_rad:
             direction = "straight" if turn == 0.0 else ("starboard" if turn > 0.0 else "port")
             for speed in self.config.recovery_speeds_mps:
+                if host_deadline_ns is not None and time.monotonic_ns() >= host_deadline_ns:
+                    fallback = {
+                        "heading_rad": float(state["heading_rad"]),
+                        "speed_mps": min(
+                            1.0,
+                            max(0.0, float(state["velocity_body_mps"][0])),
+                        ),
+                    }
+                    return RecoverySelection(
+                        fallback,
+                        None,
+                        Assessment(
+                            "unknown",
+                            ("PREDICTION_DEADLINE_EXHAUSTED",),
+                            (),
+                            UNKNOWN_MARGIN,
+                        ),
+                    )
                 recovery_id = f"finite-{direction}-{round(abs(math.degrees(turn)))}-{speed:g}mps-v1"
                 compatible = [
                     item for key, item in requested_options.items()
                     if direction in key.lower() or (turn == 0.0 and ("stop" in key.lower() or "slow" in key.lower()))
                 ]
+                compatible.extend(generic_options)
                 if requested_options and not compatible:
                     continue
                 option_source = compatible[0] if compatible else {
@@ -471,6 +739,7 @@ class BoundedPredictiveChecker:
                     ownship=ownship,
                     actuator=actuator,
                     time_offset_s=time_offset_s,
+                    host_deadline_ns=host_deadline_ns,
                 )
                 item = (command, option, assessment)
                 if best_any is None or assessment.minimum_margin_m > best_any[2].minimum_margin_m:
@@ -485,6 +754,11 @@ class BoundedPredictiveChecker:
             return RecoverySelection(
                 None,
                 None,
-                Assessment("unknown", ("NO_RECOVERY_OPTION_AVAILABLE",), (), -math.inf),
+                Assessment(
+                    "unknown",
+                    ("NO_RECOVERY_OPTION_AVAILABLE",),
+                    (),
+                    UNKNOWN_MARGIN,
+                ),
             )
         return RecoverySelection(*selected)

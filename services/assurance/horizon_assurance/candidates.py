@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import copy
 import math
 import time
 from typing import Any
 
 from .configuration import AssuranceConfig, NavigationReference
-from .predictive import BoundedPredictiveChecker, RecoverySelection
+from .predictive import (
+    BoundedPredictiveChecker,
+    RecoverySelection,
+    UNKNOWN_MARGIN,
+    _collision_margin_constraint,
+)
 from .validation import InputRejected, validate_governor_input
 
 
@@ -92,6 +98,68 @@ class Candidate(ABC):
         if sequence <= self._last_sequence.get(key, -1):
             raise InputRejected(("NON_MONOTONIC_PROPOSAL_SEQUENCE",))
         self._last_sequence[key] = sequence
+
+    def _health_mode(self, governor_input: dict[str, Any]) -> tuple[str, list[str]]:
+        """Interpret health for the configured operating mode.
+
+        Aggregate healthy remains compatible with older producers. When the
+        aggregate is degraded or unknown, the named required source groups
+        decide whether this mode can continue; optional unavailable groups do
+        not force a recovery.
+        """
+
+        health = governor_input["health"]
+        summaries = {
+            str(item["source_id"]): item for item in health.get("summaries", [])
+        }
+        required = self.config.required_health_sources
+        reasons = [f"OPERATING_MODE_{self.config.operating_mode_id}"]
+        worst = "healthy"
+        now = int(governor_input["monotonic_time_ns"])
+        for source in required:
+            summary = summaries.get(source)
+            if summary is None:
+                reasons.append(f"REQUIRED_HEALTH_SOURCE_MISSING:{source}")
+                worst = "invalid"
+                continue
+            status = str(summary["status"])
+            capability = str(summary.get("capability", "unavailable"))
+            valid_until = int(summary["valid_until_monotonic_ns"])
+            if status in {"invalid", "unknown"} or capability == "unavailable" or valid_until < now:
+                reasons.append(f"REQUIRED_HEALTH_SOURCE_UNAVAILABLE:{source}")
+                worst = "invalid"
+            elif status == "degraded" and worst != "invalid":
+                reasons.append(f"REQUIRED_HEALTH_SOURCE_DEGRADED:{source}")
+                worst = "degraded"
+        optional_unavailable = sorted(
+            source
+            for source in self.config.optional_health_sources
+            if source in summaries
+            and (
+                summaries[source]["status"] in {"invalid", "unknown"}
+                or summaries[source].get("capability") == "unavailable"
+            )
+        )
+        if optional_unavailable:
+            reasons.append("OPTIONAL_HEALTH_SOURCES_UNAVAILABLE")
+        return worst, reasons
+
+    def _work_deadline_ns(
+        self, governor_input: dict[str, Any], start_host_ns: int
+    ) -> int:
+        logical_budget_ns = max(
+            0,
+            int(governor_input["decision_deadline_monotonic_ns"])
+            - int(governor_input["monotonic_time_ns"]),
+        )
+        reserved_budget_ns = max(
+            1_000_000,
+            logical_budget_ns - round(self.config.gate_dispatch_reserve_s * 1e9),
+        )
+        return start_host_ns + min(
+            round(self.config.candidate_work_budget_s * 1e9),
+            reserved_budget_ns,
+        )
 
     @abstractmethod
     def evaluate(self, governor_input: dict[str, Any]) -> dict[str, Any]:
@@ -188,12 +256,35 @@ class A1ThresholdSimplex(Candidate):
             contact_radius = math.hypot(
                 float(contact["hull"]["length_m"]), float(contact["hull"]["beam_m"])
             ) / 2.0
-            own_bound = own["uncertainty"].get("bounded_error") or {}
-            contact_bound = contact["uncertainty"].get("bounded_error") or {}
-            uncertainty = float(own_bound.get("position_radius_m", math.inf)) + float(
-                contact_bound.get("position_radius_m", math.inf)
+            own_bound = self.checker.declared_bound(own["uncertainty"], ownship=True)
+            contact_bound = self.checker.declared_bound(
+                contact["uncertainty"],
+                ownship=False,
+                source_ids=contact.get("source_ids"),
             )
-            margin = math.hypot(*closest) - own_hull_radius - contact_radius - uncertainty - required
+            if own_bound is None or contact_bound is None:
+                uncertainty = 0.0
+                margin = UNKNOWN_MARGIN
+                reasons.append("DECLARED_ERROR_BOUND_UNAVAILABLE")
+                assumption_id = "explicit-bound-unavailable"
+            else:
+                uncertainty = float(own_bound["position_radius_m"]) + float(
+                    contact_bound["position_radius_m"]
+                )
+                margin = (
+                    math.hypot(*closest)
+                    - own_hull_radius
+                    - contact_radius
+                    - uncertainty
+                    - required
+                )
+                assumption_id = "+".join(
+                    (
+                        str(own_bound["assumption_id"]),
+                        str(contact_bound["assumption_id"]),
+                        "constant-velocity-cpa-v1",
+                    )
+                )
             minimum = min(minimum, margin)
             records.append(
                 {
@@ -201,7 +292,7 @@ class A1ThresholdSimplex(Candidate):
                     "kind": "collision",
                     "minimum_margin": margin,
                     "units": "m",
-                    "assumption_id": "constant-velocity-cpa-bounded-position-v1",
+                    "assumption_id": assumption_id,
                     "representation": "deterministic",
                     "coverage": None,
                 }
@@ -214,13 +305,15 @@ class A1ThresholdSimplex(Candidate):
         records.extend(immediate.constraints)
         minimum = min(minimum, immediate.minimum_margin_m)
         reasons.extend(immediate.reason_codes)
-        if governor_input["health"]["status"] in {"invalid", "unknown"}:
-            reasons.append("INPUT_HEALTH_NOT_ASSURED")
+        health_status, health_reasons = self._health_mode(governor_input)
+        if health_status != "healthy":
+            reasons.extend((*health_reasons, "REQUIRED_INPUT_HEALTH_NOT_ASSURED"))
         return tuple(records), list(dict.fromkeys(reasons)), minimum
 
     def evaluate(self, governor_input: dict[str, Any]) -> dict[str, Any]:
         start = time.monotonic_ns()
         self._validate(governor_input)
+        work_deadline = self._work_deadline_ns(governor_input, start)
         evidence, reasons, minimum = self._threshold_evidence(governor_input)
         key = (str(governor_input["run_id"]), str(governor_input["branch_id"]))
         tick = int(governor_input["tick_index"])
@@ -233,7 +326,9 @@ class A1ThresholdSimplex(Candidate):
             return _recovery_decision(
                 governor_input,
                 self,
-                self.checker.recovery_from_current(governor_input),
+                self.checker.recovery_from_current(
+                    governor_input, host_deadline_ns=work_deadline
+                ),
                 start_ns=start,
                 reasons=reasons,
                 prior_constraints=evidence,
@@ -260,12 +355,26 @@ class A3PredictiveBounded(Candidate):
     def evaluate(self, governor_input: dict[str, Any]) -> dict[str, Any]:
         start = time.monotonic_ns()
         self._validate(governor_input)
+        work_deadline = self._work_deadline_ns(governor_input, start)
         proposal = governor_input["proposal"]["command"]
-        assessment = self.checker.assess(governor_input, proposal)
+        health_status, health_reasons = self._health_mode(governor_input)
+        assessment = self.checker.assess(
+            governor_input,
+            proposal,
+            capture_time_s=self.recovery_handoff_s,
+            host_deadline_ns=work_deadline,
+        )
         reasons = list(assessment.reason_codes)
-        if assessment.safe:
-            continuation = self.checker.recovery_after_prefix(
-                governor_input, proposal, prefix_s=self.recovery_handoff_s
+        if health_status != "healthy":
+            reasons.extend((*health_reasons, "REQUIRED_INPUT_HEALTH_NOT_ASSURED"))
+        if assessment.safe and health_status == "healthy":
+            if assessment.handoff_sample is None:
+                raise RuntimeError("predictive checker did not return requested handoff state")
+            continuation = self.checker.recovery_from_handoff(
+                governor_input,
+                assessment.handoff_sample,
+                time_offset_s=self.recovery_handoff_s,
+                host_deadline_ns=work_deadline,
             )
             if continuation.assessment.safe:
                 return _decision(
@@ -282,7 +391,9 @@ class A3PredictiveBounded(Candidate):
                 )
             reasons.extend(continuation.assessment.reason_codes)
             reasons.append("RECOVERY_CONTINUATION_LOST")
-        selection = self.checker.recovery_from_current(governor_input)
+        selection = self.checker.recovery_from_current(
+            governor_input, host_deadline_ns=work_deadline
+        )
         return _recovery_decision(
             governor_input,
             self,
@@ -293,9 +404,462 @@ class A3PredictiveBounded(Candidate):
         )
 
 
+class A2ProbabilisticRisk(Candidate):
+    candidate_id = "A2"
+    candidate_version = "a2-probabilistic-risk-simplex-v1"
+    probability_threshold = 0.01
+    prediction_horizon_s = 20.0
+    sample_period_s = 1.0
+
+    @staticmethod
+    def _position_variance(uncertainty: dict[str, Any]) -> tuple[float, float] | None:
+        covariance = uncertainty.get("covariance")
+        coverage = uncertainty.get("covariance_coverage")
+        if not isinstance(covariance, dict) or not isinstance(coverage, (int, float)):
+            return None
+        if covariance.get("rows") != 2 or covariance.get("cols") != 2:
+            return None
+        data = covariance.get("data")
+        if not isinstance(data, list) or len(data) != 4:
+            return None
+        north = float(data[0])
+        east = float(data[3])
+        if north < 0.0 or east < 0.0 or not all(math.isfinite(v) for v in (north, east)):
+            return None
+        return north, east
+
+    def _risk_evidence(
+        self, governor_input: dict[str, Any]
+    ) -> tuple[tuple[dict[str, Any], ...], list[str]]:
+        snapshot = governor_input["snapshot"]
+        own = snapshot["ownship"]
+        own_variance = self._position_variance(own["uncertainty"])
+        reasons: list[str] = []
+        if own_variance is None:
+            reasons.append("OWNSHIP_COVARIANCE_UNAVAILABLE")
+        rollout = self.checker.rollout(
+            governor_input,
+            governor_input["proposal"]["command"],
+            horizon_s=self.prediction_horizon_s,
+        )
+        collision_required, assumption = _collision_margin_constraint(governor_input)
+        records: list[dict[str, Any]] = []
+        step_s = self.checker._parameters(snapshot["actuator"]).fixed_step_s
+        stride = max(1, round(self.sample_period_s / step_s))
+        for contact in snapshot["contacts"]:
+            contact_variance = self._position_variance(contact["uncertainty"])
+            if contact_variance is None or own_variance is None:
+                reasons.append("CONTACT_COVARIANCE_UNAVAILABLE")
+                continue
+            hull_radius = (
+                math.hypot(float(own["hull"]["length_m"]), float(own["hull"]["beam_m"]))
+                + math.hypot(
+                    float(contact["hull"]["length_m"]),
+                    float(contact["hull"]["beam_m"]),
+                )
+            ) / 2.0
+            collision_radius = hull_radius + collision_required
+            maximum_probability = 0.0
+            minimum_margin = math.inf
+            for sample in rollout[::stride]:
+                elapsed = sample["time_s"]
+                contact_n = float(contact["position_ne_m"][0]) + float(
+                    contact["velocity_ne_mps"][0]
+                ) * elapsed
+                contact_e = float(contact["position_ne_m"][1]) + float(
+                    contact["velocity_ne_mps"][1]
+                ) * elapsed
+                delta_n = contact_n - sample["north_m"]
+                delta_e = contact_e - sample["east_m"]
+                distance = math.hypot(delta_n, delta_e)
+                if distance > 1e-9:
+                    unit_n, unit_e = delta_n / distance, delta_e / distance
+                else:
+                    unit_n, unit_e = 1.0, 0.0
+                variance = (
+                    unit_n * unit_n * (own_variance[0] + contact_variance[0])
+                    + unit_e * unit_e * (own_variance[1] + contact_variance[1])
+                )
+                sigma = max(1e-6, math.sqrt(variance))
+                probability = 0.5 * math.erfc((distance - collision_radius) / (sigma * math.sqrt(2.0)))
+                maximum_probability = max(maximum_probability, probability)
+                minimum_margin = min(minimum_margin, self.probability_threshold - probability)
+            records.append(
+                {
+                    "constraint_id": f"probabilistic-collision:{contact['contact_id']}",
+                    "kind": "collision",
+                    "minimum_margin": minimum_margin,
+                    "units": "probability",
+                    "assumption_id": f"{assumption}+gaussian-relative-position-v1",
+                    "representation": "probabilistic",
+                    "coverage": min(
+                        float(own["uncertainty"]["covariance_coverage"]),
+                        float(contact["uncertainty"]["covariance_coverage"]),
+                    ),
+                }
+            )
+            if maximum_probability >= self.probability_threshold:
+                reasons.append("COLLISION_PROBABILITY_THRESHOLD_CROSSED")
+        immediate = self.checker.assess(
+            governor_input, governor_input["proposal"]["command"], horizon_s=0.0
+        )
+        records.extend(immediate.constraints)
+        reasons.extend(immediate.reason_codes)
+        return tuple(records), list(dict.fromkeys(reasons))
+
+    def evaluate(self, governor_input: dict[str, Any]) -> dict[str, Any]:
+        start = time.monotonic_ns()
+        self._validate(governor_input)
+        work_deadline = self._work_deadline_ns(governor_input, start)
+        evidence, reasons = self._risk_evidence(governor_input)
+        health_status, health_reasons = self._health_mode(governor_input)
+        if health_status != "healthy":
+            reasons.extend((*health_reasons, "REQUIRED_INPUT_HEALTH_NOT_ASSURED"))
+        if reasons:
+            return _recovery_decision(
+                governor_input,
+                self,
+                self.checker.recovery_from_current(
+                    governor_input, host_deadline_ns=work_deadline
+                ),
+                start_ns=start,
+                reasons=reasons,
+                prior_constraints=evidence,
+            )
+        return _decision(
+            governor_input,
+            candidate_id=self.candidate_id,
+            candidate_version=self.candidate_version,
+            action="pass",
+            authority="autonomy",
+            command=dict(governor_input["proposal"]["command"]),
+            reasons=["PROJECTED_GAUSSIAN_RISK_BELOW_THRESHOLD"],
+            constraints=evidence,
+            recovery=None,
+            start_host_ns=start,
+        )
+
+
+class A4RobustBarrierFilter(Candidate):
+    candidate_id = "A4"
+    candidate_version = "a4-provisional-kinematic-filter-full-plant-validation-v1"
+    alpha = 0.20
+    speed_polygon_sides = 16
+
+    @staticmethod
+    def _feasible(point: tuple[float, float], inequalities: list[tuple[float, float, float]]) -> bool:
+        return all(a * point[0] + b * point[1] <= bound + 1e-9 for a, b, bound in inequalities)
+
+    def _filter_command(
+        self, governor_input: dict[str, Any], requested: dict[str, Any]
+    ) -> tuple[dict[str, float] | None, float, float, str]:
+        snapshot = governor_input["snapshot"]
+        current = snapshot["environment"]["current_estimate_ne_mps"]
+        desired = (
+            float(requested["speed_mps"]) * math.cos(float(requested["heading_rad"])),
+            float(requested["speed_mps"]) * math.sin(float(requested["heading_rad"])),
+        )
+        inequalities: list[tuple[float, float, float]] = []
+        vmax = self.config.maximum_command_speed_mps
+        polygon_bound = vmax * math.cos(math.pi / self.speed_polygon_sides)
+        for index in range(self.speed_polygon_sides):
+            angle = 2.0 * math.pi * index / self.speed_polygon_sides
+            inequalities.append((math.cos(angle), math.sin(angle), polygon_bound))
+        own = snapshot["ownship"]
+        collision_required, _ = _collision_margin_constraint(governor_input)
+        for contact in snapshot["contacts"]:
+            r_n = float(own["position_ne_m"][0]) - float(contact["position_ne_m"][0])
+            r_e = float(own["position_ne_m"][1]) - float(contact["position_ne_m"][1])
+            own_bound = self.checker.declared_bound(own["uncertainty"], ownship=True)
+            contact_bound = self.checker.declared_bound(
+                contact["uncertainty"],
+                ownship=False,
+                source_ids=contact.get("source_ids"),
+            )
+            if not isinstance(own_bound, dict) or not isinstance(contact_bound, dict):
+                return None, UNKNOWN_MARGIN, UNKNOWN_MARGIN, "invalid"
+            radius = (
+                math.hypot(float(own["hull"]["length_m"]), float(own["hull"]["beam_m"]))
+                + math.hypot(
+                    float(contact["hull"]["length_m"]),
+                    float(contact["hull"]["beam_m"]),
+                )
+            ) / 2.0
+            radius += collision_required + float(own_bound["position_radius_m"]) + float(
+                contact_bound["position_radius_m"]
+            )
+            h = r_n * r_n + r_e * r_e - radius * radius
+            robust = 2.0 * math.hypot(r_n, r_e) * (
+                float(own_bound["speed_mps"]) + float(contact_bound["speed_mps"])
+            )
+            contact_v = contact["velocity_ne_mps"]
+            bound = (
+                -2.0 * r_n * float(contact_v[0])
+                - 2.0 * r_e * float(contact_v[1])
+                + 2.0 * r_n * float(current[0])
+                + 2.0 * r_e * float(current[1])
+                + self.alpha * h
+                - robust
+            )
+            inequalities.append((-2.0 * r_n, -2.0 * r_e, bound))
+
+        candidates = [desired]
+        for a, b, bound in inequalities:
+            norm_sq = a * a + b * b
+            if norm_sq <= 1e-12:
+                continue
+            violation = a * desired[0] + b * desired[1] - bound
+            candidates.append(
+                (desired[0] - max(0.0, violation) * a / norm_sq, desired[1] - max(0.0, violation) * b / norm_sq)
+            )
+        for first, left in enumerate(inequalities):
+            for right in inequalities[first + 1 :]:
+                determinant = left[0] * right[1] - left[1] * right[0]
+                if abs(determinant) <= 1e-12:
+                    continue
+                candidates.append(
+                    (
+                        (left[2] * right[1] - left[1] * right[2]) / determinant,
+                        (left[0] * right[2] - left[2] * right[0]) / determinant,
+                    )
+                )
+        feasible = [point for point in candidates if self._feasible(point, inequalities)]
+        if not feasible:
+            return None, UNKNOWN_MARGIN, UNKNOWN_MARGIN, "infeasible"
+        solution = min(
+            feasible,
+            key=lambda point: (point[0] - desired[0]) ** 2 + (point[1] - desired[1]) ** 2,
+        )
+        primal = max(
+            0.0,
+            max(a * solution[0] + b * solution[1] - bound for a, b, bound in inequalities),
+        )
+        speed = math.hypot(*solution)
+        command = {
+            "heading_rad": math.atan2(solution[1], solution[0]) if speed > 1e-9 else float(requested["heading_rad"]),
+            "speed_mps": speed,
+        }
+        difference = (solution[0] - desired[0], solution[1] - desired[1])
+        active = [
+            item
+            for item in inequalities
+            if abs(item[0] * solution[0] + item[1] * solution[1] - item[2]) <= 1e-6
+        ]
+        dual = math.hypot(*difference)
+        if dual <= 1e-9:
+            dual = 0.0
+        for a, b, _ in active:
+            norm_sq = a * a + b * b
+            multiplier = -(difference[0] * a + difference[1] * b) / norm_sq
+            if multiplier >= -1e-9:
+                dual = min(
+                    dual,
+                    math.hypot(
+                        difference[0] + max(0.0, multiplier) * a,
+                        difference[1] + max(0.0, multiplier) * b,
+                    ),
+                )
+        for first, left in enumerate(active):
+            for right in active[first + 1 :]:
+                determinant = left[0] * right[1] - right[0] * left[1]
+                if abs(determinant) <= 1e-12:
+                    continue
+                lambda_left = (
+                    -difference[0] * right[1] + right[0] * difference[1]
+                ) / determinant
+                lambda_right = (
+                    -left[0] * difference[1] + difference[0] * left[1]
+                ) / determinant
+                if lambda_left >= -1e-9 and lambda_right >= -1e-9:
+                    dual = min(
+                        dual,
+                        math.hypot(
+                            difference[0]
+                            + max(0.0, lambda_left) * left[0]
+                            + max(0.0, lambda_right) * right[0],
+                            difference[1]
+                            + max(0.0, lambda_left) * left[1]
+                            + max(0.0, lambda_right) * right[1],
+                        ),
+                    )
+        return command, primal, dual, "optimal"
+
+    def evaluate(self, governor_input: dict[str, Any]) -> dict[str, Any]:
+        start = time.monotonic_ns()
+        self._validate(governor_input)
+        work_deadline = self._work_deadline_ns(governor_input, start)
+        health_status, health_reasons = self._health_mode(governor_input)
+        requested = governor_input["proposal"]["command"]
+        filtered, primal, dual, status = self._filter_command(governor_input, requested)
+        solver = {"status": status, "primal_residual": None, "dual_residual": None}
+        if status == "optimal":
+            solver = {"status": "optimal", "primal_residual": primal, "dual_residual": dual}
+        if filtered is not None and health_status == "healthy":
+            assessment = self.checker.assess(
+                governor_input, filtered, host_deadline_ns=work_deadline
+            )
+            changed = (
+                abs(filtered["heading_rad"] - float(requested["heading_rad"])) > 1e-6
+                or abs(filtered["speed_mps"] - float(requested["speed_mps"])) > 1e-6
+            )
+            if assessment.safe:
+                return _decision(
+                    governor_input,
+                    candidate_id=self.candidate_id,
+                    candidate_version=self.candidate_version,
+                    action="modify" if changed else "pass",
+                    authority="filtered_autonomy" if changed else "autonomy",
+                    command=filtered,
+                    reasons=[
+                        "PROVISIONAL_KINEMATIC_FILTER_APPLIED"
+                        if changed
+                        else "KINEMATIC_FILTER_CONSTRAINTS_CLEAR",
+                        "FINAL_3DOF_ROLLOUT_VALIDATED",
+                    ],
+                    constraints=assessment.constraints,
+                    recovery=None,
+                    start_host_ns=start,
+                    solver=solver,
+                )
+        selection = self.checker.recovery_from_current(
+            governor_input, host_deadline_ns=work_deadline
+        )
+        reasons = ["BARRIER_FILTER_INFEASIBLE_OR_ROLLOUT_UNSAFE"]
+        if health_status != "healthy":
+            reasons.extend((*health_reasons, "REQUIRED_INPUT_HEALTH_NOT_ASSURED"))
+        return _recovery_decision(
+            governor_input,
+            self,
+            selection,
+            start_ns=start,
+            reasons=reasons,
+            prior_constraints=(),
+        )
+
+
+class A5EvidenceHybrid(Candidate):
+    candidate_id = "A5"
+    candidate_version = "a5-evidence-conditioned-predictive-filter-hybrid-v1"
+    recovery_handoff_s = 4.0
+
+    def _condition(
+        self, governor_input: dict[str, Any]
+    ) -> tuple[dict[str, Any], float, str, list[str]]:
+        conditioned = copy.deepcopy(governor_input)
+        status, health_reasons = self._health_mode(conditioned)
+        factors = {
+            "healthy": (1.0, 6.0),
+            "degraded": (1.5, 3.0),
+            "invalid": (math.inf, 1.0),
+        }
+        factor, speed_cap = factors[status]
+        reasons = [*health_reasons, f"EVIDENCE_POLICY_{status.upper()}"]
+        if not math.isfinite(factor):
+            return (
+                conditioned,
+                speed_cap,
+                status,
+                [*reasons, "INVALID_EVIDENCE_REQUIRES_RECOVERY"],
+            )
+        vessels = [
+            (conditioned["snapshot"]["ownship"], True),
+            *((item, False) for item in conditioned["snapshot"]["contacts"]),
+        ]
+        for vessel, is_ownship in vessels:
+            bounded = self.checker.declared_bound(
+                vessel["uncertainty"],
+                ownship=is_ownship,
+                source_ids=vessel.get("source_ids"),
+            )
+            if bounded is None:
+                return (
+                    conditioned,
+                    speed_cap,
+                    "invalid",
+                    [*reasons, "DECLARED_ERROR_BOUND_UNAVAILABLE"],
+                )
+            bounded["position_radius_m"] = float(bounded["position_radius_m"]) * factor
+            bounded["heading_rad"] = float(bounded["heading_rad"]) * factor
+            bounded["speed_mps"] = float(bounded["speed_mps"]) * factor
+            bounded["assumption_id"] = (
+                f"{bounded['assumption_id']}+{self.config.operating_mode_id}"
+                f"+health-factor-{factor:g}"
+            )
+            vessel["uncertainty"]["bounded_error"] = bounded
+        return conditioned, speed_cap, status, reasons
+
+    def evaluate(self, governor_input: dict[str, Any]) -> dict[str, Any]:
+        start = time.monotonic_ns()
+        self._validate(governor_input)
+        work_deadline = self._work_deadline_ns(governor_input, start)
+        conditioned, speed_cap, health_status, reasons = self._condition(governor_input)
+        requested = dict(conditioned["proposal"]["command"])
+        requested["speed_mps"] = min(float(requested["speed_mps"]), speed_cap)
+        if health_status != "invalid":
+            assessment = self.checker.assess(
+                conditioned,
+                requested,
+                capture_time_s=self.recovery_handoff_s,
+                host_deadline_ns=work_deadline,
+            )
+            if assessment.safe and assessment.handoff_sample is not None:
+                continuation = self.checker.recovery_from_handoff(
+                    conditioned,
+                    assessment.handoff_sample,
+                    time_offset_s=self.recovery_handoff_s,
+                    host_deadline_ns=work_deadline,
+                )
+                if continuation.assessment.safe:
+                    changed = requested != governor_input["proposal"]["command"]
+                    return _decision(
+                        governor_input,
+                        candidate_id=self.candidate_id,
+                        candidate_version=self.candidate_version,
+                        action="modify" if changed else "pass",
+                        authority="filtered_autonomy" if changed else "autonomy",
+                        command=requested,
+                        reasons=[*reasons, "PREDICTIVE_RECOVERABILITY_VALIDATED"],
+                        constraints=tuple((*assessment.constraints, *continuation.assessment.constraints)),
+                        recovery=continuation.option,
+                        start_host_ns=start,
+                    )
+            barrier = A4RobustBarrierFilter(self.reference, self.config)
+            filtered, primal, dual, status = barrier._filter_command(conditioned, requested)
+            if filtered is not None and status == "optimal":
+                final = self.checker.assess(
+                    conditioned, filtered, host_deadline_ns=work_deadline
+                )
+                if final.safe:
+                    return _decision(
+                        governor_input,
+                        candidate_id=self.candidate_id,
+                        candidate_version=self.candidate_version,
+                        action="modify",
+                        authority="filtered_autonomy",
+                        command=filtered,
+                        reasons=[*reasons, "BARRIER_CORRECTION_FULL_MODEL_VALIDATED"],
+                        constraints=final.constraints,
+                        recovery=None,
+                        start_host_ns=start,
+                        solver={"status": "optimal", "primal_residual": primal, "dual_residual": dual},
+                    )
+        return _recovery_decision(
+            governor_input,
+            self,
+            self.checker.recovery_from_current(
+                conditioned, host_deadline_ns=work_deadline
+            ),
+            start_ns=start,
+            reasons=reasons,
+        )
+
+
 _CANDIDATES: dict[str, type[Candidate]] = {
     "A1": A1ThresholdSimplex,
+    "A2": A2ProbabilisticRisk,
     "A3": A3PredictiveBounded,
+    "A4": A4RobustBarrierFilter,
+    "A5": A5EvidenceHybrid,
 }
 
 
