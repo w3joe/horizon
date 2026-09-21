@@ -518,7 +518,28 @@
         "position_ne_m": { "$ref": "#/$defs/Vector2" },
         "heading_rad": { "type": "number" },
         "speed_mps": { "type": "number", "minimum": 0 },
+        "heave_down_m": { "type": "number", "description": "Display-only modeled heave, positive down from the nominal waterline." },
+        "attitude_rp_rad": { "$ref": "#/$defs/Vector2", "description": "Display-only roll and pitch; body x forward, y starboard, z down. Positive roll starboard-down, positive pitch bow-up." },
+        "angular_velocity_rp_rps": { "$ref": "#/$defs/Vector2" },
         "hull": { "$ref": "#/$defs/Hull" }
+      }
+    },
+    "MarineEnvironment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_version", "sea_state_id", "config_sha256", "current_ne_mps", "wind_ne_mps", "surface_elevation_m", "wave_direction_rad", "significant_wave_height_m", "peak_period_s", "qualification", "reason_codes"],
+      "properties": {
+        "model_version": { "type": "string", "minLength": 1 },
+        "sea_state_id": { "type": "string", "minLength": 1 },
+        "config_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "current_ne_mps": { "$ref": "#/$defs/Vector2" },
+        "wind_ne_mps": { "$ref": "#/$defs/Vector2" },
+        "surface_elevation_m": { "type": "number", "description": "Modeled water elevation, positive upward." },
+        "wave_direction_rad": { "type": "number", "description": "Wave travel direction clockwise from north." },
+        "significant_wave_height_m": { "type": "number", "minimum": 0 },
+        "peak_period_s": { "type": "number", "exclusiveMinimum": 0 },
+        "qualification": { "type": "string", "enum": ["characterized", "degraded", "unknown"] },
+        "reason_codes": { "type": "array", "items": { "type": "string" } }
       }
     },
     "SimulationSnapshot": {
@@ -536,6 +557,7 @@
         "frame": { "const": "NED" },
         "ownship": { "$ref": "#/$defs/VesselSnapshot" },
         "traffic": { "type": "array", "items": { "$ref": "#/$defs/VesselSnapshot" } },
+        "marine_environment": { "$ref": "#/$defs/MarineEnvironment" },
         "active_command_id": { "type": ["string", "null"] },
         "display_only": { "const": true }
       }

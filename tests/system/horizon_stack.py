@@ -186,6 +186,7 @@ class HorizonStack:
         paths = [
             ROOT,
             ROOT / "packages/contracts/python",
+            ROOT / "packages/marine-environment",
             ROOT / "services/simulator",
             ROOT / "services/collector",
             ROOT / "services/fusion",

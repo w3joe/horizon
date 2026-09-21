@@ -626,6 +626,7 @@ def main() -> int:
         [
             str(ROOT),
             str(ROOT / "packages/contracts/python"),
+            str(ROOT / "packages/marine-environment"),
             str(ROOT / "services/simulator"),
             str(ROOT / "services/collector"),
             str(ROOT / "services/fusion"),

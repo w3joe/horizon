@@ -351,7 +351,24 @@ export interface VesselSnapshot {
   position_ne_m: Vector2;
   heading_rad: number;
   speed_mps: number;
+  heave_down_m?: number;
+  attitude_rp_rad?: Vector2;
+  angular_velocity_rp_rps?: Vector2;
   hull: Hull;
+}
+
+export interface MarineEnvironment {
+  model_version: string;
+  sea_state_id: string;
+  config_sha256: string;
+  current_ne_mps: Vector2;
+  wind_ne_mps: Vector2;
+  surface_elevation_m: number;
+  wave_direction_rad: number;
+  significant_wave_height_m: number;
+  peak_period_s: number;
+  qualification: "characterized" | "degraded" | "unknown";
+  reason_codes: Array<string>;
 }
 
 export interface SimulationSnapshot {
@@ -365,6 +382,7 @@ export interface SimulationSnapshot {
   frame: "NED";
   ownship: VesselSnapshot;
   traffic: Array<VesselSnapshot>;
+  marine_environment?: MarineEnvironment;
   active_command_id: string | null;
   display_only: true;
 }

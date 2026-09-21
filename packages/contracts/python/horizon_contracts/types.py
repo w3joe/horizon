@@ -324,7 +324,23 @@ class VesselSnapshot(TypedDict):
     position_ne_m: Vector2
     heading_rad: float
     speed_mps: float
+    heave_down_m: NotRequired[float]
+    attitude_rp_rad: NotRequired[Vector2]
+    angular_velocity_rp_rps: NotRequired[Vector2]
     hull: Hull
+
+class MarineEnvironment(TypedDict):
+    model_version: str
+    sea_state_id: str
+    config_sha256: str
+    current_ne_mps: Vector2
+    wind_ne_mps: Vector2
+    surface_elevation_m: float
+    wave_direction_rad: float
+    significant_wave_height_m: float
+    peak_period_s: float
+    qualification: Literal['characterized', 'degraded', 'unknown']
+    reason_codes: list[str]
 
 class SimulationSnapshot(TypedDict):
     contract_type: Literal['SimulationSnapshot']
@@ -337,6 +353,7 @@ class SimulationSnapshot(TypedDict):
     frame: Literal['NED']
     ownship: VesselSnapshot
     traffic: list[VesselSnapshot]
+    marine_environment: NotRequired[MarineEnvironment]
     active_command_id: str | None
     display_only: Literal[True]
 
