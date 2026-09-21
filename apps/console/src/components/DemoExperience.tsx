@@ -125,7 +125,7 @@ function storyFor(replay: DemoReplay): DemoStoryStage[] {
       timeS: firstProposal,
       eyebrow: "Autonomy request",
       title: "Unsafe course requested",
-      summary: "The external decision AI requests the recorded straight-ahead policy. Both branches begin from the same scenario and proposal source.",
+      summary: "The external decision AI requests the recorded course. Both branches start from the same physical state; the comparison branch holds the straight-ahead command.",
     },
     {
       id: "takeover",
@@ -173,7 +173,7 @@ function CurrentEvidence({ replay, frame, timeS }: { replay: DemoReplay; frame: 
     <section className="demo-evidence" aria-label="Current replay evidence">
       <div className="demo-evidence-heading">
         <span>At {formatTime(timeS)}</span>
-        <strong>{interventionReached ? "Protected recovery is active" : proposal ? "Autonomy is proposing a command" : "Waiting for the first proposal"}</strong>
+        <strong>{interventionReached ? "Safety takeover recorded" : proposal ? "Autonomy is proposing a command" : "Waiting for the first proposal"}</strong>
       </div>
       <div className="command-compare">
         <article className="command-card proposed-command">
@@ -184,8 +184,7 @@ function CurrentEvidence({ replay, frame, timeS }: { replay: DemoReplay; frame: 
         <div className="command-arrow" aria-hidden="true">→</div>
         <article className="command-card issued-command">
           <span>Actually issued</span>
-          <strong>{formatHeading(protectedCommand?.heading_rad ?? receipt?.actual_command?.heading_rad)} <small>heading</small></strong>
-          <b>{formatSpeed(protectedCommand?.speed_mps ?? receipt?.actual_command?.speed_mps)}</b>
+          {protectedCommand ? <><strong>{formatHeading(protectedCommand.heading_rad)} <small>heading</small></strong><b>{formatSpeed(protectedCommand.speed_mps)}</b></> : <strong className="command-unmatched">No command match at this sample</strong>}
         </article>
       </div>
       <div className="reason-line">
@@ -223,7 +222,7 @@ export function DemoExperience() {
   if (demo.loadState === "loading-catalog" || demo.loadState === "loading-replay") {
     return (
       <main className="demo-shell demo-state-page">
-        <div className="demo-state-card" role="status"><span className="recorded-badge">Recorded simulation</span><div className="loading-orbit" /><h1>Preparing the safety replay</h1><p>Loading the signed run manifest and synchronized branch record.</p></div>
+        <div className="demo-state-card" role="status"><span className="recorded-badge">Recorded simulation</span><div className="loading-orbit" /><h1>Preparing the safety replay</h1><p>Loading the recorded run manifest and synchronized branch record.</p></div>
       </main>
     );
   }
@@ -274,7 +273,7 @@ export function DemoExperience() {
         </header>
         <div className="branch-grid">
           <article className="branch-view protected">
-            <header><div><i /><span>RTA protected</span></div><strong>{interventionReached ? "Safety authority active" : "Monitoring"}</strong></header>
+            <header><div><i /><span>RTA protected</span></div><strong>{interventionReached ? "Safety takeover recorded" : "Monitoring"}</strong></header>
             <div className="demo-scene-wrap"><DemoScene snapshot={protectedSnapshot} trail={protectedTrail} timeS={demo.timeS} branch="protected" cameraMode={cameraMode} collision={protectedCollision} intervention={interventionReached} playing={demo.playing} /></div>
             <footer><span>Recorded outcome · actual protected plant</span><b>{replay.outcome_summary.protected.min_hull_clearance_m.toFixed(1)} m minimum clearance</b></footer>
           </article>
