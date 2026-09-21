@@ -40,6 +40,17 @@ def runs_root() -> Path:
     return repository.parent / "horizon-runs"
 
 
+def data_root() -> Path:
+    configured = os.environ.get("HORIZON_DATA_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    common = subprocess.check_output(
+        ["git", "rev-parse", "--git-common-dir"], cwd=ROOT, text=True
+    ).strip()
+    repository = (ROOT / common).resolve().parent
+    return repository.parent / "horizon-data"
+
+
 def assert_port_free(host: str, port: int) -> None:
     with socket.socket() as probe:
         probe.settimeout(0.2)
@@ -172,6 +183,16 @@ def main() -> int:
             "--host", host, "--port", str(ports["console"]),
             "--dist", str(ROOT / "apps/console/dist"),
             "--upstream", f"http://{host}:{ports['simulator']}",
+            "--collector-url", f"http://{host}:{ports['collector']}",
+            "--fusion-url", f"http://{host}:{ports['fusion']}",
+            "--assurance-url", f"http://{host}:{ports['assurance']}",
+            "--gate-url", f"http://{host}:{ports['gate']}",
+            "--artifact-output", str(
+                runs_root() / "compute" / "local-wasrt-sequence-085"
+            ),
+            "--artifact-source", str(
+                data_root() / "sources/WaSR-T/examples/sequence"
+            ),
         ],
     }
     env = os.environ.copy()
