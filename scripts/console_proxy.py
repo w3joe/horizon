@@ -221,7 +221,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             with self.operator_lock:
                 response_status, payload = self._operator_action(action, body)
             self._json(response_status, payload)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, TimeoutError, URLError, ValueError, json.JSONDecodeError) as exc:
             self._json(
                 HTTPStatus.BAD_REQUEST,
                 {"error": "BAD_OPERATOR_REQUEST", "detail": str(exc)},
@@ -327,7 +327,14 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 }
         if action == "fault":
             fault_id = body.get("fault_id")
-            if body.get("enabled", True) and fault_id not in self.declared_fault_ids:
+            enabled = body.get("enabled", True)
+            if not isinstance(enabled, bool):
+                return HTTPStatus.BAD_REQUEST, {
+                    "accepted": False,
+                    "action": action,
+                    "error": "FAULT_ENABLED_MUST_BE_BOOLEAN",
+                }
+            if not isinstance(fault_id, str) or fault_id not in self.declared_fault_ids:
                 return HTTPStatus.UNPROCESSABLE_ENTITY, {
                     "accepted": False,
                     "action": action,
@@ -335,8 +342,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     "declared_fault_ids": sorted(self.declared_fault_ids),
                 }
             upstream_body = {
-                "enabled": bool(body.get("enabled", True)),
-                "fault_id": str(fault_id or ""),
+                "enabled": enabled,
+                "fault_id": fault_id,
             }
         else:
             upstream_body = {}
@@ -347,7 +354,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 body={},
                 token_file=self.simulator_operator_token_file,
             )
-            if pause_status != 200:
+            if pause_status != 200 or pause.get("accepted") is False:
                 return HTTPStatus.BAD_GATEWAY, {
                     "accepted": False,
                     "action": action,
@@ -361,8 +368,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 token_file=self.simulator_operator_token_file,
             )
             control = self._operator_status()
-            return HTTPStatus.ACCEPTED if status == 200 else HTTPStatus.BAD_GATEWAY, {
-                "accepted": status == 200,
+            reset_accepted = status == 200 and result.get("accepted") is not False
+            return HTTPStatus.ACCEPTED if reset_accepted else HTTPStatus.BAD_GATEWAY, {
+                "accepted": reset_accepted,
                 "action": action,
                 "state": "reset_in_progress",
                 "plant": result,
@@ -381,8 +389,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         status, result = self._json_upstream(
             service, path, body=upstream_body, token_file=token_file
         )
+        accepted = status == 200 and result.get("accepted") is not False
         return HTTPStatus(status), {
-            "accepted": status == 200,
+            "accepted": accepted,
             "action": action,
             "upstream": result,
             "control": self._operator_status(),

@@ -167,3 +167,35 @@ def test_resume_is_blocked_until_gate_epoch_and_recovery_are_ready(monkeypatch) 
     status, payload = handler._operator_action("resume", {})
     assert status == HTTPStatus.CONFLICT
     assert payload["error"] == "STARTUP_RECOVERY_NOT_READY"
+
+
+def test_fault_requires_declared_id_and_boolean_enabled() -> None:
+    handler = object.__new__(ConsoleHandler)
+    handler.declared_fault_ids = frozenset({"slow-rudder"})
+    status, payload = handler._operator_action(
+        "fault", {"fault_id": "slow-rudder", "enabled": "false"}
+    )
+    assert status == HTTPStatus.BAD_REQUEST
+    assert payload["error"] == "FAULT_ENABLED_MUST_BE_BOOLEAN"
+    status, payload = handler._operator_action(
+        "fault", {"fault_id": "undeclared", "enabled": False}
+    )
+    assert status == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert payload["error"] == "FAULT_NOT_DECLARED"
+
+
+def test_gate_acknowledgement_preserves_upstream_rejection(monkeypatch) -> None:
+    handler = object.__new__(ConsoleHandler)
+    monkeypatch.setattr(
+        ConsoleHandler,
+        "_json_upstream",
+        lambda self, service, path, **kwargs: (200, {"accepted": False}),
+    )
+    monkeypatch.setattr(
+        ConsoleHandler,
+        "_operator_status",
+        lambda self: {"resume_permitted": False, "state": "unavailable"},
+    )
+    status, payload = handler._operator_action("acknowledge", {})
+    assert status == HTTPStatus.OK
+    assert payload["accepted"] is False
