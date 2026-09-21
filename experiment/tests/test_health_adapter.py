@@ -352,9 +352,12 @@ def test_non_authorizing_declared_capability_fails_closed(tmp_path, capability) 
     assert result["authorization"]["reason"] == "declared_capability_not_authorizing"
 
 
-def test_oversized_artifact_cannot_authorize(tmp_path) -> None:
+def test_oversized_artifact_cannot_authorize(tmp_path, monkeypatch) -> None:
+    from experiment.harness import health_adapter
+
+    monkeypatch.setattr(health_adapter, "_MAX_ARTIFACT_BYTES", 32)
     path = tmp_path / "calibration.json"
-    path.write_bytes(b" " * (2 * 1024 * 1024 + 1))
+    path.write_bytes(b" " * 33)
 
     def entrypoint(request: dict) -> dict:
         raw = _raw(request)

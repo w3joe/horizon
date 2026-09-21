@@ -10,7 +10,7 @@ MaSTr1325 is restricted to training/nominal-reference use because the provided W
 
 ## Comparisons
 
-Stage 1 compares A1-A5 with health policy fixed. Controller isolation uses a frozen evidence bundle containing all required uncertainty representations. Full-pipeline comparison starts from identical raw observation/fault inputs and attributes the combined fusion/controller outcome to the pipeline, not solely to the controller.
+Stage 1 compares A1-A5 with the experimental neural-health policy fixed. Controller isolation uses a frozen evidence bundle containing all required uncertainty representations. Full-pipeline comparison still consumes live source-health and expiry state; `H_FIXED` cannot turn a stale or unavailable required source healthy. Full-pipeline branches start from identical raw observation/fault inputs and attribute the combined fusion/controller outcome to the pipeline, not solely to the controller.
 
 Stage 2 compares H0-H4 on the selected one or two controllers. Each health method receives an independently calibrated threshold at the same false-alarm target. H2-H4 can change only the frozen perception-health contract and cannot issue steering commands.
 

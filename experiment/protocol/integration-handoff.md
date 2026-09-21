@@ -26,20 +26,32 @@ The protected candidate branch may not define its own last recovery boundary bec
 
 ## A04 candidate registration
 
-A1 and A3 are registered and exercised through `experiment.harness.closed_loop:run_assured_episode`.
+A1-A5 are registered and exercised through `experiment.harness.closed_loop:run_assured_episode`.
 The adapter sends delivered public observations through A05 `CollectorStore` and `FusionEngine`,
-uses the explicit simulator monotonic clock, holds the decision budget at 40 ms, and routes commands
-through the independent gate. Truth enters only after the episode for scoring and assumption audits.
-A05 covariance is not converted into a hard bounded set. A2/A4/A5 remain
-unsupported until distinct implementations land. A4 additionally supplies the barrier geometry,
-control abstraction, relative degree, convexity conditions, disturbance/sampled-data margins,
-solver tolerances, and final 3-DOF rollout validation. A finite rollout checker is engineering
-validation, not exact reachability or a formal barrier guarantee.
+uses one injected monotonic clock across simulator, decision fixture, and gate, holds the decision
+budget at 40 ms, and routes commands through the independent gate. The offline cache refresh is
+synchronous, workers are joined at episode exit, and a 1,000-episode lifecycle test checks that no
+worker remains. Truth enters only after the episode for scoring and assumption audits.
+
+A05 covariance is not converted into a hard bounded set. The ODD audit compares private truth to
+the exact configured `EngineeringBound` IDs and values. Fused track IDs are not treated as oracle
+vessel IDs; a separately labeled truth-only positional association supplies matches and leaves
+unresolved contacts explicit. A2's probability threshold is analytic and uncalibrated. A4 is a
+provisional kinematic velocity-space QP whose issued command still requires final 3-DOF rollout
+validation. A finite rollout checker is engineering validation, not exact reachability or a formal
+barrier guarantee.
+
+Operational authority is reconstructed after control from the truth frame's exact active command
+ID and the accepted protected-command envelope. The simulator writer channel remains a separate
+field. Startup passive and receiver-expiry fallback periods are preserved rather than inheriting
+the authority of the latest receipt. Recovery feasibility remains null until an independent
+evaluator supplies a reference.
 
 ## A07 health registration
 
 H0-H4 entrypoints are registered separately through a deliberate adapter. Missing artifacts,
-non-finite evidence, identity mismatches, or risk bands without validated artifact lineage yield
+non-finite evidence, malformed nested values, identity mismatches, expiries beyond the request, or
+risk bands without validated artifact lineage yield
 `unknown` and cannot authorize camera free-space. Threshold fitting accepts only calibration data.
 Health methods use independently chosen thresholds at a matched false-alarm target, then remain
 frozen on held-out data. MaSTr1325 is nominal/reference material, not held-out evidence for

@@ -12,7 +12,8 @@ _MAX_JSON_NODES = 10_000
 _MAX_MAPPING_ITEMS = 1_024
 _MAX_LIST_ITEMS = 4_096
 _MAX_REASON_CODES = 64
-_MAX_ARTIFACT_BYTES = 2 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
+_MAX_ARTIFACT_JSON_NODES = 500_000
 _DECLARED_CAPABILITIES = {
     "unavailable",
     "output_only",
@@ -152,7 +153,9 @@ def _artifact(path: str | None) -> dict[str, Any] | None:
         if len(contents) > _MAX_ARTIFACT_BYTES:
             return None
         value = json.loads(contents)
-        if type(value) is not dict or not _finite(value):
+        if type(value) is not dict or not _finite(
+            value, _budget=[_MAX_ARTIFACT_JSON_NODES]
+        ):
             return None
         body = {key: item for key, item in value.items() if key != "artifact_hash"}
         digest = hashlib.sha256(

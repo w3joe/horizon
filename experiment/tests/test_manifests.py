@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from experiment.errors import ManifestError, MissingImplementationError
+from experiment.errors import ManifestError
 from experiment.harness.manifests import (
     EpisodeKey,
     expand_jobs,
@@ -18,15 +18,14 @@ from experiment.io import load_json
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_capability_matrix_is_complete_and_missing_methods_fail() -> None:
+def test_capability_matrix_registers_all_distinct_methods() -> None:
     capabilities = load_capabilities(ROOT / "configs" / "capabilities.json")
-    require_implemented(capabilities, ["A1", "A3"], ["H0", "H1", "H2", "H3", "H4"])
-    with pytest.raises(MissingImplementationError, match="A2 is declared missing"):
-        require_implemented(capabilities, ["A2"], [])
-    with pytest.raises(MissingImplementationError, match="A4 is declared missing"):
-        require_implemented(capabilities, ["A4"], [])
-    with pytest.raises(MissingImplementationError, match="A5 is declared missing"):
-        require_implemented(capabilities, ["A5"], [])
+    require_implemented(
+        capabilities,
+        ["A1", "A2", "A3", "A4", "A5"],
+        ["H0", "H1", "H2", "H3", "H4"],
+    )
+    assert all(item["alias_of"] is None for item in capabilities["architectures"])
 
 
 def test_split_manifest_has_disjoint_frozen_heldout_plan() -> None:

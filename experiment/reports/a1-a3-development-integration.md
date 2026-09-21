@@ -1,5 +1,11 @@
 # A1/A3 development integration check
 
+This report preserves an earlier A1/A3 run. The current harness has since moved to one injected
+clock, synchronous recovery refresh, A1-A5 registration, live source-health consumption, and exact
+receiver command-lineage auditing. The historical measurements below were not recomputed or
+silently upgraded. It contains no evidence for A4; the separate A1-A5 harness packet pins its
+provisional A4 implementation by exact candidate version.
+
 Run `a02-a05-dev-integration-20260921` exercised A1 and A3 through the A05 collector and fusion
 constructors, public simulator observations, the shared GovernorInput/AssuranceDecision contracts,
 and the independent actuator gate. It used two development scenarios, one seed each, with a 0.45 s
