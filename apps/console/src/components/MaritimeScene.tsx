@@ -28,7 +28,7 @@ function Ocean() {
   });
   return (
     <mesh rotation-x={-Math.PI / 2} position-y={-0.45} geometry={geometry} receiveShadow>
-      <meshPhysicalMaterial color="#0a4052" roughness={0.28} metalness={0.12} clearcoat={0.8} clearcoatRoughness={0.25} transparent opacity={0.96} />
+      <meshPhysicalMaterial color="#0d5267" roughness={0.3} metalness={0.08} clearcoat={0.86} clearcoatRoughness={0.22} transparent opacity={0.98} />
     </mesh>
   );
 }
@@ -40,7 +40,7 @@ function CameraAim({ mode }: { mode: CameraMode }) {
       camera.position.set(0, 180, -45);
       camera.up.set(0, 0, -1);
     } else {
-      camera.position.set(86, 62, 72);
+      camera.position.set(67, 50, 42);
       camera.up.set(0, 1, 0);
     }
     camera.lookAt(0, 0, -45);
@@ -158,11 +158,11 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
   const contactPosition = contact ? nedToScene({ north: contact.position_ne_m[0], east: contact.position_ne_m[1] }, 0.28) : [0, 0, 0] as [number, number, number];
   return (
     <>
-      <color attach="background" args={["#071a24"]} />
-      <fog attach="fog" args={["#0a2330", 115, 270]} />
-      <ambientLight intensity={0.6} color="#91b5c0" />
-      <directionalLight position={[60, 90, 25]} intensity={2.4} color="#ffe2b1" castShadow shadow-mapSize={[2048, 2048]} />
-      <hemisphereLight args={["#7db8cb", "#08151c", 0.9]} />
+      <color attach="background" args={["#0a2633"]} />
+      <fog attach="fog" args={["#0c2c38", 135, 285]} />
+      <ambientLight intensity={1.05} color="#a8cfda" />
+      <directionalLight position={[60, 90, 25]} intensity={3.2} color="#ffe5ba" castShadow shadow-mapSize={[2048, 2048]} />
+      <hemisphereLight args={["#a0d7e5", "#10242b", 1.35]} />
       <Ocean />
       <Harbor />
       {packet.proposedPath.length > 1 && <PathLine points={packet.proposedPath} color="#fb6674" dashed />}
@@ -191,7 +191,7 @@ export function MaritimeScene(props: Props) {
         shadows
         dpr={[1, 1.6]}
         orthographic={isTactical}
-        camera={isTactical ? { position: [0, 180, 0.01], zoom: 3.3, near: 0.1, far: 500 } : { position: [93, 78, 96], fov: 42, near: 0.1, far: 600 }}
+        camera={isTactical ? { position: [0, 180, 0.01], zoom: 4, near: 0.1, far: 500 } : { position: [67, 50, 42], fov: 40, near: 0.1, far: 600 }}
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
       >
         <CameraAim mode={props.cameraMode} />
