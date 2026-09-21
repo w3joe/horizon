@@ -87,24 +87,59 @@ class GateClient:
             raise EndpointError(None, {"error": "EMPTY_CAPABILITY_FILE"})
         return token
 
+    def _request(
+        self,
+        operation: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        bearer: str | None = None,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        started = time.monotonic_ns()
+        try:
+            return _json_request(
+                f"{self.base_url}{path}",
+                body=body,
+                bearer=bearer,
+                timeout_s=timeout_s,
+            )[0]
+        except EndpointError as exc:
+            raise EndpointError(
+                exc.status,
+                {
+                    **exc.payload,
+                    "operation": operation,
+                    "elapsed_ns": time.monotonic_ns() - started,
+                    "timeout_ns": int(timeout_s * 1e9),
+                },
+            ) from exc
+
     def status(self, *, timeout_s: float) -> dict[str, Any]:
-        return _json_request(f"{self.base_url}/health", timeout_s=timeout_s)[0]
+        return self._request("status", "/health", timeout_s=timeout_s)
 
     def reset(self, *, timeout_s: float) -> dict[str, Any]:
-        return _json_request(
-            f"{self.base_url}/v1/operator/reset-handshake",
+        return self._request(
+            "reset_handshake",
+            "/v1/operator/reset-handshake",
             body={},
             bearer=self._token(self.operator_token_file),
             timeout_s=timeout_s,
-        )[0]
+        )
 
     def prime(self, governor_input: dict[str, Any], *, timeout_s: float) -> dict[str, Any]:
-        return _json_request(
-            f"{self.base_url}/v1/recovery/prime",
-            body=governor_input,
-            bearer=self._token(self.decision_token_file),
-            timeout_s=timeout_s,
-        )[0]
+        try:
+            return self._request(
+                "prime_recovery",
+                "/v1/recovery/prime",
+                body=governor_input,
+                bearer=self._token(self.decision_token_file),
+                timeout_s=timeout_s,
+            )
+        except EndpointError as exc:
+            if exc.status == 409 and exc.payload.get("accepted") is False:
+                return exc.payload
+            raise
 
     def submit(
         self,
@@ -113,12 +148,13 @@ class GateClient:
         *,
         timeout_s: float,
     ) -> dict[str, Any]:
-        return _json_request(
-            f"{self.base_url}/v1/decision",
+        return self._request(
+            "submit_decision",
+            "/v1/decision",
             body={"input": governor_input, "decision": decision},
             bearer=self._token(self.decision_token_file),
             timeout_s=timeout_s,
-        )[0]
+        )
 
 
 def input_epoch(governor_input: dict[str, Any]) -> int:

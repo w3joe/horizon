@@ -19,7 +19,12 @@ from urllib.request import HTTPHandler, Request, build_opener
 from horizon_assurance.configuration import AssuranceConfig, NavigationReference
 from horizon_assurance.health_policy import required_health_evidence
 from horizon_assurance.predictive import Assessment, BoundedPredictiveChecker
-from horizon_assurance.validation import InputRejected, validate_decision_identity, validate_governor_input
+from horizon_assurance.validation import (
+    InputRejected,
+    validate_decision_identity,
+    validate_governor_input,
+    validate_recovery_input,
+)
 
 
 @dataclass(frozen=True)
@@ -98,7 +103,10 @@ class StoredRecovery:
     command: dict[str, Any]
     host_valid_until_ns: int
     source_decision_id: str
-    governor_input: dict[str, Any]
+    source_input: dict[str, Any]
+    input_kind: str
+    input_id: str
+    proposal_id: str | None
     plant_epoch: int
 
 
@@ -133,6 +141,7 @@ class ActuatorGate:
         plant: PlantClient,
         reference: NavigationReference,
         decision_token: str | None = None,
+        recovery_token: str | None = None,
         operator_token: str | None = None,
         config: GateConfig | None = None,
         assurance_config: AssuranceConfig | None = None,
@@ -143,6 +152,7 @@ class ActuatorGate:
         self.plant = plant
         self.reference = reference
         self.decision_token = decision_token or secrets.token_urlsafe(32)
+        self.recovery_token = recovery_token or secrets.token_urlsafe(32)
         self.operator_token = operator_token or secrets.token_urlsafe(32)
         self.config = config or GateConfig()
         self._monotonic_ns = monotonic_ns
@@ -155,6 +165,8 @@ class ActuatorGate:
         self.receipts: deque[dict[str, Any]] = deque(maxlen=self.config.retained_records)
         self.telemetry: deque[dict[str, Any]] = deque(maxlen=self.config.retained_records)
         self.last_tick = -1
+        self.last_recovery_tick = -1
+        self.last_recovery_input_id: str | None = None
         self.seen_snapshot_ids: set[str] = set()
         self._snapshot_order: deque[str] = deque(maxlen=self.config.retained_snapshot_ids)
         self.plant_sequence = 0
@@ -169,6 +181,7 @@ class ActuatorGate:
         self.epoch = 0
         self.control_generation = 0
         self._cache_inflight = False
+        self._recovery_validation_inflight: str | None = None
         self._cache_threads: set[threading.Thread] = set()
         self.transport_failures = 0
         self.last_transport_error: str | None = None
@@ -225,7 +238,7 @@ class ActuatorGate:
                     if self.epoch != epoch or now >= valid_until or self.recovery_latched:
                         return
                     current_tick = (
-                        int(self.stored_recovery.governor_input["tick_index"])
+                        int(self.stored_recovery.source_input["tick_index"])
                         if self.stored_recovery is not None
                         else -1
                     )
@@ -235,7 +248,10 @@ class ActuatorGate:
                         command=copy.deepcopy(selection.command),
                         host_valid_until_ns=valid_until,
                         source_decision_id=str(decision["decision_id"]),
-                        governor_input=source,
+                        source_input=source,
+                        input_kind="GovernorInput",
+                        input_id=str(source["snapshot"]["snapshot_id"]),
+                        proposal_id=str(source["proposal"]["command_id"]),
                         plant_epoch=epoch,
                     )
             finally:
@@ -273,50 +289,226 @@ class ActuatorGate:
     def prime_recovery(
         self, governor_input: dict[str, Any], *, token: str
     ) -> tuple[bool, list[str]]:
+        arrival = self._monotonic_ns()
         with self.lock:
             if not self._authorized(token, self.decision_token):
                 return False, ["UNAUTHORIZED_SUPERVISOR"]
+            if self._recovery_validation_inflight is not None:
+                return False, ["RECOVERY_VALIDATION_IN_PROGRESS"]
+            self._recovery_validation_inflight = "GovernorInput"
             epoch = self.epoch
         try:
-            validate_governor_input(governor_input)
-            if governor_input.get("configuration_hash") != self.reference.digest():
+            try:
+                validate_governor_input(governor_input)
+                if governor_input.get("configuration_hash") != self.reference.digest():
+                    raise InputRejected(("CONFIGURATION_HASH_MISMATCH",))
+                if (
+                    governor_input["run_id"] != self.run_id
+                    or governor_input["branch_id"] != self.branch_id
+                ):
+                    raise InputRejected(("RUN_OR_BRANCH_MISMATCH",))
+                health_expiry, health_reasons = required_health_evidence(
+                    governor_input,
+                    self.checker.config,
+                    recovery=True,
+                    now_ns=arrival,
+                )
+                if health_reasons:
+                    raise InputRejected(health_reasons)
+            except InputRejected as exc:
+                return False, list(exc.reason_codes)
+
+            option_ceiling = max(
+                (
+                    int(item["valid_until_monotonic_ns"])
+                    for item in governor_input["recovery_options"]
+                ),
+                default=int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
+            )
+            validation_deadline = min(
+                int(governor_input["decision_deadline_monotonic_ns"]),
+                int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
+                int(governor_input["proposal"]["expires_monotonic_ns"]),
+                health_expiry,
+                option_ceiling,
+            )
+            if arrival >= validation_deadline:
+                return False, ["RECOVERY_INPUT_DEADLINE_MISSED"]
+            selection = self.checker.recovery_from_current(
+                governor_input,
+                host_deadline_ns=validation_deadline,
+            )
+            completion = self._monotonic_ns()
+            if completion >= validation_deadline:
+                return False, ["RECOVERY_INPUT_DEADLINE_MISSED"]
+            if not selection.assessment.safe or selection.command is None:
+                return False, [*selection.assessment.reason_codes, "NO_VALIDATED_RECOVERY"]
+            option_expiry = int(
+                (selection.option or {}).get(
+                    "valid_until_monotonic_ns",
+                    governor_input["snapshot"]["valid_until_monotonic_ns"],
+                )
+            )
+            source_valid_until = min(
+                int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
+                int(governor_input["proposal"]["expires_monotonic_ns"]),
+                option_expiry,
+                health_expiry,
+            )
+            valid_until = self._map_remote_expiry(
+                governor_input,
+                source_valid_until,
+                arrival,
+            )
+            with self.lock:
+                if self.epoch != epoch or completion >= valid_until:
+                    return False, ["RECOVERY_CERTIFICATE_STALE"]
+                self.stored_recovery = StoredRecovery(
+                    command=copy.deepcopy(selection.command),
+                    host_valid_until_ns=valid_until,
+                    source_decision_id="startup-recovery-prime",
+                    source_input=copy.deepcopy(governor_input),
+                    input_kind="GovernorInput",
+                    input_id=str(governor_input["snapshot"]["snapshot_id"]),
+                    proposal_id=str(governor_input["proposal"]["command_id"]),
+                    plant_epoch=epoch,
+                )
+            return True, ["STARTUP_RECOVERY_VALIDATED"]
+        finally:
+            with self.lock:
+                if self._recovery_validation_inflight == "GovernorInput":
+                    self._recovery_validation_inflight = None
+
+    def refresh_recovery(
+        self, recovery_input: dict[str, Any], *, token: str
+    ) -> tuple[bool, list[str]]:
+        """Validate and atomically replace recovery from sensor-only evidence."""
+
+        arrival = self._monotonic_ns()
+        with self.lock:
+            if not self._authorized(token, self.recovery_token):
+                return False, ["UNAUTHORIZED_RECOVERY_SOURCE"]
+            if self._recovery_validation_inflight is not None:
+                return False, ["RECOVERY_VALIDATION_IN_PROGRESS"]
+            self._recovery_validation_inflight = "RecoveryInput"
+            start_epoch = self.epoch
+            start_generation = self.control_generation
+        try:
+            return self._refresh_recovery(
+                recovery_input,
+                arrival=arrival,
+                start_epoch=start_epoch,
+                start_generation=start_generation,
+            )
+        finally:
+            with self.lock:
+                if self._recovery_validation_inflight == "RecoveryInput":
+                    self._recovery_validation_inflight = None
+
+    def _refresh_recovery(
+        self,
+        recovery_input: dict[str, Any],
+        *,
+        arrival: int,
+        start_epoch: int,
+        start_generation: int,
+    ) -> tuple[bool, list[str]]:
+        try:
+            validate_recovery_input(recovery_input)
+            if recovery_input.get("configuration_hash") != self.reference.digest():
                 raise InputRejected(("CONFIGURATION_HASH_MISMATCH",))
-            if governor_input["run_id"] != self.run_id or governor_input["branch_id"] != self.branch_id:
+            if (
+                recovery_input.get("run_id") != self.run_id
+                or recovery_input.get("branch_id") != self.branch_id
+            ):
                 raise InputRejected(("RUN_OR_BRANCH_MISMATCH",))
+            if recovery_input.get("plant_epoch") != start_epoch:
+                raise InputRejected(("PLANT_EPOCH_MISMATCH",))
+            input_id = str(recovery_input["recovery_input_id"])
+            input_tick = int(recovery_input["tick_index"])
+            deadline = int(recovery_input["recovery_deadline_monotonic_ns"])
+            if arrival >= deadline:
+                raise InputRejected(("RECOVERY_INPUT_DEADLINE_MISSED",))
+            with self.lock:
+                if input_tick <= self.last_recovery_tick:
+                    raise InputRejected(("RECOVERY_INPUT_REPLAY",))
+                if input_id == self.last_recovery_input_id:
+                    raise InputRejected(("RECOVERY_INPUT_REPLAY",))
             health_expiry, health_reasons = required_health_evidence(
-                governor_input, self.checker.config, recovery=True, now_ns=self._monotonic_ns()
+                recovery_input,
+                self.checker.config,
+                recovery=True,
+                now_ns=arrival,
             )
             if health_reasons:
                 raise InputRejected(health_reasons)
-            selection = self.checker.recovery_from_current(governor_input)
+            selection = self.checker.recovery_from_current(
+                recovery_input,
+                host_deadline_ns=deadline,
+            )
         except InputRejected as exc:
             return False, list(exc.reason_codes)
-        now = self._monotonic_ns()
+
+        completion = self._monotonic_ns()
         if not selection.assessment.safe or selection.command is None:
             return False, [*selection.assessment.reason_codes, "NO_VALIDATED_RECOVERY"]
         option_expiry = int(
             (selection.option or {}).get(
-                "valid_until_monotonic_ns", governor_input["snapshot"]["valid_until_monotonic_ns"]
+                "valid_until_monotonic_ns",
+                recovery_input["snapshot"]["valid_until_monotonic_ns"],
             )
         )
         source_valid_until = min(
-            int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
-            int(governor_input["proposal"]["expires_monotonic_ns"]),
+            int(recovery_input["snapshot"]["valid_until_monotonic_ns"]),
             option_expiry,
             health_expiry,
         )
-        valid_until = self._map_remote_expiry(governor_input, source_valid_until, now)
+        valid_until = self._map_remote_expiry(
+            recovery_input,
+            source_valid_until,
+            arrival,
+        )
         with self.lock:
-            if self.epoch != epoch or now >= valid_until:
-                return False, ["RECOVERY_CERTIFICATE_STALE"]
+            stale_reasons = []
+            if self.epoch != start_epoch or self.control_generation != start_generation:
+                stale_reasons.append("STALE_RECOVERY_VALIDATION_COMPLETION")
+            if completion >= deadline:
+                stale_reasons.append("RECOVERY_INPUT_DEADLINE_MISSED")
+            if completion >= valid_until:
+                stale_reasons.append("RECOVERY_EVIDENCE_EXPIRED")
+            if input_tick <= self.last_recovery_tick:
+                stale_reasons.append("RECOVERY_INPUT_REPLAY")
+            if input_id == self.last_recovery_input_id:
+                stale_reasons.append("RECOVERY_INPUT_REPLAY")
+            if stale_reasons:
+                return False, list(dict.fromkeys(stale_reasons))
             self.stored_recovery = StoredRecovery(
                 command=copy.deepcopy(selection.command),
                 host_valid_until_ns=valid_until,
-                source_decision_id="startup-recovery-prime",
-                governor_input=copy.deepcopy(governor_input),
-                plant_epoch=epoch,
+                source_decision_id=f"recovery-validation:{input_id}",
+                source_input=copy.deepcopy(recovery_input),
+                input_kind="RecoveryInput",
+                input_id=input_id,
+                proposal_id=None,
+                plant_epoch=start_epoch,
             )
-        return True, ["STARTUP_RECOVERY_VALIDATED"]
+            self.last_recovery_tick = input_tick
+            self.last_recovery_input_id = input_id
+            self.telemetry.append(
+                {
+                    "event_id": self._next_event_id(),
+                    "event_type": "recovery_refresh",
+                    "epoch": start_epoch,
+                    "host_monotonic_ns": completion,
+                    "input_kind": "RecoveryInput",
+                    "input_id": input_id,
+                    "tick_index": input_tick,
+                    "source_valid_until_monotonic_ns": source_valid_until,
+                    "host_valid_until_monotonic_ns": valid_until,
+                    "reason_codes": ["INDEPENDENT_RECOVERY_VALIDATED"],
+                }
+            )
+        return True, ["INDEPENDENT_RECOVERY_VALIDATED"]
 
     def report_watchdog_error(self, exc: BaseException) -> None:
         with self.lock:
@@ -715,7 +907,10 @@ class ActuatorGate:
                         governor_input, remote_expiry, completion
                     ),
                     source_decision_id=str(decision["decision_id"]),
-                    governor_input=copy.deepcopy(governor_input),
+                    source_input=copy.deepcopy(governor_input),
+                    input_kind="GovernorInput",
+                    input_id=str(governor_input["snapshot"]["snapshot_id"]),
+                    proposal_id=str(governor_input["proposal"]["command_id"]),
                     plant_epoch=self.epoch,
                 )
                 self.recovery_latched = True
@@ -793,7 +988,7 @@ class ActuatorGate:
             reasons = ["SUPERVISOR_WATCHDOG", "STORED_VALIDATED_RECOVERY_CONTINUED"]
             status = "safe"
         else:
-            source = stored.governor_input if stored else None
+            source = stored.source_input if stored else None
             if source is None:
                 with self.lock:
                     self.telemetry.append(
@@ -856,6 +1051,8 @@ class ActuatorGate:
             self.control_generation += 1
             self.decision_token = secrets.token_urlsafe(32)
             self.last_tick = -1
+            self.last_recovery_tick = -1
+            self.last_recovery_input_id = None
             self.seen_snapshot_ids.clear()
             self._snapshot_order.clear()
             self.stored_recovery = None
@@ -879,23 +1076,28 @@ class ActuatorGate:
                 and stored.plant_epoch == self.epoch
                 and observed_monotonic_ns < stored.host_valid_until_ns
             ):
-                source = stored.governor_input
+                source = stored.source_input
                 snapshot = source.get("snapshot", {})
-                proposal = source.get("proposal", {})
                 identity = {
                     "run_id": source.get("run_id"),
                     "branch_id": source.get("branch_id"),
                     "decision_id": stored.source_decision_id,
                     "input_snapshot_id": snapshot.get("snapshot_id"),
-                    "proposal_id": proposal.get("command_id"),
+                    "input_kind": stored.input_kind,
+                    "input_id": stored.input_id,
                 }
                 if (
                     all(isinstance(value, str) and bool(value) for value in identity.values())
                     and identity["run_id"] == self.run_id
                     and identity["branch_id"] == self.branch_id
+                    and (
+                        (stored.input_kind == "GovernorInput" and isinstance(stored.proposal_id, str) and bool(stored.proposal_id))
+                        or (stored.input_kind == "RecoveryInput" and stored.proposal_id is None)
+                    )
                 ):
                     certificate = {
                         **identity,
+                        "proposal_id": stored.proposal_id,
                         "plant_epoch": stored.plant_epoch,
                         "original_host_valid_until_ns": stored.host_valid_until_ns,
                     }
@@ -910,6 +1112,9 @@ class ActuatorGate:
                 "recovery_latched": self.recovery_latched,
                 "operator_acknowledged": self.operator_acknowledged,
                 "last_tick": self.last_tick,
+                "last_recovery_tick": self.last_recovery_tick,
+                "last_recovery_input_id": self.last_recovery_input_id,
+                "recovery_validation_inflight": self._recovery_validation_inflight,
                 "transport_failures": self.transport_failures,
                 "last_transport_error": self.last_transport_error,
                 "startup_recovery_ready": bool(

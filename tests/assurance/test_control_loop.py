@@ -3,9 +3,12 @@ from __future__ import annotations
 import copy
 import time
 
+import pytest
+
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
-from horizon_assurance.control_loop import AssuranceControlLoop, EndpointError
+from horizon_assurance import control_loop
+from horizon_assurance.control_loop import AssuranceControlLoop, EndpointError, GateClient
 from horizon_assurance.http_api import AssuranceHTTPServer, AssuranceRuntime
 
 
@@ -95,6 +98,60 @@ class FakeGate:
             "decision_id": decision["decision_id"],
         }
 
+
+def test_gate_client_transport_error_identifies_operation_and_elapsed(
+    tmp_path, monkeypatch
+) -> None:
+    decision = tmp_path / "decision.token"
+    operator = tmp_path / "operator.token"
+    decision.write_text("decision-secret\n")
+    operator.write_text("operator-secret\n")
+    client = GateClient(
+        "http://127.0.0.1:1",
+        decision_token_file=decision,
+        operator_token_file=operator,
+    )
+
+    def fail(*args, **kwargs):
+        del args, kwargs
+        raise EndpointError(None, {"error": "TRANSPORT_ERROR", "detail": "TimeoutError"})
+
+    monkeypatch.setattr(control_loop, "_json_request", fail)
+    with pytest.raises(EndpointError) as captured:
+        client.prime({}, timeout_s=0.04)
+    assert captured.value.payload["operation"] == "prime_recovery"
+    assert captured.value.payload["elapsed_ns"] >= 0
+    assert captured.value.payload["timeout_ns"] == 40_000_000
+
+
+def test_gate_client_returns_bounded_prime_rejection_as_control_result(
+    tmp_path, monkeypatch
+) -> None:
+    decision = tmp_path / "decision.token"
+    operator = tmp_path / "operator.token"
+    decision.write_text("decision-secret\n")
+    operator.write_text("operator-secret\n")
+    client = GateClient(
+        "http://127.0.0.1:1",
+        decision_token_file=decision,
+        operator_token_file=operator,
+    )
+
+    def reject(*args, **kwargs):
+        del args, kwargs
+        raise EndpointError(
+            409,
+            {
+                "accepted": False,
+                "reason_codes": ["PREDICTION_DEADLINE_EXHAUSTED"],
+            },
+        )
+
+    monkeypatch.setattr(control_loop, "_json_request", reject)
+    result = client.prime({}, timeout_s=0.04)
+    assert result["accepted"] is False
+    assert result["reason_codes"] == ["PREDICTION_DEADLINE_EXHAUSTED"]
+    assert result["operation"] == "prime_recovery"
 
 def test_loop_primes_before_first_autonomy_and_skips_duplicate(reference, governor_input) -> None:
     first = live_input(governor_input, tick=42)

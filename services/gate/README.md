@@ -17,6 +17,14 @@ recovery has been explicitly primed and remains fresh. Before that point, a
 killed supervisor produces an explicit unknown/no-command watchdog event
 rather than a fabricated safe recovery.
 
+The gate also polls fusion's sensor-only `RecoveryInput` endpoint on its own
+thread. This path has a separate capability, contains no decision-AI proposal,
+and can refresh the stored recovery while the primary AI or assurance process
+is unavailable. Required navigation, radar, and actuator health and the
+selected recovery option keep their original expiries. Legacy prime and
+independent refresh share one bounded in-flight validation slot, so repeated
+requests cannot queue concurrent recovery searches.
+
 The watchdog uses host monotonic time, independent of accelerated or paused
 simulation time.  If supervisor output stops it continues the last complete,
 validated recovery while its evidence certificate remains fresh.  After that
@@ -40,16 +48,20 @@ sequence is independent and remains monotonic.
 PYTHONPATH=services/gate:services/assurance:services/simulator \
   python -m horizon_gate.http_api \
   --run-id demo --branch-id protected \
+  --fusion-url http://127.0.0.1:8104 \
   --plant-token-file /tmp/horizon-gate.token \
   --decision-token-file /tmp/horizon-supervisor.token \
+  --recovery-token-file /tmp/horizon-recovery.token \
   --operator-token-file /tmp/horizon-gate-operator.token
 ```
 
 Endpoints are `GET /health`, `GET /v1/telemetry`, `POST /v1/decision`,
-`POST /v1/recovery/prime`, `POST /v1/operator/acknowledge`, and `POST
-/v1/operator/reset-handshake`. Operator routes require the operator bearer
-capability and decision/prime routes require the supervisor bearer capability;
-these files stay server-side.
+`POST /v1/recovery/prime`, `POST /v1/recovery/refresh`, `POST
+/v1/operator/acknowledge`, and `POST /v1/operator/reset-handshake`. Operator
+routes require the operator bearer, decision/prime routes require the
+supervisor bearer, and refresh accepts only its dedicated recovery bearer.
+These files stay server-side. The internal fusion poller calls the same refresh
+method with that dedicated capability.
 
 Gate status includes `observed_monotonic_ns`, sampled from the same injected
 host clock used for receipt and expiry checks. A remote display can combine
@@ -58,8 +70,11 @@ mixing it with wall time or a browser-specific monotonic epoch. The field is
 public telemetry and contains no capability token or simulator truth.
 
 While the stored startup recovery remains eligible, status also exposes
-`startup_recovery_certificate` with its run, branch, decision, input snapshot,
-proposal, and plant-epoch identities plus `original_host_valid_until_ns`.
+`startup_recovery_certificate` with its run, branch, gate validation, input
+kind, input, input snapshot, proposal, and plant-epoch identities plus
+`original_host_valid_until_ns`. A sensor-only recovery certificate has
+`input_kind: "RecoveryInput"` and `proposal_id: null`; a GovernorInput-derived
+certificate keeps its proposal ID.
 The object becomes `null` at expiry, after an epoch change, or when its stored
 identity is inconsistent. Its expiry is the original host-monotonic ceiling;
 reading status never recomputes or extends it. An operator proxy can carry this

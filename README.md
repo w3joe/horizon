@@ -18,12 +18,13 @@ Open `http://127.0.0.1:5173`. Each launch gets a unique directory under the exte
 
 The reset flow pauses physics, advances the plant epoch, obtains fresh sensor
 evidence and a bounded gate recovery certificate, and requires an explicit
-operator Resume. Recovery refresh is currently carried by `GovernorInput`, so
-it still depends on a fresh decision-AI proposal; a sensor-only independent
-recovery input remains pending. WaSR-T reproduction and development extraction
-have run locally on Apple MPS with outputs kept under external `horizon-runs/`.
-Those runs are development evidence rather than deployment timing or safety
-evidence.
+operator Resume. A separate fusion reader publishes sensor-only `RecoveryInput`
+records, and the gate polls them without calling the decision AI. The gate
+continues only a recovery that finishes validation before its original sensor,
+health, option, and compute deadlines; otherwise it reports unknown assurance.
+WaSR-T reproduction and development extraction have run locally on Apple MPS
+with outputs kept under external `horizon-runs/`. Those runs are development
+evidence rather than deployment timing or safety evidence.
 
 The workspace is still under active validation. Independent system acceptance,
 expanded simulator realism, calibration, and held-out evaluation remain to be

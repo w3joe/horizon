@@ -122,6 +122,37 @@ def test_generic_independent_recovery_option_authorizes_finite_library(
     assert selection.option["assumption_id"] == "a04-finite-library-validation-required"
 
 
+def test_distant_contact_uses_conservative_circumscribed_sweep(
+    reference, governor_input, monkeypatch
+) -> None:
+    """The fast proof must use enclosing center sweeps, never omit geometry."""
+
+    from horizon_sim import geometry
+
+    calls: list[tuple[int, int]] = []
+    original = geometry.signed_polygon_clearance
+
+    def observed(first, second):
+        calls.append((len(first), len(second)))
+        return original(first, second)
+
+    monkeypatch.setattr(geometry, "signed_polygon_clearance", observed)
+    message = copy.deepcopy(governor_input)
+    message["snapshot"]["contacts"][0]["position_ne_m"] = [180.0, -80.0]
+    assessment = BoundedPredictiveChecker(reference).assess(
+        message,
+        message["proposal"]["command"],
+    )
+
+    assert assessment.safe
+    assert calls
+    assert all(second_size == 2 for _, second_size in calls)
+    collision = next(
+        item for item in assessment.constraints if item["kind"] == "collision"
+    )
+    assert collision["minimum_margin"] > 0.0
+
+
 def test_a3_collision_envelope_never_returns_unqualified_pass(reference, governor_input) -> None:
     message = copy.deepcopy(governor_input)
     message["snapshot"]["contacts"][0]["position_ne_m"] = [18.0, 0.0]
