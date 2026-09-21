@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 from horizon_sim.engine import AuthoritativeSimulator
+from horizon_sim.clock import ManualMonotonicClock
 from horizon_sim.scenario import load_scenario
 
 
@@ -50,3 +51,18 @@ def test_fault_fixtures_expose_expiry_and_lineage_failures() -> None:
     stale, _ = fixture_policy("stale_lineage").propose(snapshot)
     assert expired["expires_simulation_time_s"] <= snapshot["simulation_time_s"]
     assert stale["origin_snapshot_id"] != snapshot["snapshot_id"]
+
+
+def test_policy_trace_uses_injected_monotonic_clock() -> None:
+    sim = AuthoritativeSimulator(
+        load_scenario(ROOT / "scenarios" / "crossing_recoverable.json"),
+        seed=6,
+        run_id="ai-clock-test",
+    )
+    clock = ManualMonotonicClock(10_000_000_000)
+    policy = load_policy_class()("nominal", monotonic_ns=clock)
+
+    _, trace = policy.propose(sim.public_snapshot())
+
+    assert trace["started_monotonic_ns"] == clock()
+    assert trace["completed_monotonic_ns"] == clock()
