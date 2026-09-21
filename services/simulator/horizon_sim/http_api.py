@@ -66,6 +66,34 @@ class SimulatorRuntime:
             raise KeyError(f"unknown branch {branch_id!r}") from exc
 
 
+def resume_certificate_error(branch: AuthoritativeSimulator, value: Any) -> str | None:
+    """Check the operator proxy's unchanged gate proof at the mutation boundary.
+
+    The operator capability authenticates the proxy. This does not turn the
+    public certificate into a plant-write capability or issue a new deadline.
+    Caller must hold the runtime lock until the paused flag is cleared.
+    """
+    if not isinstance(value, dict):
+        return "STARTUP_RECOVERY_CERTIFICATE_REQUIRED"
+    for key in ("decision_id", "input_snapshot_id", "proposal_id", "run_id", "branch_id"):
+        item = value.get(key)
+        if not isinstance(item, str) or not item or len(item) > 1024:
+            return "STARTUP_RECOVERY_CERTIFICATE_INVALID"
+    epoch = value.get("plant_epoch")
+    expiry = value.get("original_host_valid_until_ns")
+    if type(epoch) is not int or type(expiry) is not int:
+        return "STARTUP_RECOVERY_CERTIFICATE_INVALID"
+    if not 0 <= epoch < 2**63 or not 0 <= expiry < 2**63:
+        return "STARTUP_RECOVERY_CERTIFICATE_INVALID"
+    if value["run_id"] != branch.run_id or value["branch_id"] != branch.branch_id:
+        return "STARTUP_RECOVERY_LINEAGE_MISMATCH"
+    if epoch != branch.plant_epoch:
+        return "STARTUP_RECOVERY_EPOCH_MISMATCH"
+    if branch._monotonic_ns() >= expiry:
+        return "STARTUP_RECOVERY_CERTIFICATE_EXPIRED"
+    return None
+
+
 class SimulatorHandler(BaseHTTPRequestHandler):
     server: "SimulatorHTTPServer"
 
@@ -226,6 +254,12 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                     if path == "/v1/operator/pause":
                         self.server.runtime.paused.set()
                     elif path == "/v1/operator/resume":
+                        reason = resume_certificate_error(
+                            branch, body.get("startup_recovery_certificate")
+                        )
+                        if reason is not None:
+                            self._error(HTTPStatus.CONFLICT, reason, "Plant remains paused; fresh matching recovery proof is required")
+                            return
                         self.server.runtime.paused.clear()
                     elif path == "/v1/operator/reset":
                         branch.reset()
