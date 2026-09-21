@@ -11,6 +11,7 @@ dependencies = ["jsonschema[format]==4.23.0"]
 
 [project.optional-dependencies]
 dev = ["pytest==8.3.5", "ruff==0.9.10"]
+perception = ["torch==2.5.1", "torchvision==0.20.1", "Pillow==10.4.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["packages/contracts/python/horizon_contracts"]

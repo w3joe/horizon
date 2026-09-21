@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "agent/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HORIZON_RUNS_DIR: ${{ runner.temp }}/horizon-runs
+      HORIZON_COMPUTE_LEDGER: ${{ runner.temp }}/horizon-compute-ledger.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Bootstrap pinned dependencies
+        env:
+          HORIZON_PYTHON: python
+        run: ./scripts/bootstrap.sh
+      - name: Contracts, component tests, and console build
+        run: ./scripts/check.sh
+      - name: Audit JavaScript production and development dependencies
+        run: npm audit --audit-level=moderate
+      - name: Validate authorized compute reservation without launching cloud work
+        run: |
+          ./scripts/python.sh scripts/compute_ledger.py init
+          ./scripts/python.sh scripts/run_modal_job.py --reservation a07-wasrt-sequence-001
+      - name: Start and stop the implemented CPU slice
+        run: ./scripts/launch_cpu.sh --smoke-seconds 1

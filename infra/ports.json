@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "bind_host": "127.0.0.1",
+  "ports": {
+    "simulator": 8100,
+    "decision_ai": 8101,
+    "gate": 8102,
+    "assurance": 8103,
+    "fusion": 8104,
+    "collector": 8105,
+    "console": 5173,
+    "console_agent_preview": 5176
+  },
+  "notes": {
+    "console_agent_preview": "Reserved for A06's standalone authoring preview; the integrated launcher never binds it.",
+    "pending_services": "A port is a stable assignment, not evidence that its service is implemented or healthy."
+  }
+}

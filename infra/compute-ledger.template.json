@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "project": "Horizon",
+  "provider": "Modal",
+  "currency": "USD",
+  "budget": {
+    "total_cap": 100.0,
+    "protected_reserve": 20.0,
+    "working_cap": 80.0,
+    "reconciled_spend": 0.0
+  },
+  "rates": {
+    "effective_date": "2026-09-21",
+    "l4_gpu_hour": 0.8,
+    "physical_cpu_core_hour": 0.0473,
+    "memory_gib_hour": 0.008,
+    "storage_gib_month": 0.09
+  },
+  "workspace_context": {
+    "authenticated_workspace": "tanweejoe2",
+    "pre_horizon_usage_usd": 42.28,
+    "accounting_rule": "Pre-existing workspace usage is unrelated to Horizon and is excluded from this project ledger.",
+    "workspace_limit_action": "unchanged"
+  },
+  "reservations": [
+    {
+      "reservation_id": "a07-wasrt-sequence-001",
+      "job_spec": "infra/modal/jobs/a07-wasrt-sequence-001.json",
+      "status": "authorized",
+      "upper_bound_usd": 1.5,
+      "actual_usd": null,
+      "authorized_utc": null,
+      "authorization": "Coordinator authorization recorded in the 2026-09-21 session; exact timestamp not recorded",
+      "attempts_started": 0,
+      "provider_job_id": null,
+      "reconciliation_note": null
+    }
+  ]
+}
