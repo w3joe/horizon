@@ -16,9 +16,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      HORIZON_RUNS_DIR: ${{ runner.temp }}/horizon-runs
-      HORIZON_COMPUTE_LEDGER: ${{ runner.temp }}/horizon-compute-ledger.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +26,10 @@ jobs:
         with:
           node-version: "24"
           cache: npm
+      - name: Configure temporary runtime paths
+        run: |
+          echo "HORIZON_RUNS_DIR=$RUNNER_TEMP/horizon-runs" >> "$GITHUB_ENV"
+          echo "HORIZON_COMPUTE_LEDGER=$RUNNER_TEMP/horizon-compute-ledger.json" >> "$GITHUB_ENV"
       - name: Bootstrap pinned dependencies
         env:
           HORIZON_PYTHON: python

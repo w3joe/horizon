@@ -18,7 +18,7 @@ After the A07 entrypoint is reviewed, the coordinator runs exactly one authorize
   --reservation a07-wasrt-sequence-001 --execute
 ```
 
-The wrapper refuses missing/uncommitted entrypoints, duplicate attempts, cap violations, and unauthorised reservations. At execution it creates the single named Volume, applies a 2,250-second controller wall-clock cap over image build plus remote execution, stops the remote app on timeout or interruption, downloads and verifies the bounded artifacts, and deletes the Volume. It does not infer billing from runtime. After Modal reports the actual inclusive charge, reconcile it explicitly:
+The wrapper refuses missing/uncommitted entrypoints, duplicate attempts, cap violations, and unauthorised reservations. At execution it creates the single named Volume and applies a 2,250-second controller wall-clock cap over image build plus remote execution. It captures the exact ephemeral app ID from CLI output or the app-list delta, stops that ID, and verifies the app is absent or stopped with zero tasks. A successful download must contain 85 class masks, 85 previews, features, and a manifest before the Volume is deleted. If execution, termination, download, or validation is uncertain, the ledger remains awaiting reconciliation and the bounded Volume is retained for coordinator recovery. It does not infer billing from runtime. After Modal reports the actual inclusive charge, reconcile it explicitly:
 
 ```sh
 ./scripts/python.sh scripts/compute_ledger.py reconcile \

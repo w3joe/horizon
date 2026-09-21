@@ -49,8 +49,9 @@
   "output": {
     "remote_path": "/a07-wasrt-sequence-001",
     "local_path": "/Users/w3joe/Desktop/2026_sdth/horizon-runs/compute/a07-wasrt-sequence-001",
-    "required": ["manifest.json", "features.jsonl", "masks/"],
-    "expected_mask_count": 85,
+    "required": ["manifest.json", "features.jsonl", "class_masks/", "mask_previews/"],
+    "expected_class_mask_count": 85,
+    "expected_preview_count": 85,
     "persistent_storage_policy": "No unbounded persistent volume; download the bounded result and remove any temporary remote data."
   },
   "acceptance": {
