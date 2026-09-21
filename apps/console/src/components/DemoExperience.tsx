@@ -106,9 +106,19 @@ function trailFor(replay: DemoReplay, timeS: number, branch: DemoBranch): TrailP
     .map((frame) => ({ north: frame[branch].ownship.position_ne_m[0], east: frame[branch].ownship.position_ne_m[1] }));
 }
 
+function interventionSampleTime(replay: DemoReplay): number {
+  const exactTime = replay.intervention.time_s;
+  if (exactTime === null) return replay.timeline.end_s;
+  const eligibleFrames = replay.timeline.frames.filter((frame) => frame.time_s >= exactTime);
+  const matched = replay.intervention.command_id
+    ? eligibleFrames.find((frame) => frame.protected_command?.command_id === replay.intervention.command_id)
+    : null;
+  return (matched ?? eligibleFrames[0])?.time_s ?? replay.timeline.end_s;
+}
+
 function storyFor(replay: DemoReplay): DemoStoryStage[] {
   const { start_s: start, end_s: end } = replay.timeline;
-  const interventionTime = replay.intervention.time_s ?? end;
+  const interventionTime = interventionSampleTime(replay);
   const firstProposal = replay.public_evidence.proposals[0]?.time_s ?? start;
   const collisionTime = replay.outcome_summary.counterfactual.first_collision_time_s ?? end;
   const mechanism = replay.intervention.mechanism === "gate_watchdog"
@@ -250,6 +260,7 @@ export function DemoExperience() {
   }
 
   const { replay, frame } = demo;
+  const atEnd = demo.timeS >= replay.timeline.end_s;
   const interventionReached = replay.intervention.occurred && replay.intervention.time_s !== null && demo.timeS >= replay.intervention.time_s;
   const protectedCollision = replay.outcome_summary.protected.first_collision_time_s != null && demo.timeS >= replay.outcome_summary.protected.first_collision_time_s;
   const counterfactualCollision = replay.outcome_summary.counterfactual.first_collision_time_s != null && demo.timeS >= replay.outcome_summary.counterfactual.first_collision_time_s;
@@ -268,7 +279,7 @@ export function DemoExperience() {
           <h1>When autonomy fails,<br /><em>safety stays in control.</em></h1>
           <p>Watch the same maritime encounter unfold twice. The red branch continues without runtime assurance. The cyan branch shows the command that the protected plant actually received.</p>
           <div className="hero-actions">
-            <button type="button" className="demo-primary" onClick={() => { const starting = !demo.playing; demo.togglePlaying(); if (starting) showReplay(); }}><PlayIcon playing={demo.playing} />{demo.playing ? "Pause demo" : demo.timeS > replay.timeline.start_s ? "Continue demo" : "Play safety demo"}</button>
+            <button type="button" className="demo-primary" onClick={() => { if (demo.playing) { demo.togglePlaying(); return; } if (atEnd) demo.replayFromStart(); else demo.togglePlaying(); showReplay(); }}><PlayIcon playing={demo.playing} />{demo.playing ? "Pause demo" : atEnd ? "Replay safety demo" : demo.timeS > replay.timeline.start_s ? "Continue demo" : "Play safety demo"}</button>
             <button type="button" className="demo-secondary" onClick={() => { demo.seek(story[1]?.timeS ?? replay.timeline.start_s); showReplay(); }}>Jump to intervention</button>
           </div>
         </div>
@@ -323,7 +334,7 @@ export function DemoExperience() {
         <button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((open) => !open)}><span>Technical details</span><small>{detailsOpen ? "Hide provenance and identifiers" : "Show provenance and identifiers"}</small><b>{detailsOpen ? "−" : "+"}</b></button>
         {detailsOpen && <div className="details-grid">
           <dl><div><dt>Run</dt><dd>{replay.run_id}</dd></div><div><dt>Source commit</dt><dd>{replay.manifest.source_commit}</dd></div><div><dt>Scenario version</dt><dd>{replay.manifest.scenario.version}</dd></div><div><dt>Replay digest</dt><dd>{replay.manifest.replay_sha256}</dd></div></dl>
-          <dl><div><dt>Snapshot</dt><dd>{frame.protected.snapshot_id}</dd></div><div><dt>Proposal</dt><dd>{latestAt(replay.public_evidence.proposals, demo.timeS)?.record.command_id ?? "not yet available"}</dd></div><div><dt>Intervention</dt><dd>{replay.intervention.mechanism ? humanize(replay.intervention.mechanism) : "none recorded"}</dd></div><div><dt>Receipt</dt><dd>{replay.intervention.source_receipt_id ?? "none recorded"}</dd></div></dl>
+          <dl><div><dt>Snapshot</dt><dd>{frame.protected.snapshot_id}</dd></div><div><dt>Proposal</dt><dd>{latestAt(replay.public_evidence.proposals, demo.timeS)?.record.command_id ?? "not yet available"}</dd></div><div><dt>Intervention</dt><dd>{replay.intervention.mechanism ? humanize(replay.intervention.mechanism) : "none recorded"}</dd></div><div><dt>Exact intervention time</dt><dd>{replay.intervention.time_s === null ? "none recorded" : `${replay.intervention.time_s.toFixed(3)} s`}</dd></div><div><dt>Receipt</dt><dd>{replay.intervention.source_receipt_id ?? "none recorded"}</dd></div></dl>
           <div className="details-notes"><strong>Boundaries of this evidence</strong><ul>{replay.manifest.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul><p>Recorded neural artifacts, when inspected in the live console, are separate evidence. This replay does not claim that a neural model caused the intervention.</p></div>
         </div>}
       </section>
