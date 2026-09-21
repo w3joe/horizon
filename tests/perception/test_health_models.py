@@ -83,6 +83,21 @@ def test_h4_small_sae_is_deterministic_and_finite():
     assert math.isfinite(score_h4([0.2, 0.1], first))
 
 
+def test_reference_fitting_honors_requested_convergence_rule():
+    rows = [[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]]
+    common = dict(layer="encoder", source_groups=["dev-sequence"], version="test-v1",
+                  fit_split="development", provenance=provenance("encoder", 2, ["dev-sequence"]),
+                  hidden=2, epochs=30, learning_rate=.01, seed=7)
+    loose = build_reference("H4", rows, tolerance=1.0, **common)
+    strict = build_reference("H4", rows, tolerance=0.0, **common)
+    assert loose["fit_split"] == "development"
+    assert loose["parameters"]["converged"]
+    assert loose["parameters"]["epochs_completed"] < strict["parameters"]["epochs_completed"]
+    assert strict["parameters"]["convergence_tolerance"] == 0
+    assert strict["parameters"]["epochs_requested"] == 30
+    assert loose["artifact_hash"] != strict["artifact_hash"]
+
+
 def test_missing_calibration_and_out_of_scope_are_unknown():
     assert evaluate(payload("H0"))["status"] == "unknown"
     result = evaluate(payload("H0", context="night"), calibration("H0"))

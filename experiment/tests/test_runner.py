@@ -37,6 +37,17 @@ def test_production_adapter_request_preserves_pair_identity() -> None:
         assert left[field] == right[field]
     assert left["candidate_id"] != right["candidate_id"]
     assert left["branch_id"] != right["branch_id"]
+    assert left["modeled_ai_service_ns"] == 0
+    assert left["modeled_recovery_prime_service_ns"] == 0
+    assert left["modeled_candidate_service_ns"] == 20_000_000
+    assert left["modeled_gate_service_ns"] == 20_000_000
+
+    nonzero = build_episode_request(
+        jobs[0], "run-1", 90.0, "all-stages-20ms-v1"
+    )
+    assert nonzero["timing_profile_id"] == "all-stages-20ms-v1"
+    assert nonzero["modeled_ai_service_ns"] == 20_000_000
+    assert nonzero["modeled_recovery_prime_service_ns"] == 20_000_000
 
 
 def _fixture_adapter(job):
@@ -77,3 +88,19 @@ def test_adapter_refuses_existing_record_before_execution(tmp_path: Path) -> Non
     with pytest.raises(FileExistsError):
         run_adapter_jobs([job], adapter, tmp_path, "run-1", 1.0)
     assert called is False
+
+
+def test_adapter_writes_bounded_diagnostics_sidecar(tmp_path: Path) -> None:
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+    job = expand_jobs(load_json(ROOT / "manifests" / "smoke-study.json"), splits)[0]
+    request = build_episode_request(job, "run-1", 1.0)
+
+    run_adapter_jobs([job], _fixture_adapter(job), tmp_path, "run-1", 1.0)
+
+    diagnostics_path = tmp_path / f"{request['branch_id']}.diagnostics.json"
+    diagnostics = load_json(diagnostics_path)
+    index = load_json(tmp_path / "index.json")
+    assert diagnostics["record_type"] == "DevelopmentEpisodeDiagnostics"
+    assert diagnostics["decision_action_counts"] == {"pass": 1}
+    assert diagnostics["operational_authority_counts"] == {"autonomy": 3}
+    assert index["diagnostics"] == [diagnostics]
