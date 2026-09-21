@@ -10,6 +10,32 @@ import time
 from typing import Any
 
 
+SCHEDULER_MODEL_VERSION = "fixed-step-discrete-service-v1"
+DEFAULT_MODELED_STAGE_LATENCIES_NS = {
+    "ai": 0,
+    "recovery_prime": 0,
+    "candidate": 20_000_000,
+    "gate": 20_000_000,
+}
+
+
+def _stage_latencies(request: dict[str, Any], plant_period_ns: int) -> dict[str, int]:
+    """Load the frozen discrete-event service model from the episode request."""
+
+    result: dict[str, int] = {}
+    for stage, default in DEFAULT_MODELED_STAGE_LATENCIES_NS.items():
+        key = f"modeled_{stage}_service_ns"
+        value = request.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{key} must be an integer")
+        if not 0 <= value <= 2_000_000_000:
+            raise ValueError(f"{key} must be between 0 and 2 seconds")
+        if value % plant_period_ns:
+            raise ValueError(f"{key} must be a multiple of the fixed plant period")
+        result[stage] = value
+    return result
+
+
 def _hash_json(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -462,22 +488,26 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     policy = _fixture_policy_class()(mode, monotonic_ns=clock)
     collector = CollectorStore()
     fusion = FusionEngine()
-    ingested_observation_ids: set[str] = set()
+    simulator_observation_cursor = 0
+    simulator_observation_epoch = simulator.plant_epoch
     collector_cursor = 0
     max_time = min(float(request["max_simulation_time_s"]), scenario.duration_s)
     planner_period_ticks = round(0.2 / simulator.parameters.fixed_step_s)
     plant_period_ns = round(simulator.parameters.fixed_step_s * 1e9)
-    ai_compute_ns = int(request.get("modeled_ai_compute_ns", 1_000_000))
-    gate_dispatch_ns = int(request.get("modeled_gate_dispatch_ns", 500_000))
-    if not 0 <= ai_compute_ns <= 20_000_000:
-        raise ValueError("modeled_ai_compute_ns must be between 0 and 20 ms")
-    if not 0 <= gate_dispatch_ns <= 10_000_000:
-        raise ValueError("modeled_gate_dispatch_ns must be between 0 and 10 ms")
+    modeled_stage_latencies_ns = _stage_latencies(request, plant_period_ns)
     decisions: list[dict[str, Any]] = []
     proposals: list[dict[str, Any]] = []
     gate_receipts: list[dict[str, Any]] = []
     watchdog_receipts: list[dict[str, Any]] = []
     recovery_primes: list[dict[str, Any]] = []
+    scheduler_events: list[dict[str, Any]] = []
+    scheduler_rejections: list[dict[str, Any]] = []
+    actual_wall_timings_ns: dict[str, list[int]] = {
+        "candidate": [],
+        "recovery_prime": [],
+        "gate_submit": [],
+        "watchdog": [],
+    }
     source_health_audit: list[dict[str, Any]] = []
     saved_snapshots: list[tuple[int, dict[str, Any]]] = []
     planner_opportunities = 0
@@ -485,30 +515,112 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     post_prime_expired_input_count = 0
     no_fresh_input_ticks = 0
     watchdog_opportunities = 0
+    busy_planner_opportunities = 0
     fixed = fixed_health_summary(epoch_ns, assurance_config)
     gate_closed = False
-    try:
-        while simulator.simulation_time_s < max_time:
-            fresh_this_tick = False
-            collector.update_plant_epoch(
-                simulator.branch_id, simulator.run_id, simulator.plant_epoch
+
+    def ingest_public_state() -> None:
+        nonlocal collector_cursor, simulator_observation_cursor
+        nonlocal simulator_observation_epoch
+        collector.update_plant_epoch(
+            simulator.branch_id, simulator.run_id, simulator.plant_epoch
+        )
+        while True:
+            page = simulator.observation_page(
+                after_cursor=simulator_observation_cursor,
+                plant_epoch=simulator_observation_epoch,
             )
-            collector.update_snapshot(simulator.branch_id, simulator.public_snapshot())
-            collector.update_reference(simulator.branch_id, public_reference)
-            for observation in simulator.observation_batch():
-                if observation["observation_id"] in ingested_observation_ids:
-                    continue
+            simulator_observation_epoch = int(page["plant_epoch"])
+            simulator_observation_cursor = int(page["cursor"])
+            if page["cursor_lost"]:
+                raise RuntimeError("simulator observation cursor lost in closed-loop harness")
+            collector.update_snapshot(simulator.branch_id, page["snapshot"])
+            collector.update_reference(simulator.branch_id, page["reference"])
+            for observation in page["observations"]:
                 collector.ingest(
                     observation,
                     received_ns=clock(),
                     simulation_time_s=simulator.simulation_time_s,
                 )
-                ingested_observation_ids.add(str(observation["observation_id"]))
-            batch = collector.batch(
-                branch=simulator.branch_id, after_cursor=collector_cursor
+            if not page["has_more"]:
+                break
+        batch = collector.batch(branch=simulator.branch_id, after_cursor=collector_cursor)
+        collector_cursor = int(batch["cursor"])
+        fusion.update_batch(batch, now_ns=clock())
+
+    def watchdog_event() -> None:
+        nonlocal watchdog_opportunities
+        watchdog_opportunities += 1
+        started = time.monotonic_ns()
+        receipt = gate.watchdog_tick()
+        actual_wall_timings_ns["watchdog"].append(
+            max(0, time.monotonic_ns() - started)
+        )
+        if receipt is not None:
+            watchdog_receipts.append(
+                _receipt_record(
+                    receipt,
+                    simulation_time_s=simulator.simulation_time_s,
+                    source="watchdog",
+                )
             )
-            collector_cursor = int(batch["cursor"])
-            fusion.update_batch(batch, now_ns=clock())
+
+    def advance_stage(stage: str, *, floor_ns: int | None = None) -> bool:
+        """Advance plant/watchdog events before an atomic stage completion."""
+
+        nonlocal planner_opportunities, no_fresh_input_ticks
+        nonlocal busy_planner_opportunities
+        started_ns = clock()
+        declared_ns = modeled_stage_latencies_ns[stage]
+        target_ns = max(started_ns + declared_ns, floor_ns or started_ns)
+        steps = max(0, math.ceil((target_ns - started_ns) / plant_period_ns))
+        scheduled_completion_ns = started_ns + steps * plant_period_ns
+        advanced_steps = 0
+        while clock() < scheduled_completion_ns and simulator.simulation_time_s < max_time:
+            simulator.step()
+            clock.advance_ns(plant_period_ns)
+            advanced_steps += 1
+            ingest_public_state()
+            watchdog_event()
+            if simulator.tick_index % planner_period_ticks == 0:
+                planner_opportunities += 1
+                busy_planner_opportunities += 1
+                no_fresh_input_ticks += 1
+        completed = clock() >= scheduled_completion_ns
+        scheduler_events.append(
+            {
+                "stage": stage,
+                "started_monotonic_ns": started_ns,
+                "declared_service_ns": declared_ns,
+                "completion_floor_ns": floor_ns,
+                "scheduled_completion_ns": scheduled_completion_ns,
+                "completed_monotonic_ns": clock(),
+                "plant_steps": advanced_steps,
+                "completed": completed,
+            }
+        )
+        return completed
+
+    def advance_idle_step() -> None:
+        simulator.step()
+        clock.advance_ns(plant_period_ns)
+        ingest_public_state()
+        watchdog_event()
+
+    def add_fixed_health(governor_input: dict[str, Any]) -> dict[str, Any]:
+        governor_input["episode_id"] = request["episode_id"]
+        live_health = copy.deepcopy(governor_input["health"])
+        governor_input["health"]["source_health_ids"].extend(fixed["source_health_ids"])
+        summaries = copy.deepcopy(fixed["summaries"])
+        for summary in summaries:
+            summary["valid_until_monotonic_ns"] = clock() + 400_000_000
+        governor_input["health"]["summaries"].extend(summaries)
+        return live_health
+
+    try:
+        ingest_public_state()
+        while simulator.simulation_time_s < max_time:
+            fresh_this_tick = False
             planner_tick = simulator.tick_index % planner_period_ticks == 0
             if planner_tick:
                 planner_opportunities += 1
@@ -519,7 +631,8 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                     policy_snapshot = None
                 if policy_snapshot is not None:
                     proposal, trace = policy.propose(policy_snapshot)
-                    clock.advance_ns(ai_compute_ns)
+                    if not advance_stage("ai"):
+                        break
                     trace["completed_monotonic_ns"] = clock()
                     try:
                         governor_input = fusion.assemble(
@@ -531,18 +644,13 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                     except NotReady:
                         governor_input = None
                     if governor_input is not None:
-                        governor_input["episode_id"] = request["episode_id"]
-                        live_health = copy.deepcopy(governor_input["health"])
-                        governor_input["health"]["source_health_ids"].extend(
-                            fixed["source_health_ids"]
-                        )
-                        governor_input["health"]["summaries"].extend(
-                            copy.deepcopy(fixed["summaries"])
-                        )
+                        live_health = add_fixed_health(governor_input)
                         if (
                             gate.stored_recovery is None
                             or clock() >= gate.stored_recovery.host_valid_until_ns
                         ):
+                            if not advance_stage("recovery_prime"):
+                                break
                             prime_started = time.monotonic_ns()
                             accepted, reasons = gate.prime_recovery(
                                 governor_input, token=gate.decision_token
@@ -550,13 +658,19 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                             prime_compute_ns = max(
                                 0, time.monotonic_ns() - prime_started
                             )
-                            clock.advance_ns(prime_compute_ns)
+                            actual_wall_timings_ns["recovery_prime"].append(
+                                prime_compute_ns
+                            )
                             recovery_primes.append(
                                 {
                                     "tick_index": int(governor_input["tick_index"]),
                                     "accepted": accepted,
                                     "reason_codes": reasons,
                                     "compute_time_ns": prime_compute_ns,
+                                    "modeled_service_ns": modeled_stage_latencies_ns[
+                                        "recovery_prime"
+                                    ],
+                                    "completed_monotonic_ns": clock(),
                                 }
                             )
                             try:
@@ -567,22 +681,13 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                     now_ns=clock(),
                                 )
                             except NotReady:
-                                # Recovery priming performs the complete finite
-                                # validation and advances the experiment clock by
-                                # measured work. If its source data expires, the
-                                # proposal is not renewed or evaluated; the plant
-                                # still steps and the watchdog still runs below.
+                                # The stage scheduler advanced the plant and
+                                # watchdog before the atomic prime completion. If
+                                # the original evidence expired, it is not renewed.
                                 governor_input = None
                                 post_prime_expired_input_count += 1
                             if governor_input is not None:
-                                governor_input["episode_id"] = request["episode_id"]
-                                live_health = copy.deepcopy(governor_input["health"])
-                                governor_input["health"]["source_health_ids"].extend(
-                                    fixed["source_health_ids"]
-                                )
-                                governor_input["health"]["summaries"].extend(
-                                    copy.deepcopy(fixed["summaries"])
-                                )
+                                live_health = add_fixed_health(governor_input)
                         if governor_input is not None:
                             source_health_audit.append(
                                 {
@@ -593,20 +698,14 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                             )
                             snapshot = governor_input["snapshot"]
                             saved_snapshots.append((simulator.tick_index, snapshot))
+                            candidate_started = time.monotonic_ns()
                             decision = governor.evaluate(governor_input)
-                            clock.set_ns(
-                                max(clock(), int(decision["decided_monotonic_ns"]))
+                            candidate_wall_ns = max(
+                                0, time.monotonic_ns() - candidate_started
                             )
-                            clock.advance_ns(gate_dispatch_ns)
-                            gate_started = time.monotonic_ns()
-                            receipt = gate.submit(
-                                decision,
-                                governor_input,
-                                token=gate.decision_token,
-                                now_ns=clock(),
+                            actual_wall_timings_ns["candidate"].append(
+                                candidate_wall_ns
                             )
-                            gate_compute_ns = max(0, time.monotonic_ns() - gate_started)
-                            clock.advance_ns(gate_compute_ns)
                             proposals.append(
                                 {
                                     "proposal_id": governor_input["proposal"]["command_id"],
@@ -624,37 +723,70 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                     **decision,
                                     "proposal_id": proposal["command_id"],
                                     "simulation_time_s": simulator.simulation_time_s,
-                                    "gate_compute_time_ns": gate_compute_ns,
+                                    "candidate_wall_time_ns": candidate_wall_ns,
                                 }
-                            )
-                            gate_receipts.append(
-                                _receipt_record(
-                                    receipt,
-                                    simulation_time_s=simulator.simulation_time_s,
-                                    source="supervisor",
-                                )
                             )
                             fresh_proposal_count += 1
                             fresh_this_tick = True
+                            if not advance_stage(
+                                "candidate",
+                                floor_ns=int(decision["decided_monotonic_ns"]),
+                            ):
+                                break
+                            decisions[-1]["simulation_time_s"] = (
+                                simulator.simulation_time_s
+                            )
+                            with gate.lock:
+                                queued_epoch = gate.epoch
+                                queued_generation = gate.control_generation
+                            if not advance_stage("gate"):
+                                break
+                            with gate.lock:
+                                stale = (
+                                    gate.epoch != queued_epoch
+                                    or gate.control_generation != queued_generation
+                                )
+                            if stale:
+                                scheduler_rejections.append(
+                                    {
+                                        "decision_id": decision["decision_id"],
+                                        "reason_codes": [
+                                            "SCHEDULER_STALE_EPOCH_OR_GENERATION"
+                                        ],
+                                        "queued_epoch": queued_epoch,
+                                        "queued_generation": queued_generation,
+                                        "completion_epoch": gate.epoch,
+                                        "completion_generation": gate.control_generation,
+                                        "completed_monotonic_ns": clock(),
+                                    }
+                                )
+                            else:
+                                gate_started = time.monotonic_ns()
+                                receipt = gate.submit(
+                                    decision,
+                                    governor_input,
+                                    token=gate.decision_token,
+                                )
+                                gate_compute_ns = max(
+                                    0, time.monotonic_ns() - gate_started
+                                )
+                                actual_wall_timings_ns["gate_submit"].append(
+                                    gate_compute_ns
+                                )
+                                decisions[-1]["gate_compute_time_ns"] = gate_compute_ns
+                                gate_receipts.append(
+                                    _receipt_record(
+                                        receipt,
+                                        simulation_time_s=simulator.simulation_time_s,
+                                        source="supervisor",
+                                    )
+                                )
                 if not fresh_this_tick:
                     no_fresh_input_ticks += 1
             else:
                 no_fresh_input_ticks += 1
-
-            watchdog_opportunities += 1
-            watchdog_started = time.monotonic_ns()
-            watchdog_receipt = gate.watchdog_tick(now_ns=clock())
-            clock.advance_ns(max(0, time.monotonic_ns() - watchdog_started))
-            if watchdog_receipt is not None:
-                watchdog_receipts.append(
-                    _receipt_record(
-                        watchdog_receipt,
-                        simulation_time_s=simulator.simulation_time_s,
-                        source="watchdog",
-                    )
-                )
-            simulator.step()
-            clock.advance_ns(plant_period_ns)
+            if simulator.simulation_time_s < max_time:
+                advance_idle_step()
     finally:
         gate_closed = gate.close(timeout_s=1.0)
 
@@ -669,6 +801,13 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     return {
         **request,
         "adapter_provenance": "production_integration",
+        "method_provenance": {
+            "candidate_id": governor.candidate_id,
+            "candidate_version": governor.candidate_version,
+            "entrypoint": (
+                f"{governor.__class__.__module__}:{governor.__class__.__name__}"
+            ),
+        },
         "health_policy": {
             "id": "H_FIXED",
             "label": fixed["policy_label"],
@@ -691,15 +830,25 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
             "post_prime_expired_inputs": post_prime_expired_input_count,
             "no_fresh_input_ticks": no_fresh_input_ticks,
             "watchdog_opportunities": watchdog_opportunities,
+            "busy_planner_opportunities": busy_planner_opportunities,
             "independent_20hz_fresh_state_reassessment": False,
             "held_proposal_reissued": False,
         },
         "timing_model": {
+            "model_version": SCHEDULER_MODEL_VERSION,
             "clock": "injected_manual_monotonic",
-            "ai_compute": "deterministic_modeled",
-            "modeled_ai_compute_ns": ai_compute_ns,
-            "modeled_gate_dispatch_ns": gate_dispatch_ns,
-            "candidate_and_gate_work": "measured_host_duration_advanced_on_same_clock",
+            "service_semantics": (
+                "declared deterministic stages complete atomically after plant and "
+                "watchdog events; gate submit is instantaneous at its modeled completion"
+            ),
+            "modeled_stage_latencies_ns": dict(modeled_stage_latencies_ns),
+            "plant_event_quantization_ns": plant_period_ns,
+            "candidate_completion_floor": "emitted_decided_monotonic_ns",
+            "actual_wall_timings_ns": actual_wall_timings_ns,
+            "wall_timings_affect_simulated_time": False,
+            "conditional_claim_scope": "conditional_on_modeled_stage_latencies",
+            "events": scheduler_events,
+            "scheduler_rejections": scheduler_rejections,
         },
         "gate_recovery": {
             "cache_mode": "synchronous",

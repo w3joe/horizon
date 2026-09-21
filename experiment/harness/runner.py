@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 from experiment.evaluation.scoring import score_closed_loop, score_replay
+from experiment.harness.closed_loop import DEFAULT_MODELED_STAGE_LATENCIES_NS
 from experiment.harness.fixture import FIXTURE_CANDIDATES, run_fixture
 from experiment.harness.manifests import Job
 from experiment.io import write_json
@@ -62,6 +63,60 @@ def load_episode_entrypoint(specification: str) -> Callable[[dict[str, Any]], di
     return function
 
 
+def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Retain bounded method, timing, and authority evidence beside scored output."""
+
+    decisions = list(bundle.get("decisions", []))
+    gate_receipts = list(bundle.get("gate_receipts", []))
+    watchdog_receipts = list(bundle.get("watchdog_receipts", []))
+    truth_frames = list(bundle.get("truth_frames", []))
+    return {
+        "record_type": "DevelopmentEpisodeDiagnostics",
+        "run_id": bundle["run_id"],
+        "episode_id": bundle["episode_id"],
+        "branch_id": bundle["branch_id"],
+        "candidate_id": bundle["candidate_id"],
+        "health_id": bundle["health_id"],
+        "scenario_id": bundle["scenario_id"],
+        "seed": bundle["seed"],
+        "split": bundle["split"],
+        "method_provenance": bundle.get("method_provenance"),
+        "timing_model": bundle.get("timing_model"),
+        "cadence": bundle.get("cadence"),
+        "gate_recovery": bundle.get("gate_recovery"),
+        "authority_audit": bundle.get("authority_audit"),
+        "decision_action_counts": dict(
+            sorted(Counter(str(item.get("action", "unknown")) for item in decisions).items())
+        ),
+        "gate_receipts": {
+            "count": len(gate_receipts),
+            "accepted": sum(item.get("accepted") is True for item in gate_receipts),
+            "rejected": sum(item.get("accepted") is not True for item in gate_receipts),
+            "reason_counts": dict(
+                sorted(
+                    Counter(
+                        reason
+                        for item in gate_receipts
+                        for reason in item.get("reason_codes", [])
+                    ).items()
+                )
+            ),
+        },
+        "watchdog_receipts": {
+            "count": len(watchdog_receipts),
+            "accepted": sum(item.get("accepted") is True for item in watchdog_receipts),
+        },
+        "operational_authority_counts": dict(
+            sorted(Counter(str(item.get("authority", "unknown")) for item in truth_frames).items())
+        ),
+        "writer_channel_counts": dict(
+            sorted(
+                Counter(str(item.get("writer_channel", "unknown")) for item in truth_frames).items()
+            )
+        ),
+    }
+
+
 def build_episode_request(
     job: Job, run_id: str, max_simulation_time_s: float
 ) -> dict[str, Any]:
@@ -80,6 +135,10 @@ def build_episode_request(
         "candidate_id": job.candidate_id,
         "health_id": job.health_id,
         "max_simulation_time_s": max_simulation_time_s,
+        **{
+            f"modeled_{stage}_service_ns": latency
+            for stage, latency in DEFAULT_MODELED_STAGE_LATENCIES_NS.items()
+        },
     }
 
 
@@ -104,6 +163,7 @@ def run_adapter_jobs(
         for path in (
             destination / f"{request['branch_id']}.json",
             destination / f"{request['branch_id']}.assumption-audit.json",
+            destination / f"{request['branch_id']}.diagnostics.json",
         )
         if path.exists()
     ]
@@ -112,6 +172,7 @@ def run_adapter_jobs(
     records = []
     adapter_provenances: list[str] = []
     assumption_audits: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
     for job, request in zip(jobs, requests):
         bundle = run_episode(request)
         for field in (
@@ -154,6 +215,13 @@ def run_adapter_jobs(
         if record_path.exists():
             raise FileExistsError(f"refusing to overwrite existing output: {record_path}")
         write_json(record_path, record)
+        if job.mode == "full_pipeline_closed_loop":
+            diagnostic = _episode_diagnostics(bundle)
+            diagnostics.append(diagnostic)
+            write_json(
+                destination / f"{request['branch_id']}.diagnostics.json",
+                diagnostic,
+            )
         if "assumption_audit" in bundle:
             audit = {
                 "run_id": request["run_id"],
@@ -173,6 +241,7 @@ def run_adapter_jobs(
                 provenance == "synthetic_fixture" for provenance in adapter_provenances
             ),
             "assumption_audits": assumption_audits,
+            "diagnostics": diagnostics,
         },
     )
     return records
