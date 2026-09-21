@@ -88,6 +88,58 @@ def stop_all(processes: list[ManagedProcess]) -> None:
         item.log_handle.close()
 
 
+def monitor_processes(
+    processes: list[ManagedProcess],
+    status: dict[str, object],
+    run_file: Path,
+    *,
+    smoke_seconds: float,
+) -> None:
+    """Record component exits without taking healthy sibling processes down."""
+    deadline = time.monotonic() + smoke_seconds if smoke_seconds else None
+    recorded: set[str] = set()
+    while True:
+        for item in processes:
+            exit_code = item.process.poll()
+            if exit_code is None or item.name in recorded:
+                continue
+            recorded.add(item.name)
+            status["runtime_status"] = "degraded"
+            process_status = status["processes"]
+            assert isinstance(process_status, dict)
+            process_status[item.name] = {
+                "pid": item.process.pid,
+                "port": process_status[item.name]["port"],
+                "health": "exited",
+                "exit_code": exit_code,
+            }
+            failures = status.setdefault("component_failures", [])
+            assert isinstance(failures, list)
+            failures.append(
+                {
+                    "name": item.name,
+                    "exit_code": exit_code,
+                    "observed_utc": datetime.now(timezone.utc).isoformat(),
+                    "automatic_restart": False,
+                }
+            )
+            run_file.write_text(json.dumps(status, indent=2) + "\n")
+            print(
+                f"component {item.name} exited with code {exit_code}; "
+                "surviving components remain active (no automatic restart)",
+                flush=True,
+            )
+
+        if not any(item.process.poll() is None for item in processes):
+            return
+        if deadline is not None and time.monotonic() >= deadline:
+            return
+        wait_s = 0.5
+        if deadline is not None:
+            wait_s = min(wait_s, max(0.0, deadline - time.monotonic()))
+        time.sleep(wait_s)
+
+
 def post_json(url: str, value: dict[str, object]) -> tuple[int, dict[str, object]]:
     request = Request(
         url,
@@ -442,6 +494,7 @@ def main() -> int:
         "repository_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "ports": ports,
         "unavailable": unavailable,
+        "runtime_status": "starting",
         "processes": {},
     }
     (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
@@ -477,22 +530,18 @@ def main() -> int:
         status["smoke_checks"] = verify_public_slice(
             host, ports, verify_reset=args.verify_reset
         )
+        status["runtime_status"] = "ready"
         (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
 
         print(f"Horizon run {run_id} ready: http://{host}:{ports['console']}", flush=True)
         for name, reason in unavailable.items():
             print(f"unavailable {name}: {reason}", flush=True)
-        if args.smoke_seconds:
-            time.sleep(args.smoke_seconds)
-        else:
-            while all(item.process.poll() is None for item in managed):
-                time.sleep(0.5)
-        failed = [item for item in managed if item.process.poll() is not None]
-        if failed:
-            detail = ", ".join(
-                f"{item.name}={item.process.returncode}" for item in failed
-            )
-            raise RuntimeError(f"local run component exited; no automatic restart: {detail}")
+        monitor_processes(
+            managed,
+            status,
+            run_dir / "run.json",
+            smoke_seconds=args.smoke_seconds,
+        )
     except KeyboardInterrupt:
         pass
     except Exception as exc:
