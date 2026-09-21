@@ -105,6 +105,8 @@
     {"id": "temporal-drop-v1", "seed": 4105, "parameters": {"drop_every_n": 5}}
   ],
   "h4_claim_gate": {
+    "minimum_fit_samples": 296,
+    "maximum_dead_feature_fraction": 0.1,
     "minimum_pairs": 12,
     "minimum_sequences": 3,
     "minimum_seeds": 3,

@@ -308,6 +308,26 @@ def evaluate_h4_claim_gate(gate: dict[str, Any], requirements: dict[str, Any]) -
     parameters = gate.get("reference_parameters", {})
     if parameters.get("converged") is not True:
         return {"eligible": False, "reason": "reference_not_converged"}
+    initial_loss = _finite_number(parameters.get("initial_loss"), "H4 initial loss")
+    final_loss = _finite_number(parameters.get("final_loss"), "H4 final loss")
+    fit_samples = int(parameters.get("fit_samples", 0))
+    epochs_completed = int(parameters.get("epochs_completed", 0))
+    epochs_requested = int(parameters.get("epochs_requested", 0))
+    hidden_features = int(parameters.get("hidden_features", 0))
+    dead_features = int(parameters.get("dead_features", -1))
+    _require(initial_loss > final_loss >= 0, "H4 converged loss record is invalid")
+    _require(
+        fit_samples >= int(requirements["minimum_fit_samples"]),
+        "H4 fit has too few development samples",
+    )
+    _require(
+        0 < epochs_completed <= epochs_requested,
+        "H4 convergence epoch record is invalid",
+    )
+    _require(hidden_features > 0 and 0 <= dead_features <= hidden_features, "H4 feature counts invalid")
+    dead_fraction = dead_features / hidden_features
+    if dead_fraction > float(requirements["maximum_dead_feature_fraction"]):
+        return {"eligible": False, "reason": "too_many_dead_features", "dead_fraction": dead_fraction}
     controls = gate.get("causal_controls")
     if not isinstance(controls, list) or not controls:
         return {"eligible": False, "reason": "causal_controls_missing"}
@@ -328,7 +348,9 @@ def evaluate_h4_claim_gate(gate: dict[str, Any], requirements: dict[str, Any]) -
         equal_delta = _finite_number(control.get("equal_norm_control_delta"), "equal_norm_control_delta")
         _require(min(target, random_delta, equal_delta) >= 0, "causal deltas must be nonnegative")
         wins += target > max(random_delta, equal_delta)
-        sequences.add(str(control.get("sequence_id", "")))
+        sequence_id = str(control.get("sequence_id", ""))
+        _require(sequence_id, "causal control lacks sequence identity")
+        sequences.add(sequence_id)
         seeds.add(seed)
     p_value = _binomial_upper_tail(wins, len(controls))
     checks = {
@@ -347,6 +369,7 @@ def evaluate_h4_claim_gate(gate: dict[str, Any], requirements: dict[str, Any]) -
         "target_beats_both_controls": wins,
         "win_fraction": wins / len(controls),
         "one_sided_sign_test_p": p_value,
+        "dead_feature_fraction": dead_fraction,
         "checks": checks,
     }
 
@@ -358,7 +381,11 @@ def _method_eligibility(
         return {"eligible": False, "reason": str(gate.get("reason", "score_not_ready"))}
     if method_id in {"H2", "H3", "H4"}:
         _require(gate.get("reference_fit_split") == "development", "reference split mismatch")
-        _require(bool(gate.get("reference_hash")), "reference hash missing")
+        _require(len(str(gate.get("reference_hash", ""))) == 64, "reference hash missing")
+        _require(
+            len(str(gate.get("reference_artifact_sha256", ""))) == 64,
+            "reference artifact file hash missing",
+        )
         _require(
             gate.get("reference_runtime_id") == config["target_runtime_id"],
             "reference runtime mismatch",

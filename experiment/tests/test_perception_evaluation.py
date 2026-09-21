@@ -166,6 +166,8 @@ def _calibration_fixture(tmp_path: Path):
             {"id": "blur-v1", "seed": 41, "parameters": {"sigma": 1.5}}
         ],
         "h4_claim_gate": {
+            "minimum_fit_samples": 4,
+            "maximum_dead_feature_fraction": 0.1,
             "minimum_pairs": 12,
             "minimum_sequences": 3,
             "minimum_seeds": 3,
@@ -182,19 +184,22 @@ def _calibration_fixture(tmp_path: Path):
         "H2": {
             "score_ready": True,
             "reference_fit_split": "development",
-            "reference_hash": "h2-reference",
+            "reference_hash": "2" * 64,
+            "reference_artifact_sha256": "a" * 64,
             "reference_runtime_id": "cuda-fp16-v1",
         },
         "H3": {
             "score_ready": True,
             "reference_fit_split": "development",
-            "reference_hash": "h3-reference",
+            "reference_hash": "3" * 64,
+            "reference_artifact_sha256": "b" * 64,
             "reference_runtime_id": "cuda-fp16-v1",
         },
         "H4": {
             "score_ready": True,
             "reference_fit_split": "development",
-            "reference_hash": "h4-reference",
+            "reference_hash": "4" * 64,
+            "reference_artifact_sha256": "c" * 64,
             "reference_runtime_id": "cuda-fp16-v1",
             "reference_parameters": {"converged": False},
             "causal_controls": [],
@@ -289,6 +294,8 @@ def test_perception_calibration_rejects_inconsistent_proxy_label(tmp_path: Path)
 
 def test_h4_claim_gate_requires_convergence_and_replicated_controls() -> None:
     requirements = {
+        "minimum_fit_samples": 12,
+        "maximum_dead_feature_fraction": 0.1,
         "minimum_pairs": 12,
         "minimum_sequences": 3,
         "minimum_seeds": 3,
@@ -309,7 +316,19 @@ def test_h4_claim_gate_requires_convergence_and_replicated_controls() -> None:
         for index in range(12)
     ]
     passed = evaluate_h4_claim_gate(
-        {"reference_parameters": {"converged": True}, "causal_controls": controls},
+        {
+            "reference_parameters": {
+                "converged": True,
+                "initial_loss": 1.0,
+                "final_loss": 0.1,
+                "fit_samples": 12,
+                "epochs_completed": 100,
+                "epochs_requested": 1000,
+                "hidden_features": 16,
+                "dead_features": 0,
+            },
+            "causal_controls": controls,
+        },
         requirements,
     )
     blocked = evaluate_h4_claim_gate(

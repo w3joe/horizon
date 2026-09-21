@@ -47,7 +47,9 @@ Calibration associations remain `unknown` risk until frozen heldout validation.
 
 H0 may calibrate once its score rows are available. H1 remains blocked while its independent
 horizon and occlusion capabilities lack a predeclared complete score. H2 and H3 require target
-CUDA/float16 development references. H4 additionally requires a converged reference and at least
+CUDA/float16 development references with both canonical artifact identity and file hashes. H4
+additionally requires at least 296 fit samples, falling finite loss, at most 10% dead features, a
+valid early-stopping convergence record, and at least
 12 state-reset intervention pairs spanning three development sequences and three seeds. Its
 selected direction must beat both random-direction and equal-norm controls in at least 75% of
 pairs, with a one-sided exact sign-test p-value at most 0.05. The current H4 reference reached the
