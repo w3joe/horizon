@@ -1,0 +1,47 @@
+{
+  "manifest_version": "1.0.0",
+  "purpose": "External public maritime evidence used by bounded offline replay adapters",
+  "artifacts": [
+    {
+      "id": "signalk-nmea0183-sample",
+      "kind": "recorded_nmea0183",
+      "external_path": "output/runtime-assurance/data-samples/signalk-nmea0183.log",
+      "bytes": 13071,
+      "sha256": "1ba3223de3f365105bea522f1bebc36dd2880029b612707e0934df9c07f62cc3",
+      "rights": "Signal K repository Apache-2.0; sample-specific rights not separately stated",
+      "online_use": "navigation/environment observations after checksum and unit parsing",
+      "limitations": ["Recorded replay only", "No online anomaly label", "Sensor time absent; replay time is explicit"]
+    },
+    {
+      "id": "martts-synthetic-dialogue",
+      "kind": "synthetic_intership_text",
+      "external_path": "output/runtime-assurance/data-samples/martts-scenarios.jsonl",
+      "bytes": 73269,
+      "sha256": "b6d84e376d09b5ed41ca152cf93e15aa45e9cf4cfb2062560731c79a4b89ce7a",
+      "rights": "CC BY 4.0",
+      "online_use": "claimed inter-ship communications kept separate from observed motion",
+      "limitations": ["Synthetic text", "Not recorded radio audio", "No claim is treated as truth"]
+    },
+    {
+      "id": "marsim-public-archive",
+      "kind": "synthetic_network_pcap",
+      "external_path": "horizon-data/datasets/marsim",
+      "bytes": 560246467,
+      "md5_from_provider": "9f458760e8b746854dae451627ff6aff",
+      "sha256": "5573e6573ff14f4dd2fc5784bd6b03fae67265a799a4d8ea048e2b338c95f12f",
+      "rights": "CC BY 4.0",
+      "online_use": "offline packet timing, source/destination, capture and application-status replay",
+      "limitations": ["Simulated onboard GNSS traffic", "Filename and dataset attack labels are evaluation-only", "Passive capture does not prove application consumption"]
+    },
+    {
+      "id": "canoe-2025-08-20-16-07-selected",
+      "kind": "recorded_multisensor",
+      "external_path": "horizon-data/datasets/canoe/acquisition.json",
+      "artifact_count": 22,
+      "acquisition_manifest_sha256": "a6d2e402a076cd747b2f9d006350d5a9451bddae27e70d59db602c01fbf430ef",
+      "rights": "CC BY 4.0",
+      "online_use": "raw IMU, motor, camera, radar and calibration references",
+      "limitations": ["IMU file is partial", "No postprocessed navigation truth", "Radar and camera images are output-only until metric calibration is validated"]
+    }
+  ]
+}
