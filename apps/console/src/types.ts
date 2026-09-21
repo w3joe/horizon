@@ -14,7 +14,15 @@ export type CameraMode = "oblique" | "tactical";
 export type ScenarioId = "crossing" | "camera" | "network" | "proposal";
 export type ConnectionState = "fixture" | "connecting" | "live" | "stale" | "disconnected";
 export type LineageStatus = "accepted" | "rejected" | "invalid" | "incomplete" | "unavailable";
+export type ServiceName = "snapshot" | "assurance" | "evidence" | "collector" | "diagnostics" | "gate";
+export type ServiceState = "connecting" | "live" | "stale" | "unavailable";
 export type EvidenceObservation = Observation | NetworkObservation;
+
+export interface ServiceFreshness {
+  state: ServiceState;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+}
 
 export interface PathPoint {
   north: number;
@@ -38,11 +46,11 @@ export interface ContactEvidence {
   status: "tracked" | "degraded" | "stale" | "unknown";
   rangeM: number;
   bearingDeg: number;
-  ageS: number;
+  ageS: number | null;
   sourceIds: string[];
   supportingObservationIds: string[];
   contradictingObservationIds: string[];
-  uncertaintyRadiusM: number;
+  uncertaintyRadiusM: number | null;
   uncertaintyKind?: "covariance" | "bounded_set" | "covariance+bounded_set" | "unknown";
   covarianceCoverage?: number | null;
   reason: string;
@@ -140,6 +148,7 @@ export interface LiveControlEvent {
   receipt?: GateReceipt;
   input?: LiveGovernorInput;
   input_summary?: LiveInputSummary;
+  result?: { accepted?: boolean; [key: string]: unknown };
 }
 
 export interface LiveInputSummary {
@@ -191,6 +200,9 @@ export interface CollectorDiagnostics {
 }
 
 export interface GateStatus {
+  observed_monotonic_ns: number | null;
+  run_id?: string;
+  branch_id?: string;
   epoch: number | null;
   quarantined: boolean;
   quarantine_reasons: string[];
@@ -207,6 +219,12 @@ export interface ConsolePacket {
   lineage: LineageState;
   collectorDiagnostics: CollectorDiagnostics | null;
   gateStatus: GateStatus | null;
+  serviceFreshness: Record<ServiceName, ServiceFreshness>;
+  authority: {
+    state: "current" | "historical" | "rejected" | "unknown";
+    receiptAgeS: number | null;
+    explanation: string;
+  };
   observations: EvidenceObservation[];
   proposedCommand: { headingRad: number; speedMps: number } | null;
   proposedPath: PathPoint[];
@@ -226,13 +244,29 @@ export interface LiveEnvelope {
   decision?: AssuranceDecision;
 }
 
-export interface OperatorCapability {
-  available: boolean;
-  paused: boolean | null;
-  pending: boolean;
+export type OperatorAction = "pause" | "resume" | "reset" | "fault" | "acknowledge";
+
+export interface OperatorCapabilities {
+  schema_version: "1.0";
+  branch_id: string;
+  state: "ready" | "reset_in_progress" | "unavailable";
+  plant_epoch: number | null;
+  gate_epoch: number | null;
+  startup_recovery_ready: boolean | null;
+  resume_permitted: boolean;
+  required_header: { "X-Horizon-Operator": "1" };
+  declared_fault_ids: string[];
+  actions: Record<OperatorAction, { method: "POST"; path: string }>;
+}
+
+export interface OperatorState {
+  capabilities: OperatorCapabilities | null;
+  pendingAction: OperatorAction | null;
+  lastAction: OperatorAction | null;
+  lastAccepted: boolean | null;
   error: string | null;
-  allowedFaults: Array<{ id: string; label: string }>;
-  activeFault: string | null;
+  activeFaults: string[];
+  resetRequested: boolean;
 }
 
 export interface PerceptionManifest {

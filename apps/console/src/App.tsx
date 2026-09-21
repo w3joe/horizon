@@ -3,8 +3,10 @@ import { DataFlowView } from "./components/DataFlowView";
 import { EvidencePanel } from "./components/EvidencePanel";
 import { MaritimeScene } from "./components/MaritimeScene";
 import { NeuralView } from "./components/NeuralView";
+import { OperatorControls } from "./components/OperatorControls";
 import { Timeline } from "./components/Timeline";
 import { useConsoleFeed } from "./hooks/useConsoleFeed";
+import { useOperatorControls } from "./hooks/useOperatorControls";
 import { usePerceptionArtifact } from "./hooks/usePerceptionArtifact";
 import { SCENARIOS } from "./lib/fixtures";
 import type { CameraMode, ScenarioId, Workspace } from "./types";
@@ -27,7 +29,9 @@ export function App() {
   const [selectedContactId, setSelectedContactId] = useState("contact-01");
   const frame = useRef<number | null>(null);
   const previous = useRef<number | null>(null);
-  const { packet, connection, endpoint } = useConsoleFeed(scenarioId, timeS);
+  const feed = useConsoleFeed(scenarioId, timeS);
+  const { packet, connection, endpoint } = feed;
+  const operator = useOperatorControls(endpoint !== null, feed.clearLiveEvidence);
   const perceptionArtifact = usePerceptionArtifact(true);
   const operatorLocked = endpoint !== null;
   const displayTime = packet.fixture ? timeS : packet.snapshot.simulation_time_s;
@@ -109,15 +113,18 @@ export function App() {
         <div className="scenario-controls">
           <label><span>Scenario / inject fault</span><select value={scenarioId} disabled={operatorLocked || !packet.fixture} onChange={(event) => changeScenario(event.target.value as ScenarioId)}>{SCENARIOS.map((scenario) => <option value={scenario.id} key={scenario.id}>{scenario.label}</option>)}</select></label>
           <button type="button" className={showBranch ? "active" : ""} disabled={operatorLocked || !packet.fixture} onClick={() => setShowBranch((value) => !value)}>Compare branch</button>
-          {operatorLocked && <span className="control-pending">Operator controls pending coordinated reset capability</span>}
+          {operatorLocked && <span className="control-pending">Scenario changes require a new coordinated run.</span>}
         </div>
       </section>
 
+      {operatorLocked && <OperatorControls state={operator.state} onAction={operator.invoke} />}
+
       <div className="mode-disclosure">
         <strong>{packet.fixture ? operatorLocked ? "FIXTURE FALLBACK · LIVE DISCONNECTED" : "INITIAL FIXTURE MODE" : "LIVE PUBLIC MODE"}</strong>
-        <span>{packet.fixture ? operatorLocked ? "Synthetic layout sample only · server operator controls locked · no live evidence claim" : "Synthetic schema-valid display data · no measured performance or validated safety claim" : `Public online evidence · lineage ${packet.lineage.status} · evaluation truth and private capabilities unavailable`}</span>
+        <span>{packet.fixture ? operatorLocked ? "Synthetic layout sample only · no live evidence claim" : "Synthetic schema-valid display data · no measured performance or validated safety claim" : `Public online evidence · ${packet.authority.state} authority · ${packet.authority.explanation}`}</span>
         {endpoint && connection !== "live" && <code>{endpoint}</code>}
       </div>
+      {!packet.fixture && <div className="service-strip" aria-label="Upstream service freshness">{Object.entries(packet.serviceFreshness).map(([name, freshness]) => <span key={name} className={freshness.state}><i />{name} <b>{freshness.state}</b>{freshness.lastSuccessAt !== null && freshness.state !== "live" ? <small>{Math.max(0, (Date.now() - freshness.lastSuccessAt) / 1000).toFixed(1)}s since update</small> : null}</span>)}</div>}
 
       <section className="console-grid">
         <div className="primary-workspace">
@@ -125,7 +132,7 @@ export function App() {
             <>
               <div className="scene-toolbar">
                 <div className="camera-toggle"><button type="button" aria-pressed={cameraMode === "oblique"} onClick={() => setCameraMode("oblique")}>Oblique</button><button type="button" aria-pressed={cameraMode === "tactical"} onClick={() => setCameraMode("tactical")}>Tactical</button></div>
-                <div className="scene-legend">{packet.acceptedPath.length > 1 ? <span className="accepted">Gate-applied trajectory</span> : <span className="unavailable">Applied trajectory unavailable</span>}{packet.proposedPath.length > 1 ? <span className="proposed">AI-proposed trajectory</span> : <span className="unavailable">Proposed trajectory unavailable</span>}{showBranch && packet.fixture && <span className="branch">Fixture branch prediction</span>}</div>
+                <div className="scene-legend">{packet.acceptedPath.length > 1 ? <span className="accepted">{packet.authority.state === "current" ? "Plant-active trajectory" : "Receipt trajectory (historical)"}</span> : <span className="unavailable">Applied trajectory unavailable</span>}{packet.proposedPath.length > 1 ? <span className="proposed">AI-proposed trajectory</span> : <span className="unavailable">Proposed trajectory unavailable</span>}{showBranch && packet.fixture && <span className="branch">Fixture branch prediction</span>}</div>
               </div>
               <MaritimeScene packet={packet} cameraMode={cameraMode} selectedContactId={selectedContactId} onSelectContact={setSelectedContactId} showBranch={showBranch && packet.fixture} />
               <div className="scene-footnote"><span>{packet.physicsLabel}</span><span>Ownship hull 12 × 3 m</span></div>
@@ -155,7 +162,7 @@ export function App() {
         onRateChange={setRate}
         onSelectEvent={(id) => { const event = packet.events.find((item) => item.id === id); setSelectedEventId(id); if (event) { setTimeS(event.timeS); setPlaying(false); } }}
         disabled={operatorLocked || !packet.fixture}
-        disabledReason="Live controls await the server-side operator handshake"
+        disabledReason={operator.state.resetRequested ? "Live run paused while reset waits for fresh recovery evidence" : "Live playback follows the plant; use the mediated operator controls above"}
       />
       <footer className="console-footer"><span>Keyboard: 1–3 workspaces · Space play/pause · R reset</span><span>Contract 0.1.0 · {packet.snapshot.frame}</span></footer>
     </main>

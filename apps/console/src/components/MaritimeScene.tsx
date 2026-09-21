@@ -156,6 +156,7 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
     }
   });
   const contactPosition = contact ? nedToScene({ north: contact.position_ne_m[0], east: contact.position_ne_m[1] }, 0.28) : [0, 0, 0] as [number, number, number];
+  const uncertaintyRadius = packet.contact.uncertaintyRadiusM;
   return (
     <>
       <color attach="background" args={["#0a2633"]} />
@@ -170,8 +171,8 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
       {showBranch && <PathLine points={packet.branchPath} color="#f2bb64" dashed opacity={0.72} />}
       <Vessel position={nedToScene({ north: own.position_ne_m[0], east: own.position_ne_m[1] }, 0.42)} heading={own.heading_rad} ownship />
       {contact && <Vessel position={contactPosition} heading={contact.heading_rad} selected={selected} onClick={() => onSelectContact(contact.vessel_id)} scale={1.45} />}
-      {contact && packet.contact.uncertaintyRadiusM > 0 && <mesh ref={uncertaintyRef} position={[contactPosition[0], 0.08, contactPosition[2]]} rotation-x={-Math.PI / 2}>
-        <ringGeometry args={[packet.contact.uncertaintyRadiusM - 0.28, packet.contact.uncertaintyRadiusM, 72]} />
+      {contact && uncertaintyRadius !== null && uncertaintyRadius > 0 && <mesh ref={uncertaintyRef} position={[contactPosition[0], 0.08, contactPosition[2]]} rotation-x={-Math.PI / 2}>
+        <ringGeometry args={[Math.max(0, uncertaintyRadius - 0.28), uncertaintyRadius, 72]} />
         <meshBasicMaterial color="#f2bb64" transparent opacity={0.56} side={THREE.DoubleSide} />
       </mesh>}
       {packet.snapshot.traffic.slice(1).map((vessel) => (
