@@ -250,6 +250,23 @@ def test_radar_mode_ignores_optional_unknown_but_falls_back_on_required_loss(
     assert "REQUIRED_HEALTH_SOURCE_MISSING:obstacle_perception:radar" in missing["reason_codes"]
 
 
+def test_candidate_expiry_cannot_outlive_qualified_radar(reference, governor_input) -> None:
+    radar = next(item for item in governor_input["health"]["summaries"] if item["source_id"] == "obstacle_perception:radar")
+    radar["valid_until_monotonic_ns"] = governor_input["monotonic_time_ns"] + 80_000_000
+    decision = A1ThresholdSimplex(reference, fast_config()).evaluate(governor_input)
+    assert decision["action"] == "pass"
+    assert decision["expires_monotonic_ns"] == radar["valid_until_monotonic_ns"]
+
+
+def test_no_qualified_radar_cannot_be_labeled_validated_recovery(reference, governor_input) -> None:
+    radar = next(item for item in governor_input["health"]["summaries"] if item["source_id"] == "obstacle_perception:radar")
+    radar["status"] = "invalid"
+    decision = A1ThresholdSimplex(reference, fast_config()).evaluate(governor_input)
+    assert decision["action"] == "minimum_risk"
+    assert "VALIDATED_RECOVERY_SELECTED" not in decision["reason_codes"]
+    assert "MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE" in decision["reason_codes"]
+
+
 def test_configured_odd_bounds_require_model_and_contact_source_eligibility(
     reference, governor_input
 ) -> None:

@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from horizon_assurance.configuration import AssuranceConfig, NavigationReference
+from horizon_assurance.health_policy import required_health_evidence
 from horizon_assurance.predictive import Assessment, BoundedPredictiveChecker
 from horizon_assurance.validation import InputRejected, validate_decision_identity, validate_governor_input
 
@@ -179,6 +180,11 @@ class ActuatorGate:
 
         def worker() -> None:
             try:
+                health_expiry, health_reasons = required_health_evidence(
+                    source, self.checker.config, recovery=True, now_ns=self._monotonic_ns()
+                )
+                if health_reasons:
+                    return
                 selection = self.checker.recovery_from_current(source)
                 if not selection.assessment.safe or selection.command is None:
                     return
@@ -192,6 +198,7 @@ class ActuatorGate:
                     int(source["snapshot"]["valid_until_monotonic_ns"]),
                     int(source["proposal"]["expires_monotonic_ns"]),
                     option_expiry,
+                    health_expiry,
                 )
                 valid_until = self._map_remote_expiry(
                     source,
@@ -259,6 +266,11 @@ class ActuatorGate:
                 raise InputRejected(("CONFIGURATION_HASH_MISMATCH",))
             if governor_input["run_id"] != self.run_id or governor_input["branch_id"] != self.branch_id:
                 raise InputRejected(("RUN_OR_BRANCH_MISMATCH",))
+            health_expiry, health_reasons = required_health_evidence(
+                governor_input, self.checker.config, recovery=True, now_ns=self._monotonic_ns()
+            )
+            if health_reasons:
+                raise InputRejected(health_reasons)
             selection = self.checker.recovery_from_current(governor_input)
         except InputRejected as exc:
             return False, list(exc.reason_codes)
@@ -274,6 +286,7 @@ class ActuatorGate:
             int(governor_input["snapshot"]["valid_until_monotonic_ns"]),
             int(governor_input["proposal"]["expires_monotonic_ns"]),
             option_expiry,
+            health_expiry,
         )
         valid_until = self._map_remote_expiry(governor_input, source_valid_until, now)
         with self.lock:
@@ -395,6 +408,15 @@ class ActuatorGate:
                 else []
             ),
         )
+        if decision.get("action") in {"pass", "modify", "recover"}:
+            health_expiry, health_reasons = required_health_evidence(
+                governor_input,
+                self.checker.config,
+                recovery=decision.get("action") == "recover",
+                now_ns=arrival_ns,
+            )
+            source_valid_until_ns = min(source_valid_until_ns, health_expiry)
+            reasons.extend(health_reasons)
         if int(decision.get("expires_monotonic_ns", -1)) > source_valid_until_ns:
             reasons.append("DECISION_EXPIRY_EXCEEDS_SOURCE_VALIDITY")
         command = decision.get("issued_command")

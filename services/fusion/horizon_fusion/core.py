@@ -516,7 +516,7 @@ class FusionEngine:
             radar_status, radar_capability = "unknown", "unavailable"
             radar_reasons.append("RADAR_MISSING_OR_STALE")
         elif not _contact_eligible(radar, now_ns):
-            radar_status, radar_capability = "degraded", str(radar.get("capability", "available"))
+            radar_status, radar_capability = "invalid", str(radar.get("capability", "available"))
             if float(radar["time"]["clock_uncertainty_ms"]) > CONTACT_CLOCK_LIMIT_MS:
                 radar_reasons.append("CLOCK_UNCERTAINTY_HIGH")
             if radar_capability != "available":
@@ -624,6 +624,9 @@ class FusionEngine:
             int(actuator["time"]["valid_until_monotonic_ns"]),
             int(normalized_proposal["expires_monotonic_ns"]),
         )
+        radar_health = next(item for item in health if item["source_id"] == "obstacle_perception:radar")
+        if radar_health["status"] == "healthy":
+            validity = min(validity, int(radar_health["valid_until_monotonic_ns"]))
         config_hash = canonical_sha256(self.reference)
         scenario = str(self.reference["scenario_id"])
         constraints = [

@@ -87,3 +87,11 @@ The gate checks the immutable ceiling on
 arrival, after command assessment, and immediately before plant dispatch using
 the same injected host monotonic clock. These checks never remap or renew an
 expired source timestamp.
+
+Normal and filtered autonomy also require exactly one current record for each
+configured required health source. Their original expiries cap authority even
+when the snapshot or proposal lasts longer. The gate independently checks this
+qualification. Validated recovery requires fresh independent sensor evidence;
+primary-AI telemetry and AI-consumption health are not prerequisites for that
+recovery. Missing radar coverage yields explicit minimum-risk behavior under
+unknown assurance, rather than a validated obstacle-free recovery claim.
