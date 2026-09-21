@@ -50,6 +50,12 @@ class BlockingPlant(FakePlant):
         return super().command(envelope)
 
 
+class SlowSnapshotPlant(FakePlant):
+    def snapshot(self):
+        time.sleep(0.02)
+        return super().snapshot()
+
+
 def gate(reference, plant):
     return ActuatorGate(
         run_id="fixture-run-001",
@@ -219,6 +225,79 @@ def test_slow_plant_io_does_not_hold_watchdog_state_lock(reference, governor_inp
     assert not watchdog_thread.is_alive()
     assert [item["sequence"] for item in plant.envelopes] == [0]
     assert any("NO_STORED_RECOVERY" in item["reason_codes"] for item in runtime.telemetry)
+
+
+def test_reserved_command_is_rechecked_after_waiting_for_transport(reference, governor_input) -> None:
+    plant = FakePlant()
+    runtime = gate(reference, plant)
+    governor_input = retime_live(governor_input)
+    decision = A1ThresholdSimplex(
+        reference, AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    ).evaluate(governor_input)
+    runtime.plant_lock.acquire()
+    result = {}
+    worker = threading.Thread(
+        target=lambda: result.setdefault(
+            "receipt", runtime.submit(decision, governor_input, token="decision-secret")
+        )
+    )
+    worker.start()
+    deadline = time.monotonic() + 1.0
+    while runtime.control_generation < 1 and time.monotonic() < deadline:
+        time.sleep(0.002)
+    assert runtime.control_generation == 1
+    assert runtime.reset_handshake(token="operator-secret")
+    runtime.plant_lock.release()
+    worker.join(2.0)
+    assert not result["receipt"]["accepted"]
+    assert "STALE_RESERVED_EPOCH" in result["receipt"]["reason_codes"]
+    assert not plant.envelopes
+
+
+def test_reserved_command_can_expire_while_queued(reference) -> None:
+    plant = FakePlant()
+    runtime = gate(reference, plant)
+    now = time.monotonic_ns()
+    with runtime.lock:
+        reservation = runtime._reserve_actuation(
+            decision_id="queued-expiry",
+            command={"heading_rad": 0.0, "speed_mps": 1.0},
+            authority="recovery",
+            simulation_time_s=4.2,
+            reason_codes=["TEST_QUEUE_EXPIRY"],
+            assurance_status="safe",
+            now_ns=now,
+            host_valid_until_ns=now + 5_000_000,
+        )
+    runtime.plant_lock.acquire()
+    result = {}
+    worker = threading.Thread(
+        target=lambda: result.setdefault("receipt", runtime._send_reserved(reservation))
+    )
+    worker.start()
+    time.sleep(0.02)
+    runtime.plant_lock.release()
+    worker.join(2.0)
+    assert not result["receipt"]["accepted"]
+    assert "RESERVED_COMMAND_EXPIRED" in result["receipt"]["reason_codes"]
+    assert not plant.envelopes
+
+
+def test_watchdog_rechecks_certificate_after_slow_snapshot(reference, governor_input) -> None:
+    plant = SlowSnapshotPlant()
+    runtime = gate(reference, plant)
+    governor_input = retime_live(governor_input)
+    runtime.last_supervisor_host_ns = 0
+    runtime.stored_recovery = StoredRecovery(
+        command={"heading_rad": 0.5, "speed_mps": 1.0},
+        host_valid_until_ns=time.monotonic_ns() + 5_000_000,
+        source_decision_id="recovery-before-slow-snapshot",
+        governor_input=copy.deepcopy(governor_input),
+    )
+    receipt = runtime.watchdog_tick()
+    assert receipt and receipt["accepted"]
+    assert runtime.telemetry[-1]["assurance_status"] == "unknown"
+    assert "ASSURANCE_CERTIFICATE_EXPIRED" in runtime.telemetry[-1]["reason_codes"]
 
 
 def test_gate_reset_handshake_rotates_epoch_and_supervisor_token(reference, governor_input) -> None:

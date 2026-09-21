@@ -51,7 +51,7 @@ class HTTPPlantClient:
                 "Authorization": f"Bearer {self._plant_token}",
             },
         )
-        with urlopen(request, timeout=0.1) as response:  # noqa: S310 - configured plant endpoint
+        with urlopen(request, timeout=0.04) as response:  # noqa: S310 - configured plant endpoint
             return json.load(response)
 
     def command(self, envelope: dict[str, Any]) -> dict[str, Any]:
@@ -69,6 +69,15 @@ class StoredRecovery:
     host_valid_until_ns: int
     source_decision_id: str
     governor_input: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ReservedActuation:
+    envelope: dict[str, Any]
+    event: dict[str, Any]
+    epoch: int
+    generation: int
+    host_valid_until_ns: int
 
 
 def _finite(value: Any) -> bool:
@@ -276,7 +285,8 @@ class ActuatorGate:
         reason_codes: list[str],
         assurance_status: str,
         now_ns: int,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        host_valid_until_ns: int,
+    ) -> ReservedActuation:
         envelope = {
             "run_id": self.run_id,
             "branch_id": self.branch_id,
@@ -285,6 +295,7 @@ class ActuatorGate:
             "authority": authority,
             "sequence": self.plant_sequence,
             "expires_simulation_time_s": simulation_time_s + self.config.command_validity_s,
+            "expires_monotonic_ns": host_valid_until_ns,
             "command": copy.deepcopy(command),
         }
         self.plant_sequence += 1
@@ -297,17 +308,42 @@ class ActuatorGate:
             "assurance_status": assurance_status,
             "reason_codes": list(dict.fromkeys(reason_codes)),
         }
-        return envelope, event
+        return ReservedActuation(
+            envelope=envelope,
+            event=event,
+            epoch=self.epoch,
+            generation=self.control_generation,
+            host_valid_until_ns=host_valid_until_ns,
+        )
 
     def _send_reserved(
-        self, envelope: dict[str, Any], event: dict[str, Any]
+        self, reservation: ReservedActuation, *, now_ns: int | None = None
     ) -> dict[str, Any]:
         with self.plant_lock:
-            receipt = self.plant.command(envelope)
+            send_time = time.monotonic_ns() if now_ns is None else now_ns
+            with self.lock:
+                reasons: list[str] = []
+                if self.epoch != reservation.epoch:
+                    reasons.append("STALE_RESERVED_EPOCH")
+                if self.control_generation != reservation.generation:
+                    reasons.append("STALE_RESERVED_GENERATION")
+                if send_time >= reservation.host_valid_until_ns:
+                    reasons.append("RESERVED_COMMAND_EXPIRED")
+                if reasons:
+                    envelope = reservation.envelope
+                    return self._local_rejection(
+                        {
+                            "decision_id": envelope["decision_id"],
+                            "authority": envelope["authority"],
+                        },
+                        reasons,
+                        send_time,
+                    )
+            receipt = self.plant.command(reservation.envelope)
         with self.lock:
             self.receipts.append(receipt)
-            event["receipt"] = receipt
-            self.telemetry.append(event)
+            reservation.event["receipt"] = receipt
+            self.telemetry.append(reservation.event)
         return receipt
 
     def submit(
@@ -443,7 +479,7 @@ class ActuatorGate:
                 "recover": "recovery",
                 "minimum_risk": "recovery",
             }[action]
-            envelope, event = self._reserve_actuation(
+            reservation = self._reserve_actuation(
                 decision_id=str(decision["decision_id"]),
                 command=command,
                 authority=authority,
@@ -451,10 +487,14 @@ class ActuatorGate:
                 reason_codes=reasons,
                 assurance_status=assurance_status,
                 now_ns=completion,
+                host_valid_until_ns=min(
+                    int(decision["expires_monotonic_ns"]),
+                    completion + int(self.config.command_validity_s * 1e9),
+                ),
             )
             schedule_cache = original_action in {"pass", "modify"} and not self.recovery_latched
             cache_epoch = self.epoch
-        receipt = self._send_reserved(envelope, event)
+        receipt = self._send_reserved(reservation, now_ns=now_ns)
         if schedule_cache and receipt.get("accepted"):
             self._schedule_recovery_cache(
                 governor_input, decision, epoch=cache_epoch
@@ -487,7 +527,8 @@ class ActuatorGate:
                     }
                 )
             return None
-        if stored and now < stored.host_valid_until_ns:
+        effective_now = time.monotonic_ns() if now_ns is None else now_ns
+        if stored and effective_now < stored.host_valid_until_ns:
             command = stored.command
             reasons = ["SUPERVISOR_WATCHDOG", "STORED_VALIDATED_RECOVERY_CONTINUED"]
             status = "safe"
@@ -520,16 +561,21 @@ class ActuatorGate:
         with self.lock:
             if self.epoch != takeover_epoch or self.control_generation != takeover_generation:
                 return None
-            envelope, event = self._reserve_actuation(
+            reservation = self._reserve_actuation(
                 decision_id=f"watchdog:{self.epoch}:{now}",
                 command=command,
                 authority="gate_watchdog",
                 simulation_time_s=simulation_time,
                 reason_codes=reasons,
                 assurance_status=status,
-                now_ns=now,
+                now_ns=effective_now,
+                host_valid_until_ns=(
+                    stored.host_valid_until_ns
+                    if status == "safe" and stored is not None
+                    else effective_now + int(self.config.command_validity_s * 1e9)
+                ),
             )
-        return self._send_reserved(envelope, event)
+        return self._send_reserved(reservation, now_ns=now_ns)
 
     def acknowledge_operator(self, *, token: str) -> bool:
         with self.lock:

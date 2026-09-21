@@ -37,3 +37,14 @@ PYTHONPATH=services/gate:services/assurance:services/simulator \
 
 Endpoints are `GET /health`, `GET /v1/telemetry`, `POST /v1/decision`,
 `POST /v1/operator/acknowledge`, and `POST /v1/operator/reset-handshake`.
+
+## Plant receive contract
+
+Every gate-to-plant envelope carries both `expires_simulation_time_s` and
+`expires_monotonic_ns`. The plant endpoint must use the same host monotonic
+clock, verify the latter immediately after authentication and immediately
+before changing actuator state, and reject an expired envelope even when its
+simulation-time expiry is still ahead. It must also keep the gate sequence
+strictly increasing across a live reset or rotate the run/epoch identity in an
+explicit reset handshake. Gate-side queue checks reduce the race window but
+cannot revoke bytes after the HTTP request reaches the plant process.
