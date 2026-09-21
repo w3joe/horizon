@@ -15,7 +15,10 @@ def test_singleton_obstacle_row_survives_squeeze(monkeypatch):
     scipy = types.ModuleType("scipy")
     scipy_io = types.ModuleType("scipy.io")
     scipy_io.loadmat = lambda *_args, **_kwargs: {
-        "annotations": {"sea_edge": [[1, 10], [20, 11]], "obstacles": [1, 2, 3, 4]}
+        "annotations": {
+            "sea_edge": [[float("inf"), 8], [1, 10], [20, 11]],
+            "obstacles": [1, 2, 3, 4],
+        }
     }
     scipy.io = scipy_io
     monkeypatch.setitem(sys.modules, "scipy", scipy)

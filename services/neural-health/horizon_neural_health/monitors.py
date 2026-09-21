@@ -175,7 +175,7 @@ def h3(payload, calibration=None, reference=None):
 
 def h4(payload, calibration=None, reference=None):
     validation = reference.parameters.get("offline_intervention_validation", {}) if reference else {}
-    if reference is not None and validation.get("completed_controls") is not True:
+    if reference is not None and validation.get("claim_gate_passed") is not True:
         return unknown_record(payload, "H4", "offline_intervention_validation_missing")
     return _representation(payload, "H4", score_h4, calibration, reference)
 

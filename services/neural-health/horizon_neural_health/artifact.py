@@ -156,14 +156,23 @@ class FeatureCache:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def rows(self, layer: str, dimensions: int | None = 64) -> Iterable[tuple[dict[str, Any], list[float]]]:
+    def rows(
+        self,
+        layer: str,
+        dimensions: int | None = 64,
+        statistic: str = "mean_std",
+    ) -> Iterable[tuple[dict[str, Any], list[float]]]:
+        if statistic not in {"mean", "mean_std"}:
+            raise ValueError("statistic must be mean or mean_std")
         with self.path.open() as stream:
             for line in stream:
                 row = json.loads(line)
                 summary = row.get("activation_summaries", {}).get(layer)
                 if summary is None:
                     continue
-                feature = [*summary["pooled_mean"], *summary["pooled_standard_deviation"]]
+                feature = list(summary["pooled_mean"])
+                if statistic == "mean_std":
+                    feature.extend(summary["pooled_standard_deviation"])
                 vector = [float(value) for value in feature]
                 yield row, project_groups(vector, dimensions) if dimensions else vector
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import math
 
 
 @dataclass(frozen=True)
@@ -26,9 +27,12 @@ def load_raw_annotation(path: str | Path, image_width: int, image_height: int) -
     edge = tuple(
         (_clip(round(x), 1, image_width) - 1, _clip(round(y), 1, image_height) - 1)
         for x, y in sea_edge
+        if math.isfinite(x) and math.isfinite(y)
     )
     boxes = []
     for x, y, width, height in obstacles:
+        if not all(math.isfinite(value) for value in (x, y, width, height)):
+            raise ValueError("obstacle annotation contains nonfinite coordinates")
         matlab_x = _clip(round(x), 1, image_width)
         matlab_y = _clip(round(y), 1, image_height)
         # Official filtering uses inclusive x:x+w and y:y+h extents.

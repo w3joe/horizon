@@ -163,7 +163,11 @@ def run_sequence(
             ),
         },
         "limitations": [
-            "Provided example sequence is a reproduction fixture, not held-out evidence.",
+            (
+                "Sequence is an integration/reproduction fixture, not held-out evidence."
+                if evidence_partition == "integration"
+                else f"Sequence is {evidence_partition} evidence only, not held-out evidence."
+            ),
             "Scores and activations are perception evidence, not obstacle-free or safety truth.",
         ],
         "environment": environment_manifest(device),
