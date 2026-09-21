@@ -54,6 +54,27 @@ def launch_provenance() -> dict:
     }
 
 
+def test_development_alignment_job_has_finite_matching_artifacts() -> None:
+    spec = json.loads((SCRIPTS.parent / "infra/modal/jobs/a07-modd2-dev-runtime-alignment-001.json").read_text())
+    job.validate_spec(spec, {"upper_bound_usd": 1.5})
+    assert spec["input"]["evidence_partition"] == "development"
+    assert spec["limits"]["input_frame_cap"] == 296
+    spec["output"]["expected_preview_count"] = 295
+    with pytest.raises(ValueError, match="bounded input"):
+        job.validate_spec(spec, {"upper_bound_usd": 1.5})
+
+
+@pytest.mark.parametrize("count", [0, -1, 297, True, 85.5])
+def test_job_rejects_invalid_or_excessive_frame_caps(tmp_path: Path, count: object) -> None:
+    spec = spec_with_output(tmp_path)
+    spec["limits"]["input_frame_cap"] = count
+    spec["input"]["ordered_frame_count"] = count
+    spec["output"]["expected_preview_count"] = count
+    spec["output"]["expected_class_mask_count"] = count
+    with pytest.raises(ValueError, match="bounded input"):
+        job.validate_spec(spec, {"upper_bound_usd": 1.5})
+
+
 def test_validate_download_matches_a07_artifact_layout(tmp_path: Path) -> None:
     spec = spec_with_output(tmp_path)
     output = Path(spec["output"]["local_path"])

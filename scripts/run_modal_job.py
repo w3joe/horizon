@@ -52,7 +52,13 @@ def validate_spec(spec: dict, reservation_record: dict) -> None:
         "finite controller wall clock": 0 < limits["controller_wall_timeout_s"] <= 2250,
         "CPU hard limit": limits["physical_cpu"]["request"] == limits["physical_cpu"]["limit"] == 4.0,
         "RAM hard limit": limits["memory_gib"]["request"] == limits["memory_gib"]["limit"] == 16.0,
-        "bounded input": spec["input"]["ordered_frame_count"] == limits["input_frame_cap"] == 85,
+        "bounded input": (
+            type(limits["input_frame_cap"]) is int
+            and 0 < limits["input_frame_cap"] <= 296
+            and spec["input"]["ordered_frame_count"] == limits["input_frame_cap"]
+            and spec["output"]["expected_class_mask_count"] == limits["input_frame_cap"]
+            and spec["output"]["expected_preview_count"] == limits["input_frame_cap"]
+        ),
         "bounded output": limits["output_bytes_cap"] <= 157_286_400,
         "offline execution": spec["input"]["network_during_gpu_execution"] == "blocked",
     }
@@ -433,6 +439,10 @@ def main() -> int:
     environment["HORIZON_DATA_ROOT"] = str(Path(spec["input"]["source_path"]).parents[1])
     environment["HORIZON_MODAL_RUN_ID"] = spec["job_id"]
     environment["HORIZON_MODAL_VOLUME"] = spec["modal_volume_name"]
+    environment["HORIZON_LAUNCH_COMMIT"] = launch_provenance["repository_commit"]
+    environment["HORIZON_LAUNCH_SOURCE_TREE_SHA256"] = launch_provenance["declared_source_tree_sha256"]
+    environment["HORIZON_LAUNCH_ENTRYPOINT_SHA256"] = launch_provenance["entrypoint_sha256"]
+    environment["HORIZON_LAUNCH_JOB_SPEC_SHA256"] = launch_provenance["job_spec_sha256"]
     execute_job(
         args.ledger,
         args.reservation,
