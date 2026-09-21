@@ -36,6 +36,10 @@ Runtime health never outputs steering, obstacle-free truth, or metre-valued unce
 
 The first bounded development extraction uses all 296 left-camera frames from `kope81-00-00006800-00007095`. It records full-frame pixelwise softmax entropy before logits are discarded, conventional checks with missing capabilities exposed, all-channel pooled encoder features, raw class masks, and unlabeled spatial maps at five evenly spaced frames. The fixed channel indices and frame rule are selected before inference. Display heatmaps use per-map min/max normalization and carry no semantic label.
 
+Measured development results, provenance digests, timing interpretation, and
+the offline causal-control outcome are recorded in
+[`development-results.md`](development-results.md).
+
 H2 and H3 fit a frozen 64-dimensional contiguous-group projection of all 4,096 encoder mean/standard-deviation summary values. H4 fits all 2,048 encoder spatial means without truncation. Standardization is fitted on the development reference only. The H4 fitting record includes loss, epoch-cap status, constant inputs, and dead features.
 
 The MODD2 parser follows RAW annotation conventions: MATLAB 1-based coordinates and inclusive `x:x+w`, `y:y+h` extents, finite sea-edge filtering, and singleton obstacle handling. The development report's fraction of class-0 mask pixels inside an obstacle bounding box is explicitly a Horizon proxy. It does not reproduce official MODD2 water-edge, own-vessel-mask, shoreline-dent, small/large obstacle, or detection metrics.
