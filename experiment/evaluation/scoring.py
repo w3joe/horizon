@@ -38,10 +38,24 @@ def _helm_reversals(frames: list[dict[str, Any]], tolerance: float = 1e-9) -> in
     return sum(left != right for left, right in zip(signs, signs[1:]))
 
 
-def _trace_complete(decisions: list[dict[str, Any]], receipts: list[dict[str, Any]]) -> bool:
+def _trace_complete(
+    decisions: list[dict[str, Any]],
+    receipts: list[dict[str, Any]],
+    dispositions: list[dict[str, Any]],
+) -> bool:
     receipt_decisions = {receipt["decision_id"] for receipt in receipts}
+    disposition_by_decision = {
+        item["decision_id"]: item for item in dispositions
+    }
     return bool(decisions) and all(
-        decision.get("decision_id") and decision["decision_id"] in receipt_decisions
+        decision.get("decision_id")
+        and (
+            decision["decision_id"] in receipt_decisions
+            or disposition_by_decision.get(decision["decision_id"], {}).get(
+                "disposition"
+            )
+            in {"censored", "scheduler_rejected"}
+        )
         for decision in decisions
     )
 
@@ -76,6 +90,21 @@ def _gate_assessment(bundle: dict[str, Any]) -> tuple[int, str]:
     authorized_sources = set(bundle.get("authorized_proposal_sources", []))
     if not proposals or not authorized_sources:
         return 0, "unknown"
+    receipts_by_decision = {
+        str(item["decision_id"]): item for item in bundle["gate_receipts"]
+    }
+    dispositions = {
+        str(item["decision_id"]): item
+        for item in bundle.get("decision_dispositions", [])
+    }
+    for decision_id in decisions:
+        if decision_id in receipts_by_decision:
+            continue
+        if dispositions.get(decision_id, {}).get("disposition") not in {
+            "censored",
+            "scheduler_rejected",
+        }:
+            return 0, "unknown"
     violations = 0
     for receipt in bundle["gate_receipts"]:
         if not receipt["accepted"]:
@@ -113,10 +142,17 @@ def score_closed_loop(bundle: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("truth_frames may not be empty")
     decisions = bundle["decisions"]
     receipts = bundle["gate_receipts"]
+    dispositions = bundle.get("decision_dispositions", [])
     events = bundle["violation_events"]
+    accepted_decision_ids = {
+        str(receipt["decision_id"])
+        for receipt in receipts
+        if receipt.get("accepted") is True
+    }
     interventions = [
         decision
         for decision in decisions
+        if str(decision["decision_id"]) in accepted_decision_ids
         if decision["action"] in {"modify", "recover", "minimum_risk"}
     ]
     first_intervention = (
@@ -190,7 +226,7 @@ def score_closed_loop(bundle: dict[str, Any]) -> dict[str, Any]:
         },
         "runtime_ns": runtime_ns,
         "deadline_misses": sum(not decision["deadline_met"] for decision in decisions),
-        "trace_complete": _trace_complete(decisions, receipts)
+        "trace_complete": _trace_complete(decisions, receipts, dispositions)
         and gate_assessment_status == "complete",
         "artifact_hashes": dict(bundle["artifact_hashes"]),
     }

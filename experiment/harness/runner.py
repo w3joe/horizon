@@ -68,6 +68,7 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
 
     decisions = list(bundle.get("decisions", []))
     gate_receipts = list(bundle.get("gate_receipts", []))
+    decision_dispositions = list(bundle.get("decision_dispositions", []))
     watchdog_receipts = list(bundle.get("watchdog_receipts", []))
     watchdog_actions = list(bundle.get("watchdog_actions", []))
     truth_frames = list(bundle.get("truth_frames", []))
@@ -88,6 +89,14 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
         "authority_audit": bundle.get("authority_audit"),
         "decision_action_counts": dict(
             sorted(Counter(str(item.get("action", "unknown")) for item in decisions).items())
+        ),
+        "decision_disposition_counts": dict(
+            sorted(
+                Counter(
+                    str(item.get("disposition", "unknown"))
+                    for item in decision_dispositions
+                ).items()
+            )
         ),
         "gate_receipts": {
             "count": len(gate_receipts),
