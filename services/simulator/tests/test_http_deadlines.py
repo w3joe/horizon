@@ -49,6 +49,16 @@ def _envelope(sim: AuthoritativeSimulator, sequence: int, expiry_ns: int) -> dic
     }
 
 
+def _resume_body(sim: AuthoritativeSimulator, expiry_ns: int) -> dict:
+    # Receiver-boundary fixture: production proof originates from gate status.
+    return {"startup_recovery_certificate": {
+        "decision_id": "test-recovery", "input_snapshot_id": "test-snapshot",
+        "proposal_id": "test-proposal", "run_id": sim.run_id,
+        "branch_id": sim.branch_id, "plant_epoch": sim.plant_epoch,
+        "original_host_valid_until_ns": expiry_ns,
+    }}
+
+
 def test_real_http_queue_pause_resume_and_reset_close_expiry_gaps() -> None:
     simulator = AuthoritativeSimulator(
         load_scenario(ROOT / "scenarios" / "crossing_recoverable.json"),
@@ -110,7 +120,7 @@ def test_real_http_queue_pause_resume_and_reset_close_expiry_gaps() -> None:
             assert simulator.active_command.command_id == (
                 "plant-expiry-neutral:host_monotonic_deadline"
             )
-        assert _post(base, "/v1/operator/resume", {}, "operator-token")[0] == 200
+        assert _post(base, "/v1/operator/resume", _resume_body(simulator, time.monotonic_ns() + 500_000_000), "operator-token")[0] == 200
         time.sleep(0.05)
         with runtime.lock:
             assert simulator.active_command.command_id == (
@@ -142,6 +152,47 @@ def test_real_http_queue_pause_resume_and_reset_close_expiry_gaps() -> None:
         server.shutdown()
         server.server_close()
         server_thread.join(timeout=2.0)
+
+
+def test_resume_rechecks_proof_after_queue_delay_and_reset():
+    clock = [1_000_000_000]
+    sim = AuthoritativeSimulator(
+        load_scenario(ROOT / "scenarios/crossing_recoverable.json"),
+        seed=22, run_id="resume-proof", monotonic_ns=lambda: clock[0],
+    )
+    runtime = SimulatorRuntime(sim, realtime=False)
+    runtime.paused.set()
+    server = SimulatorHTTPServer(("127.0.0.1", 0), runtime, operator_token="operator-token")
+    base = f"http://127.0.0.1:{server.server_port}"
+    server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01}, daemon=True)
+    server_thread.start()
+    try:
+        result = []
+        with runtime.lock:
+            body = _resume_body(sim, clock[0] + 1)
+            worker = threading.Thread(target=lambda: result.append(_post(base, "/v1/operator/resume", body, "operator-token")))
+            worker.start()
+            clock[0] += 1
+        worker.join(timeout=2)
+        assert result[0][0] == 409
+        assert result[0][1]["error"] == "STARTUP_RECOVERY_CERTIFICATE_EXPIRED"
+        assert runtime.paused.is_set()
+
+        body = _resume_body(sim, clock[0] + 1_000_000_000)
+        sim.reset()
+        assert _post(base, "/v1/operator/resume", body, "operator-token")[1]["error"] == "STARTUP_RECOVERY_EPOCH_MISMATCH"
+        for field, invalid in (("plant_epoch", True), ("original_host_valid_until_ns", False), ("decision_id", ""), ("run_id", "other-run"), ("branch_id", "other-branch")):
+            body = _resume_body(sim, clock[0] + 1_000_000_000)
+            body["startup_recovery_certificate"][field] = invalid
+            assert _post(base, "/v1/operator/resume", body, "operator-token")[0] == 409
+            assert runtime.paused.is_set()
+        assert _post(base, "/v1/operator/resume", {}, "operator-token")[0] == 409
+        assert _post(base, "/v1/operator/resume", _resume_body(sim, clock[0] + 1), "operator-token")[0] == 200
+        assert not runtime.paused.is_set()
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=1)
 
 
 def test_paused_http_reset_streams_complete_new_epoch_sensor_readiness() -> None:
