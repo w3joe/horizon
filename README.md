@@ -2,7 +2,11 @@
 
 Horizon is a private maritime runtime-assurance research and simulation workspace. It keeps the decision AI, safety supervisor, actuator gate, plant, independent evaluation truth, and browser console at explicit process boundaries.
 
-The current CPU slice runs the authoritative simulator, replaceable decision-AI fixture, and a same-origin console proxy. Pending services are reported as unavailable until their owners provide real entrypoints.
+The current local slice starts seven processes: the authoritative simulator,
+replaceable decision-AI fixture, observation collector, fusion service, assurance
+supervisor, actuator gate, and same-origin browser console. The launcher verifies
+an identity-linked input/decision/gate-receipt chain and a subsequent public
+actuator observation before it reports the slice ready.
 
 ```sh
 ./scripts/bootstrap.sh
@@ -11,6 +15,19 @@ The current CPU slice runs the authoritative simulator, replaceable decision-AI 
 ```
 
 Open `http://127.0.0.1:5173`. Each launch gets a unique directory under the external `horizon-runs/` location with logs, status, and mode-`0600` local capabilities. Press Ctrl-C for graceful shutdown. Use `./scripts/launch_cpu.sh --smoke-seconds 2` for a finite smoke run.
+
+The reset flow pauses physics, advances the plant epoch, obtains fresh sensor
+evidence and a bounded gate recovery certificate, and requires an explicit
+operator Resume. Recovery refresh is currently carried by `GovernorInput`, so
+it still depends on a fresh decision-AI proposal; a sensor-only independent
+recovery input remains pending. WaSR-T reproduction and development extraction
+have run locally on Apple MPS with outputs kept under external `horizon-runs/`.
+Those runs are development evidence rather than deployment timing or safety
+evidence.
+
+The workspace is still under active validation. Independent system acceptance,
+expanded simulator realism, calibration, and held-out evaluation remain to be
+completed before release claims.
 
 See [system boundaries](docs/architecture/system.md), [local runtime](docs/architecture/local-runtime.md), [compute controls](docs/architecture/compute.md), and [reviewed source material](docs/source/README.md). JSON Schema in `packages/contracts/schema/horizon.schema.json` is the shared language-neutral interface source.
 

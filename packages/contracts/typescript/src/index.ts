@@ -233,6 +233,30 @@ export interface OperatingConstraint {
   configuration_version: string;
 }
 
+export interface AssuranceSnapshot {
+  snapshot_id: string;
+  frame: "NED";
+  valid_until_monotonic_ns: number;
+  ownship: OwnshipState;
+  contacts: Array<ContactState>;
+  environment: Record<string, unknown>;
+  actuator: ActuatorCapability;
+}
+
+export interface AssuranceHealth {
+  source_health_ids: Array<string>;
+  perception_health_id: string | null;
+  summaries?: Array<GovernorHealthSummary>;
+  status: HealthStatus;
+}
+
+export interface RecoveryHealth {
+  source_health_ids: Array<string>;
+  perception_health_id: string | null;
+  summaries: Array<GovernorHealthSummary>;
+  status: HealthStatus;
+}
+
 export interface GovernorInput {
   contract_type: "GovernorInput";
   schema_version: SchemaVersion;
@@ -244,9 +268,28 @@ export interface GovernorInput {
   monotonic_time_ns: number;
   decision_deadline_monotonic_ns: number;
   configuration_hash: Sha256;
-  snapshot: Record<string, unknown>;
+  snapshot: AssuranceSnapshot;
   proposal: ProposedCommand;
-  health: Record<string, unknown>;
+  health: AssuranceHealth;
+  constraints: Array<OperatingConstraint>;
+  recovery_options: Array<RecoveryOption>;
+}
+
+export interface RecoveryInput {
+  contract_type: "RecoveryInput";
+  schema_version: SchemaVersion;
+  recovery_input_id: string;
+  run_id: string;
+  episode_id: string;
+  branch_id: string;
+  plant_epoch: number;
+  tick_index: number;
+  simulation_time_s: number;
+  monotonic_time_ns: number;
+  recovery_deadline_monotonic_ns: number;
+  configuration_hash: Sha256;
+  snapshot: AssuranceSnapshot;
+  health: RecoveryHealth;
   constraints: Array<OperatingConstraint>;
   recovery_options: Array<RecoveryOption>;
 }

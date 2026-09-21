@@ -187,7 +187,14 @@ def test_resume_rechecks_proof_after_queue_delay_and_reset():
             assert _post(base, "/v1/operator/resume", body, "operator-token")[0] == 409
             assert runtime.paused.is_set()
         assert _post(base, "/v1/operator/resume", {}, "operator-token")[0] == 409
-        assert _post(base, "/v1/operator/resume", _resume_body(sim, clock[0] + 1), "operator-token")[0] == 200
+        independent = _resume_body(sim, clock[0] + 1)
+        independent["startup_recovery_certificate"].update({
+            "input_kind": "RecoveryInput", "input_id": "independent-sensor-input", "proposal_id": None,
+        })
+        forged = json.loads(json.dumps(independent))
+        forged["startup_recovery_certificate"]["proposal_id"] = "forged-ai"
+        assert _post(base, "/v1/operator/resume", forged, "operator-token")[0] == 409
+        assert _post(base, "/v1/operator/resume", independent, "operator-token")[0] == 200
         assert not runtime.paused.is_set()
     finally:
         server.shutdown()

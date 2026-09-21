@@ -13,6 +13,7 @@
     { "$ref": "#/$defs/SourceHealth" },
     { "$ref": "#/$defs/PerceptionHealth" },
     { "$ref": "#/$defs/GovernorInput" },
+    { "$ref": "#/$defs/RecoveryInput" },
     { "$ref": "#/$defs/AssuranceDecision" },
     { "$ref": "#/$defs/GateReceipt" },
     { "$ref": "#/$defs/SimulationSnapshot" },
@@ -343,6 +344,53 @@
         "configuration_version": { "type": "string" }
       }
     },
+    "AssuranceSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot_id", "frame", "valid_until_monotonic_ns", "ownship", "contacts", "environment", "actuator"],
+      "properties": {
+        "snapshot_id": { "type": "string", "minLength": 1 },
+        "frame": { "const": "NED" },
+        "valid_until_monotonic_ns": { "type": "integer", "minimum": 0 },
+        "ownship": { "$ref": "#/$defs/OwnshipState" },
+        "contacts": { "type": "array", "items": { "$ref": "#/$defs/ContactState" } },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["water_boundary_id", "depth_field_id", "current_estimate_ne_mps", "current_bounded_error_ne_mps", "current_assumption_id"],
+          "properties": {
+            "water_boundary_id": { "type": "string" },
+            "depth_field_id": { "type": "string" },
+            "current_estimate_ne_mps": { "$ref": "#/$defs/Vector2" },
+            "current_bounded_error_ne_mps": { "$ref": "#/$defs/Vector2" },
+            "current_assumption_id": { "type": "string" }
+          }
+        },
+        "actuator": { "$ref": "#/$defs/ActuatorCapability" }
+      }
+    },
+    "AssuranceHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_health_ids", "perception_health_id", "status"],
+      "properties": {
+        "source_health_ids": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "perception_health_id": { "type": ["string", "null"] },
+        "summaries": { "type": "array", "items": { "$ref": "#/$defs/GovernorHealthSummary" } },
+        "status": { "$ref": "#/$defs/HealthStatus" }
+      }
+    },
+    "RecoveryHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_health_ids", "perception_health_id", "summaries", "status"],
+      "properties": {
+        "source_health_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "perception_health_id": { "type": ["string", "null"] },
+        "summaries": { "type": "array", "items": { "$ref": "#/$defs/GovernorHealthSummary" }, "minItems": 1 },
+        "status": { "$ref": "#/$defs/HealthStatus" }
+      }
+    },
     "GovernorInput": {
       "type": "object",
       "additionalProperties": false,
@@ -358,43 +406,32 @@
         "monotonic_time_ns": { "type": "integer", "minimum": 0 },
         "decision_deadline_monotonic_ns": { "type": "integer", "minimum": 0 },
         "configuration_hash": { "$ref": "#/$defs/Sha256" },
-        "snapshot": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["snapshot_id", "frame", "valid_until_monotonic_ns", "ownship", "contacts", "environment", "actuator"],
-          "properties": {
-            "snapshot_id": { "type": "string" },
-            "frame": { "const": "NED" },
-            "valid_until_monotonic_ns": { "type": "integer", "minimum": 0 },
-            "ownship": { "$ref": "#/$defs/OwnshipState" },
-            "contacts": { "type": "array", "items": { "$ref": "#/$defs/ContactState" } },
-            "environment": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["water_boundary_id", "depth_field_id", "current_estimate_ne_mps", "current_bounded_error_ne_mps", "current_assumption_id"],
-              "properties": {
-                "water_boundary_id": { "type": "string" },
-                "depth_field_id": { "type": "string" },
-                "current_estimate_ne_mps": { "$ref": "#/$defs/Vector2" },
-                "current_bounded_error_ne_mps": { "$ref": "#/$defs/Vector2" },
-                "current_assumption_id": { "type": "string" }
-              }
-            },
-            "actuator": { "$ref": "#/$defs/ActuatorCapability" }
-          }
-        },
+        "snapshot": { "$ref": "#/$defs/AssuranceSnapshot" },
         "proposal": { "$ref": "#/$defs/ProposedCommand" },
-        "health": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["source_health_ids", "perception_health_id", "status"],
-          "properties": {
-            "source_health_ids": { "type": "array", "items": { "type": "string" } },
-            "perception_health_id": { "type": ["string", "null"] },
-            "summaries": { "type": "array", "items": { "$ref": "#/$defs/GovernorHealthSummary" } },
-            "status": { "$ref": "#/$defs/HealthStatus" }
-          }
-        },
+        "health": { "$ref": "#/$defs/AssuranceHealth" },
+        "constraints": { "type": "array", "items": { "$ref": "#/$defs/OperatingConstraint" } },
+        "recovery_options": { "type": "array", "items": { "$ref": "#/$defs/RecoveryOption" } }
+      }
+    },
+    "RecoveryInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_type", "schema_version", "recovery_input_id", "run_id", "episode_id", "branch_id", "plant_epoch", "tick_index", "simulation_time_s", "monotonic_time_ns", "recovery_deadline_monotonic_ns", "configuration_hash", "snapshot", "health", "constraints", "recovery_options"],
+      "properties": {
+        "contract_type": { "const": "RecoveryInput" },
+        "schema_version": { "$ref": "#/$defs/SchemaVersion" },
+        "recovery_input_id": { "type": "string", "minLength": 1 },
+        "run_id": { "type": "string", "minLength": 1 },
+        "episode_id": { "type": "string", "minLength": 1 },
+        "branch_id": { "type": "string", "minLength": 1 },
+        "plant_epoch": { "type": "integer", "minimum": 0 },
+        "tick_index": { "type": "integer", "minimum": 0 },
+        "simulation_time_s": { "type": "number", "minimum": 0 },
+        "monotonic_time_ns": { "type": "integer", "minimum": 0 },
+        "recovery_deadline_monotonic_ns": { "type": "integer", "minimum": 0 },
+        "configuration_hash": { "$ref": "#/$defs/Sha256" },
+        "snapshot": { "$ref": "#/$defs/AssuranceSnapshot" },
+        "health": { "$ref": "#/$defs/RecoveryHealth" },
         "constraints": { "type": "array", "items": { "$ref": "#/$defs/OperatingConstraint" } },
         "recovery_options": { "type": "array", "items": { "$ref": "#/$defs/RecoveryOption" } }
       }

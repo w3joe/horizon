@@ -214,6 +214,27 @@ class OperatingConstraint(TypedDict):
     assumption_id: str
     configuration_version: str
 
+class AssuranceSnapshot(TypedDict):
+    snapshot_id: str
+    frame: Literal['NED']
+    valid_until_monotonic_ns: int
+    ownship: OwnshipState
+    contacts: list[ContactState]
+    environment: dict[str, Any]
+    actuator: ActuatorCapability
+
+class AssuranceHealth(TypedDict):
+    source_health_ids: list[str]
+    perception_health_id: str | None
+    summaries: NotRequired[list[GovernorHealthSummary]]
+    status: HealthStatus
+
+class RecoveryHealth(TypedDict):
+    source_health_ids: list[str]
+    perception_health_id: str | None
+    summaries: list[GovernorHealthSummary]
+    status: HealthStatus
+
 class GovernorInput(TypedDict):
     contract_type: Literal['GovernorInput']
     schema_version: SchemaVersion
@@ -225,9 +246,27 @@ class GovernorInput(TypedDict):
     monotonic_time_ns: int
     decision_deadline_monotonic_ns: int
     configuration_hash: Sha256
-    snapshot: dict[str, Any]
+    snapshot: AssuranceSnapshot
     proposal: ProposedCommand
-    health: dict[str, Any]
+    health: AssuranceHealth
+    constraints: list[OperatingConstraint]
+    recovery_options: list[RecoveryOption]
+
+class RecoveryInput(TypedDict):
+    contract_type: Literal['RecoveryInput']
+    schema_version: SchemaVersion
+    recovery_input_id: str
+    run_id: str
+    episode_id: str
+    branch_id: str
+    plant_epoch: int
+    tick_index: int
+    simulation_time_s: float
+    monotonic_time_ns: int
+    recovery_deadline_monotonic_ns: int
+    configuration_hash: Sha256
+    snapshot: AssuranceSnapshot
+    health: RecoveryHealth
     constraints: list[OperatingConstraint]
     recovery_options: list[RecoveryOption]
 

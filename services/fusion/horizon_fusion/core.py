@@ -2,13 +2,34 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import json
 import math
+from pathlib import Path
 import time
 from typing import Any
 
+import jsonschema
+
 from .actuator import assess_actuator_response
+
+
+@lru_cache(maxsize=4)
+def _contract_validator(contract_type: str) -> jsonschema.Draft202012Validator:
+    schema = json.loads((Path(__file__).resolve().parents[3] / "packages/contracts/schema/horizon.schema.json").read_text())
+    return jsonschema.Draft202012Validator({
+        "$defs": schema["$defs"], "$ref": f"#/$defs/{contract_type}"
+    })
+
+
+def _require_contract(value: dict[str, Any], contract_type: str) -> None:
+    try:
+        # JSON Schema alone does not exclude IEEE NaN in a Python float.
+        json.dumps(value, allow_nan=False)
+        _contract_validator(contract_type).validate(value)
+    except (TypeError, ValueError, jsonschema.ValidationError):
+        raise NotReady([f"{contract_type.upper()}_SCHEMA_INVALID"]) from None
 
 
 INPUT_GROUPS = (
@@ -545,6 +566,8 @@ class FusionEngine:
         now_ns: int | None = None,
         request_monotonic_ns: int | None = None,
     ) -> dict[str, Any]:
+        _require_contract(proposal, "ProposedCommand")
+        _require_contract(trace, "AIInferenceTrace")
         current = time.monotonic_ns() if now_ns is None else now_ns
         request_started = current if request_monotonic_ns is None else request_monotonic_ns
         if request_started > current:
@@ -572,6 +595,39 @@ class FusionEngine:
         if remaining_s <= 0 or normalized_proposal["expires_monotonic_ns"] <= current:
             raise NotReady(["PROPOSAL_EXPIRED_IN_SIMULATION_TIME"])
 
+        governor = self._assemble_safety_state(current, trace, proposal_expiry=normalized_proposal["expires_monotonic_ns"])
+        governor.update({
+            "contract_type": "GovernorInput", "proposal": normalized_proposal,
+            "decision_deadline_monotonic_ns": current + 40_000_000,
+        })
+        _require_contract(governor, "GovernorInput")
+        return governor
+
+    def assemble_recovery(self, *, now_ns: int | None = None) -> dict[str, Any]:
+        """Assemble independent sensor evidence without asking or imitating an AI."""
+        if self.plant_epoch is None:
+            raise NotReady(["PLANT_EPOCH_UNAVAILABLE"])
+        current = time.monotonic_ns() if now_ns is None else now_ns
+        recovery = self._assemble_safety_state(current, {})
+        recovery.update({
+            "contract_type": "RecoveryInput",
+            "recovery_input_id": f"{recovery['snapshot']['snapshot_id']}:recovery",
+            "plant_epoch": self.plant_epoch,
+            "recovery_deadline_monotonic_ns": min(current + 40_000_000, recovery["snapshot"]["valid_until_monotonic_ns"]),
+        })
+        if recovery["recovery_deadline_monotonic_ns"] <= current:
+            raise NotReady(["RECOVERY_SOURCE_EVIDENCE_EXPIRED"])
+        _require_contract(recovery, "RecoveryInput")
+        return recovery
+
+    def _assemble_safety_state(
+        self, current: int, trace: dict[str, Any], *, proposal_expiry: int | None = None
+    ) -> dict[str, Any]:
+        gnss, imu, actuator = self._require_inputs(current)
+        assert self.snapshot is not None and self.reference is not None and self.last_run_branch is not None
+        decision_snapshot = self.decision_snapshot(now_ns=current)
+        run, branch = self.last_run_branch
+        sim_now = float(self.snapshot["simulation_time_s"])
         tracks = self.fuse_tracks(current)
         contact_states = []
         for track in tracks:
@@ -622,8 +678,9 @@ class FusionEngine:
             int(gnss["time"]["valid_until_monotonic_ns"]),
             int(imu["time"]["valid_until_monotonic_ns"]),
             int(actuator["time"]["valid_until_monotonic_ns"]),
-            int(normalized_proposal["expires_monotonic_ns"]),
         )
+        if proposal_expiry is not None:
+            validity = min(validity, proposal_expiry)
         radar_health = next(item for item in health if item["source_id"] == "obstacle_perception:radar")
         if radar_health["status"] == "healthy":
             validity = min(validity, int(radar_health["valid_until_monotonic_ns"]))
@@ -637,7 +694,6 @@ class FusionEngine:
             {"constraint_id": f"{scenario}:actuator", "kind": "actuator", "geometry_ref": None, "minimum_margin": 0.0, "units": "rad", "assumption_id": "public-plant-capability", "configuration_version": config_hash},
         ]
         governor = {
-            "contract_type": "GovernorInput",
             "schema_version": "0.1.0",
             "run_id": run,
             "episode_id": f"{run}:{branch}:epoch-{self.epoch}",
@@ -645,7 +701,6 @@ class FusionEngine:
             "tick_index": int(self.snapshot["tick_index"]),
             "simulation_time_s": sim_now,
             "monotonic_time_ns": current,
-            "decision_deadline_monotonic_ns": current + 40_000_000,
             "configuration_hash": config_hash,
             "snapshot": {
                 "snapshot_id": decision_snapshot["snapshot_id"],
@@ -669,7 +724,6 @@ class FusionEngine:
                 },
                 "actuator": capability,
             },
-            "proposal": normalized_proposal,
             "health": {
                 "source_health_ids": [item["health_id"] for item in health],
                 "perception_health_id": None,

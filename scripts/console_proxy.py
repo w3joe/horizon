@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 from socketserver import TCPServer
 import threading
+import time
 from typing import Any, ClassVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -160,6 +161,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     gate_operator_token_file: ClassVar[Path | None] = None
     declared_fault_ids: ClassVar[frozenset[str]] = frozenset()
     operator_lock: ClassVar[threading.RLock] = threading.RLock()
+    resume_readiness_timeout_s: ClassVar[float] = 3.0
+    resume_readiness_poll_s: ClassVar[float] = 0.025
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -289,12 +292,21 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             plant_epoch = self._snapshot_epoch(snapshot)
             gate_epoch = int(gate["epoch"])
             startup_ready = gate.get("startup_recovery_ready") is True
-            resume_permitted = plant_epoch == gate_epoch and startup_ready
+            certificate = gate.get("startup_recovery_certificate")
+            certificate_epoch = (
+                certificate.get("plant_epoch") if isinstance(certificate, dict) else None
+            )
+            resume_permitted = (
+                plant_epoch == gate_epoch == certificate_epoch
+                and startup_ready
+                and isinstance(certificate, dict)
+            )
             state = "ready" if resume_permitted else "reset_in_progress"
         except (KeyError, OSError, TypeError, ValueError, URLError, TimeoutError):
             plant_epoch = None
             gate_epoch = None
             startup_ready = None
+            certificate = None
             resume_permitted = False
             state = "unavailable"
         return {
@@ -304,6 +316,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             "plant_epoch": plant_epoch,
             "gate_epoch": gate_epoch,
             "startup_recovery_ready": startup_ready,
+            "startup_recovery_certificate": certificate,
             "resume_permitted": resume_permitted,
             "required_header": {"X-Horizon-Operator": "1"},
             "declared_fault_ids": sorted(self.declared_fault_ids),
@@ -318,6 +331,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     ) -> tuple[HTTPStatus, dict[str, Any]]:
         if action == "resume":
             readiness = self._operator_status()
+            deadline = time.monotonic() + self.resume_readiness_timeout_s
+            while not readiness["resume_permitted"] and time.monotonic() < deadline:
+                time.sleep(self.resume_readiness_poll_s)
+                readiness = self._operator_status()
             if not readiness["resume_permitted"]:
                 return HTTPStatus.CONFLICT, {
                     "accepted": False,
@@ -325,6 +342,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     "error": "STARTUP_RECOVERY_NOT_READY",
                     "control": readiness,
                 }
+            resume_certificate = readiness["startup_recovery_certificate"]
         if action == "fault":
             fault_id = body.get("fault_id")
             enabled = body.get("enabled", True)
@@ -345,6 +363,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 "enabled": enabled,
                 "fault_id": fault_id,
             }
+        elif action == "resume":
+            upstream_body = {"startup_recovery_certificate": resume_certificate}
         else:
             upstream_body = {}
         if action == "reset":

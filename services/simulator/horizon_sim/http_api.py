@@ -75,7 +75,14 @@ def resume_certificate_error(branch: AuthoritativeSimulator, value: Any) -> str 
     """
     if not isinstance(value, dict):
         return "STARTUP_RECOVERY_CERTIFICATE_REQUIRED"
-    for key in ("decision_id", "input_snapshot_id", "proposal_id", "run_id", "branch_id"):
+    input_kind = value.get("input_kind", "GovernorInput")
+    if input_kind not in {"GovernorInput", "RecoveryInput"}:
+        return "STARTUP_RECOVERY_CERTIFICATE_INVALID"
+    if input_kind == "RecoveryInput" and value.get("proposal_id") is not None:
+        return "STARTUP_RECOVERY_CERTIFICATE_INVALID"
+    identity_fields = ("decision_id", "input_snapshot_id", "run_id", "branch_id")
+    identity_fields += ("input_id",) if input_kind == "RecoveryInput" else ("proposal_id",)
+    for key in identity_fields:
         item = value.get(key)
         if not isinstance(item, str) or not item or len(item) > 1024:
             return "STARTUP_RECOVERY_CERTIFICATE_INVALID"
