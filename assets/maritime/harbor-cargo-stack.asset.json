@@ -1,0 +1,45 @@
+{
+  "schema_version": "horizon.maritime-asset.v1",
+  "asset_id": "sketlux-harbor-cargo-stack-v1",
+  "file": "harbor-cargo-stack.glb",
+  "sha256": "448aac7a6fe1e5aadb6a5ab51aa1e703d6ca09074b561b19769c2ceb37c6f090",
+  "bytes": 278752,
+  "source": {
+    "title": "Container ship full",
+    "author": "Sketlux",
+    "original_page": "https://opengameart.org/content/container-ship-full",
+    "license": "CC0-1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "acquired_url": "https://opengameart.org/sites/default/files/container-ship-full.blend1_.blend",
+    "acquired_file": "container-ship-full.blend",
+    "acquired_sha256": "b873a1a6f7ccd3b0646beb020aa95bc062f72ecf2d8c3c47fdf630e824caa9b6"
+  },
+  "modifications": {
+    "tool": "Blender 4.5.14 LTS",
+    "script": "scripts/assets/build_maritime_assets.py",
+    "description": "Selected eight source container meshes, normalized each to declared forty-foot-container display dimensions, arranged a two-by-two-by-two harbor stack, converted materials, joined meshes, and exported GLB."
+  },
+  "geometry": {
+    "meshes": 1,
+    "primitives": 8,
+    "vertices": 9696,
+    "triangles": 8736,
+    "materials": 8,
+    "textures": 0,
+    "bounds_min_xyz_m": [
+      -2.5400002002716064,
+      0.0,
+      -12.289999961853027
+    ],
+    "bounds_max_xyz_m": [
+      2.5400004386901855,
+      5.279999732971191,
+      12.289999961853027
+    ]
+  },
+  "binding": {
+    "role": "static harbor cargo prop",
+    "collision_geometry": "not supplied",
+    "navigation_scope": "presentation only"
+  }
+}

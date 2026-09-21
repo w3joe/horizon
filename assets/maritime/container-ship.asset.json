@@ -1,0 +1,48 @@
+{
+  "schema_version": "horizon.maritime-asset.v1",
+  "asset_id": "sketlux-container-ship-120m-v1",
+  "file": "container-ship.glb",
+  "sha256": "73a1cbc0b556cb79d1555265fd66d004b6e72159a2fc703ceb046172e16bcd31",
+  "bytes": 5148312,
+  "source": {
+    "title": "Container ship full",
+    "author": "Sketlux",
+    "original_page": "https://opengameart.org/content/container-ship-full",
+    "license": "CC0-1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "acquired_url": "https://opengameart.org/sites/default/files/container-ship-full.blend1_.blend",
+    "acquired_file": "container-ship-full.blend",
+    "acquired_sha256": "b873a1a6f7ccd3b0646beb020aa95bc062f72ecf2d8c3c47fdf630e824caa9b6"
+  },
+  "modifications": {
+    "tool": "Blender 4.5.14 LTS",
+    "script": "scripts/assets/build_maritime_assets.py",
+    "description": "Converted legacy Blender materials to bounded PBR colors, centered the authored waterline, normalized to a 120 m by 24 m civilian display silhouette, joined meshes, and exported GLB.",
+    "gltf_local_forward_axis": "-Z",
+    "waterline_scene_y_m": 0.0
+  },
+  "geometry": {
+    "meshes": 1,
+    "primitives": 21,
+    "vertices": 124138,
+    "triangles": 109258,
+    "materials": 21,
+    "textures": 0,
+    "bounds_min_xyz_m": [
+      -11.999975204467773,
+      -3.4586575031280518,
+      -59.99995040893555
+    ],
+    "bounds_max_xyz_m": [
+      11.99990463256836,
+      20.54134178161621,
+      59.99994659423828
+    ]
+  },
+  "binding": {
+    "role": "civilian cargo traffic display asset",
+    "collision_geometry_unchanged": true,
+    "hydrodynamics_unchanged": true,
+    "navigation_scope": "presentation only; no onboard functions are modeled"
+  }
+}

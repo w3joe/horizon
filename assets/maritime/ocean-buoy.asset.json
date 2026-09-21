@@ -1,0 +1,47 @@
+{
+  "schema_version": "horizon.maritime-asset.v1",
+  "asset_id": "polyhaven-ocean-buoy-1k-v1",
+  "file": "ocean-buoy.glb",
+  "sha256": "a61a1bdbb7df6621d77de8515ba12f0c7c05b886824a4f770baf8f4e99495738",
+  "bytes": 3037604,
+  "source": {
+    "title": "Ocean Buoy",
+    "author": "Mateusz Sadek",
+    "publisher": "Poly Haven",
+    "original_page": "https://polyhaven.com/a/ocean_buoy",
+    "license": "CC0-1.0",
+    "license_url": "https://polyhaven.com/license",
+    "api_record_url": "https://api.polyhaven.com/files/ocean_buoy",
+    "api_record_sha256_at_acquisition": "0f51ee38ea18c147878a0f1a560a3dc258e54c8064e0b7ece4d775bb0e57a3f6",
+    "acquired_file": "ocean_buoy_1k.gltf",
+    "acquired_sha256": "7a6e3ba5b2258575464b2af622dbe63b89a74cb9885f8105cfc8fdf30c734d5c",
+    "included_source_sha256": {
+      "ocean_buoy.bin": "b3c1f9c8170b9c538f8540f324e4b3707b842d37705dda2dfc95d0548b521e80",
+      "textures/ocean_buoy_arm_1k.jpg": "4d0d02c386250ff163fb661e2ff6f3777c01d28bdf902508ae8a7808041b381c",
+      "textures/ocean_buoy_diff_1k.jpg": "379e64ed72deca5805df1d5afbd0fdcdd5f8a8d6aa4f156eed9d3643b071b0c2",
+      "textures/ocean_buoy_emission_1k.jpg": "c038be2e4074e2a67eee8d5e4cb2d37f0bdcee5c2a569d8bda2b66e1ab35ce53",
+      "textures/ocean_buoy_nor_gl_1k.jpg": "5d02c9df9b5e76b61bf0845839d9ec99f56f994a9095174076c00b560ece4686"
+    }
+  },
+  "modifications": {
+    "tool": "Blender 4.5.14 LTS",
+    "script": "scripts/assets/build_maritime_assets.py",
+    "description": "Packed Poly Haven's 1K glTF and textures into one GLB, centered the horizontal footprint, retained the authored Z=0 waterline, added provenance extras, and preserved PBR materials.",
+    "waterline_scene_y_m": 0.0
+  },
+  "geometry": {
+    "meshes": 1,
+    "primitives": 1,
+    "vertices": 11380,
+    "triangles": 12240,
+    "materials": 1,
+    "textures": 4,
+    "bounds_min_xyz_m": [-0.5333051681518555, -0.8093715310096741, -0.4760739803314209],
+    "bounds_max_xyz_m": [0.5333051681518555, 1.84686279296875, 0.4760739803314209]
+  },
+  "binding": {
+    "role": "static visual navigation marker",
+    "collision_geometry": "not supplied",
+    "aid_to_navigation_status": "visual context only; not an online navigation observation"
+  }
+}

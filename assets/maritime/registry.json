@@ -1,0 +1,118 @@
+{
+  "schema_version": "horizon.maritime-asset-registry.v1",
+  "coordinate_contract": {
+    "format": "glTF 2.0 GLB",
+    "up_axis": "+Y",
+    "vessel_forward_axis": "-Z",
+    "units": "metres"
+  },
+  "assets": [
+    {
+      "asset_id": "horizon-rib-tnnv-12x3-v1",
+      "role": "patrol/ownship display silhouette",
+      "canonical_file": "assets/maritime/horizon-rib.glb",
+      "served_file": "apps/console/public/assets/maritime/horizon-rib.glb",
+      "asset_record": "assets/maritime/horizon-rib.asset.json",
+      "sha256": "3c8f6ccab43abc4fe74157b23ddd51300b425b0daea05331abb3aeed32c55733",
+      "bytes": 3646200,
+      "max_bytes": 4000000,
+      "bounds_min_xyz": [
+        -1.4999999661177899,
+        -0.5332577287850282,
+        -5.999997640509817
+      ],
+      "bounds_max_xyz": [
+        1.4999999661177899,
+        2.0291140417861566,
+        5.999998233506779
+      ],
+      "bounds_tolerance_m": 0.001,
+      "required_nodes": [
+        "HorizonRIB_12x3_DisplayProxy"
+      ],
+      "license": "CC-BY-4.0",
+      "original_page": "https://sketchfab.com/3d-models/assault-boat-0d4fca4f2e014cd7b6aefd4653b1508c"
+    },
+    {
+      "asset_id": "sketlux-container-ship-120m-v1",
+      "role": "civilian cargo traffic display silhouette",
+      "canonical_file": "assets/maritime/container-ship.glb",
+      "served_file": "apps/console/public/assets/maritime/container-ship.glb",
+      "asset_record": "assets/maritime/container-ship.asset.json",
+      "sha256": "73a1cbc0b556cb79d1555265fd66d004b6e72159a2fc703ceb046172e16bcd31",
+      "bytes": 5148312,
+      "max_bytes": 5500000,
+      "bounds_min_xyz": [
+        -11.999975204467773,
+        -3.4586575031280518,
+        -59.99995040893555
+      ],
+      "bounds_max_xyz": [
+        11.99990463256836,
+        20.54134178161621,
+        59.99994659423828
+      ],
+      "bounds_tolerance_m": 0.001,
+      "required_nodes": [
+        "HorizonCargoShip",
+        "CargoShipMesh"
+      ],
+      "license": "CC0-1.0",
+      "original_page": "https://opengameart.org/content/container-ship-full"
+    },
+    {
+      "asset_id": "sketlux-harbor-cargo-stack-v1",
+      "role": "static harbor cargo prop",
+      "canonical_file": "assets/maritime/harbor-cargo-stack.glb",
+      "served_file": "apps/console/public/assets/maritime/harbor-cargo-stack.glb",
+      "asset_record": "assets/maritime/harbor-cargo-stack.asset.json",
+      "sha256": "448aac7a6fe1e5aadb6a5ab51aa1e703d6ca09074b561b19769c2ceb37c6f090",
+      "bytes": 278752,
+      "max_bytes": 350000,
+      "bounds_min_xyz": [
+        -2.5400002002716064,
+        0.0,
+        -12.289999961853027
+      ],
+      "bounds_max_xyz": [
+        2.5400004386901855,
+        5.279999732971191,
+        12.289999961853027
+      ],
+      "bounds_tolerance_m": 0.001,
+      "required_nodes": [
+        "HorizonCargoStack",
+        "CargoStackMesh"
+      ],
+      "license": "CC0-1.0",
+      "original_page": "https://opengameart.org/content/container-ship-full"
+    },
+    {
+      "asset_id": "polyhaven-ocean-buoy-1k-v1",
+      "role": "static visual navigation marker",
+      "canonical_file": "assets/maritime/ocean-buoy.glb",
+      "served_file": "apps/console/public/assets/maritime/ocean-buoy.glb",
+      "asset_record": "assets/maritime/ocean-buoy.asset.json",
+      "sha256": "a61a1bdbb7df6621d77de8515ba12f0c7c05b886824a4f770baf8f4e99495738",
+      "bytes": 3037604,
+      "max_bytes": 3200000,
+      "bounds_min_xyz": [
+        -0.5333051681518555,
+        -0.8093715310096741,
+        -0.4760739803314209
+      ],
+      "bounds_max_xyz": [
+        0.5333051681518555,
+        1.84686279296875,
+        0.4760739803314209
+      ],
+      "bounds_tolerance_m": 0.001,
+      "required_nodes": [
+        "HorizonOceanBuoy",
+        "OceanBuoyMesh"
+      ],
+      "license": "CC0-1.0",
+      "original_page": "https://polyhaven.com/a/ocean_buoy"
+    }
+  ]
+}
