@@ -17,11 +17,25 @@ DEFAULT_MODELED_STAGE_LATENCIES_NS = {
     "candidate": 20_000_000,
     "gate": 20_000_000,
 }
+MODELED_LATENCY_PROFILES_NS = {
+    "idealized-front-zero-v1": DEFAULT_MODELED_STAGE_LATENCIES_NS,
+    "all-stages-20ms-v1": {
+        "ai": 20_000_000,
+        "recovery_prime": 20_000_000,
+        "candidate": 20_000_000,
+        "gate": 20_000_000,
+    },
+}
 
 
 def _stage_latencies(request: dict[str, Any], plant_period_ns: int) -> dict[str, int]:
     """Load the frozen discrete-event service model from the episode request."""
 
+    profile_id = request.get("timing_profile_id")
+    if profile_id is not None and (
+        not isinstance(profile_id, str) or profile_id not in MODELED_LATENCY_PROFILES_NS
+    ):
+        raise ValueError(f"unknown modeled timing profile: {profile_id}")
     result: dict[str, int] = {}
     for stage, default in DEFAULT_MODELED_STAGE_LATENCIES_NS.items():
         key = f"modeled_{stage}_service_ns"
@@ -32,6 +46,8 @@ def _stage_latencies(request: dict[str, Any], plant_period_ns: int) -> dict[str,
             raise ValueError(f"{key} must be between 0 and 2 seconds")
         if value % plant_period_ns:
             raise ValueError(f"{key} must be a multiple of the fixed plant period")
+        if profile_id is not None and value != MODELED_LATENCY_PROFILES_NS[profile_id][stage]:
+            raise ValueError(f"{key} does not match timing profile {profile_id}")
         result[stage] = value
     return result
 
@@ -836,6 +852,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         },
         "timing_model": {
             "model_version": SCHEDULER_MODEL_VERSION,
+            "profile_id": request.get("timing_profile_id", "custom-direct-request"),
             "clock": "injected_manual_monotonic",
             "service_semantics": (
                 "declared deterministic stages complete atomically after plant and "

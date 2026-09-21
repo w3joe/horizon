@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from experiment.evaluation.scoring import score_closed_loop, score_replay
-from experiment.harness.closed_loop import DEFAULT_MODELED_STAGE_LATENCIES_NS
+from experiment.harness.closed_loop import MODELED_LATENCY_PROFILES_NS
 from experiment.harness.fixture import FIXTURE_CANDIDATES, run_fixture
 from experiment.harness.manifests import Job
 from experiment.io import write_json
@@ -118,8 +118,15 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_episode_request(
-    job: Job, run_id: str, max_simulation_time_s: float
+    job: Job,
+    run_id: str,
+    max_simulation_time_s: float,
+    timing_profile_id: str = "idealized-front-zero-v1",
 ) -> dict[str, Any]:
+    try:
+        timing_profile = MODELED_LATENCY_PROFILES_NS[timing_profile_id]
+    except KeyError as exc:
+        raise ValueError(f"unknown modeled timing profile: {timing_profile_id}") from exc
     branch_id = f"{job.candidate_id.lower()}-{job.health_id.lower()}-{job.key.pair_key[:16]}"
     return {
         "run_id": run_id,
@@ -135,9 +142,10 @@ def build_episode_request(
         "candidate_id": job.candidate_id,
         "health_id": job.health_id,
         "max_simulation_time_s": max_simulation_time_s,
+        "timing_profile_id": timing_profile_id,
         **{
             f"modeled_{stage}_service_ns": latency
-            for stage, latency in DEFAULT_MODELED_STAGE_LATENCIES_NS.items()
+            for stage, latency in timing_profile.items()
         },
     }
 
@@ -148,6 +156,7 @@ def run_adapter_jobs(
     output_dir: str | Path,
     run_id: str,
     max_simulation_time_s: float,
+    timing_profile_id: str = "idealized-front-zero-v1",
 ) -> list[dict[str, Any]]:
     if not jobs:
         raise ValueError("no jobs to run")
@@ -156,7 +165,10 @@ def run_adapter_jobs(
     index_path = destination / "index.json"
     if index_path.exists():
         raise FileExistsError(f"refusing to overwrite existing output: {index_path}")
-    requests = [build_episode_request(job, run_id, max_simulation_time_s) for job in jobs]
+    requests = [
+        build_episode_request(job, run_id, max_simulation_time_s, timing_profile_id)
+        for job in jobs
+    ]
     collisions = [
         path
         for request in requests

@@ -42,6 +42,13 @@ def test_production_adapter_request_preserves_pair_identity() -> None:
     assert left["modeled_candidate_service_ns"] == 20_000_000
     assert left["modeled_gate_service_ns"] == 20_000_000
 
+    nonzero = build_episode_request(
+        jobs[0], "run-1", 90.0, "all-stages-20ms-v1"
+    )
+    assert nonzero["timing_profile_id"] == "all-stages-20ms-v1"
+    assert nonzero["modeled_ai_service_ns"] == 20_000_000
+    assert nonzero["modeled_recovery_prime_service_ns"] == 20_000_000
+
 
 def _fixture_adapter(job):
     def run(request: dict) -> dict:

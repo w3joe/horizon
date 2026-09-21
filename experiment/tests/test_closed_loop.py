@@ -231,6 +231,16 @@ def test_stage_latency_must_be_finite_fixed_step_multiple() -> None:
     else:
         raise AssertionError("non-grid modeled latency was accepted")
 
+    request = _request("A1")
+    request["timing_profile_id"] = "all-stages-20ms-v1"
+    request["modeled_ai_service_ns"] = 0
+    try:
+        run_assured_episode(request)
+    except ValueError as exc:
+        assert "does not match timing profile" in str(exc)
+    else:
+        raise AssertionError("timing-profile mismatch was accepted")
+
 
 def test_odd_audit_uses_configured_bounds_and_truth_only_contact_association() -> None:
     from horizon_assurance.configuration import AssuranceConfig
