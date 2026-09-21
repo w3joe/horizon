@@ -28,7 +28,7 @@ from tests.system.horizon_stack import HorizonStack, request_json, wait_for  # n
 
 MANIFEST_SCHEMA = "horizon.demo-manifest.v1"
 REPLAY_SCHEMA = "horizon.demo-replay.v1"
-RUN_ID = "unsafe-route-v2"
+RUN_ID = "unsafe-route-v3"
 TITLE = "Unsafe course · safety takeover"
 SCENARIO_FILE = "static_obstacle_approach.json"
 SCENARIO_VERSION = "1.1.0"
@@ -254,7 +254,24 @@ def extract_public_evidence(
 def identify_intervention(
     gate_events: list[dict[str, Any]],
     command_observations: dict[str, float],
+    *,
+    proposals: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    unsafe_proposal_ids = {
+        str(item["record"].get("command_id"))
+        for item in proposals
+        if isinstance(item.get("record"), dict)
+        and isinstance(item["record"].get("command"), dict)
+        and float(item["record"]["command"].get("speed_mps", math.nan)) >= 5.9
+        and abs(float(item["record"]["command"].get("heading_rad", math.nan))) <= 0.05
+    }
+    unsafe_linked_decision_ids = {
+        str(item["record"].get("decision_id"))
+        for item in decisions
+        if isinstance(item.get("record"), dict)
+        and item["record"].get("proposal_id") in unsafe_proposal_ids
+    }
     candidates: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
     matched_unsafe_commands: list[tuple[float, str]] = []
     for wrapped in gate_events:
@@ -272,7 +289,17 @@ def identify_intervention(
         changed_unsafe_course = speed < 5.9 or abs(float(command.get("heading_rad", 0.0))) > 0.05
         if authority not in {"gate_watchdog", "recovery"} and not changed_unsafe_course:
             matched_unsafe_commands.append((observed_s, command_id))
-        if authority in {"filtered_autonomy", "recovery", "gate_watchdog"} and changed_unsafe_course:
+        linked_assurance_intervention = (
+            authority in {"filtered_autonomy", "recovery"}
+            and receipt.get("decision_id") in unsafe_linked_decision_ids
+        )
+        watchdog_after_unsafe_actuation = (
+            authority == "gate_watchdog"
+            and any(time_s <= observed_s for time_s, _ in matched_unsafe_commands)
+        )
+        if changed_unsafe_course and (
+            linked_assurance_intervention or watchdog_after_unsafe_actuation
+        ):
             candidates.append((observed_s, event, receipt))
     if not candidates:
         raise RuntimeError("no accepted recovery command was observed active at the plant")
@@ -490,7 +517,12 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
         duration_s=duration_s,
         plant_epoch=epoch,
     )
-    intervention = identify_intervention(evidence["gate_events"], command_observations)
+    intervention = identify_intervention(
+        evidence["gate_events"],
+        command_observations,
+        proposals=evidence["proposals"],
+        decisions=evidence["decisions"],
+    )
     receipts_by_command = {
         str(item["record"].get("command_id")): item["record"]
         for item in evidence["receipts"]

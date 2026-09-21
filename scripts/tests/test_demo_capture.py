@@ -70,6 +70,8 @@ def test_intervention_requires_an_accepted_command_observed_at_the_plant() -> No
     result = identify_intervention(
         [{"time_s": 1.0, "record": external}, {"time_s": 1.2, "record": watchdog}],
         {"external-command": 1.02, "recovery-command": 1.24},
+        proposals=[],
+        decisions=[],
     )
 
     assert result["mechanism"] == "gate_watchdog"
@@ -96,7 +98,26 @@ def test_assurance_recovery_is_reported_from_its_plant_matched_receipt() -> None
     }
 
     result = identify_intervention(
-        [{"time_s": 0.2, "record": event}], {"recovery-command": 0.22}
+        [{"time_s": 0.2, "record": event}],
+        {"recovery-command": 0.22},
+        proposals=[
+            {
+                "time_s": 0.1,
+                "record": {
+                    "command_id": "unsafe-proposal",
+                    "command": {"heading_rad": 0.0, "speed_mps": 6.0},
+                },
+            }
+        ],
+        decisions=[
+            {
+                "time_s": 0.2,
+                "record": {
+                    "decision_id": "decision-recovery",
+                    "proposal_id": "unsafe-proposal",
+                },
+            }
+        ],
     )
 
     assert result["mechanism"] == "assurance_decision"
@@ -108,6 +129,52 @@ def test_assurance_recovery_is_reported_from_its_plant_matched_receipt() -> None
         "CPA_THRESHOLD_CROSSED",
         "VALIDATED_RECOVERY_SELECTED",
     ]
+
+
+def test_startup_recovery_before_unsafe_proposal_is_not_the_intervention() -> None:
+    def gate_event(decision_id: str, command_id: str, heading: float) -> dict:
+        return {
+            "event_type": "gate_decision",
+            "reason_codes": ["VALIDATED_RECOVERY_SELECTED"],
+            "receipt": {
+                "receipt_id": f"receipt-{command_id}",
+                "decision_id": decision_id,
+                "command_id": command_id,
+                "authority": "recovery",
+                "accepted": True,
+                "actual_command": {"heading_rad": heading, "speed_mps": 1.0},
+            },
+        }
+
+    result = identify_intervention(
+        [
+            {"time_s": 0.02, "record": gate_event("startup", "startup-command", 0.2)},
+            {"time_s": 0.3, "record": gate_event("hazard", "hazard-command", 0.8)},
+        ],
+        {"startup-command": 0.02, "hazard-command": 0.3},
+        proposals=[
+            {
+                "time_s": 0.2,
+                "record": {
+                    "command_id": "unsafe-proposal",
+                    "command": {"heading_rad": 0.0, "speed_mps": 6.0},
+                },
+            }
+        ],
+        decisions=[
+            {
+                "time_s": 0.3,
+                "record": {
+                    "decision_id": "hazard",
+                    "proposal_id": "unsafe-proposal",
+                },
+            }
+        ],
+    )
+
+    assert result["time_s"] == 0.3
+    assert result["source_decision_id"] == "hazard"
+    assert result["command_id"] == "hazard-command"
 
 
 def test_frozen_artifact_is_hashed_bounded_and_not_overwritten(tmp_path: Path) -> None:
