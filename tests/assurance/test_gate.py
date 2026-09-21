@@ -8,6 +8,7 @@ import time
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
 from horizon_gate.core import ActuatorGate, GateConfig, StoredRecovery
+from horizon_sim.clock import ManualMonotonicClock
 
 
 class FakePlant:
@@ -56,6 +57,18 @@ class SlowSnapshotPlant(FakePlant):
         return super().snapshot()
 
 
+class TimeoutOncePlant(FakePlant):
+    def __init__(self):
+        super().__init__()
+        self.failures_remaining = 1
+
+    def command(self, envelope):
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise TimeoutError("simulated plant timeout")
+        return super().command(envelope)
+
+
 def gate(reference, plant):
     return ActuatorGate(
         run_id="fixture-run-001",
@@ -64,7 +77,11 @@ def gate(reference, plant):
         reference=reference,
         decision_token="decision-secret",
         operator_token="operator-secret",
-        config=GateConfig(supervisor_timeout_s=0.01, maximum_remote_validity_s=1.0),
+        config=GateConfig(
+            supervisor_timeout_s=0.01,
+            maximum_remote_validity_s=1.0,
+            startup_interlock_required=False,
+        ),
         assurance_config=AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0),
     )
 
@@ -78,6 +95,8 @@ def retime_live(message):
     updated["proposal"]["issued_monotonic_ns"] = now
     updated["proposal"]["expires_monotonic_ns"] = now + 3_000_000_000
     updated["recovery_options"][0]["valid_until_monotonic_ns"] = now + 3_000_000_000
+    for summary in updated["health"]["summaries"]:
+        summary["valid_until_monotonic_ns"] = now + 3_000_000_000
     return updated
 
 
@@ -101,6 +120,30 @@ def test_gate_is_exclusive_and_revalidates_final_command(reference, governor_inp
     while runtime.stored_recovery is None and time.monotonic() < deadline:
         time.sleep(0.005)
     assert runtime.stored_recovery is not None
+
+
+def test_startup_interlock_requires_recovery_before_autonomy(reference, governor_input) -> None:
+    plant = FakePlant()
+    governor_input = retime_live(governor_input)
+    runtime = ActuatorGate(
+        run_id="fixture-run-001",
+        branch_id="protected",
+        plant=plant,
+        reference=reference,
+        decision_token="decision-secret",
+        operator_token="operator-secret",
+        assurance_config=AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0),
+    )
+    decision = A1ThresholdSimplex(
+        reference, AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    ).evaluate(governor_input)
+    blocked = runtime.submit(decision, governor_input, token="decision-secret")
+    assert not blocked["accepted"]
+    assert "STARTUP_RECOVERY_INTERLOCK" in blocked["reason_codes"]
+    primed, reasons = runtime.prime_recovery(governor_input, token="decision-secret")
+    assert primed and reasons == ["STARTUP_RECOVERY_VALIDATED"]
+    accepted = runtime.submit(decision, governor_input, token="decision-secret")
+    assert accepted["accepted"]
 
 
 def test_gate_rejects_solver_numeric_and_replay_faults(reference, governor_input) -> None:
@@ -298,6 +341,133 @@ def test_watchdog_rechecks_certificate_after_slow_snapshot(reference, governor_i
     assert receipt and receipt["accepted"]
     assert runtime.telemetry[-1]["assurance_status"] == "unknown"
     assert "ASSURANCE_CERTIFICATE_EXPIRED" in runtime.telemetry[-1]["reason_codes"]
+
+
+def test_watchdog_recovers_after_one_transport_timeout(reference, governor_input) -> None:
+    plant = TimeoutOncePlant()
+    runtime = gate(reference, plant)
+    governor_input = retime_live(governor_input)
+    runtime.last_supervisor_host_ns = 0
+    runtime.stored_recovery = StoredRecovery(
+        command={"heading_rad": 0.5, "speed_mps": 1.0},
+        host_valid_until_ns=time.monotonic_ns() + 2_000_000_000,
+        source_decision_id="timeout-recovery",
+        governor_input=copy.deepcopy(governor_input),
+    )
+    first = runtime.watchdog_tick()
+    assert first and not first["accepted"]
+    assert "PLANT_TRANSPORT_FAILURE" in first["reason_codes"]
+    runtime.last_supervisor_host_ns = 0
+    second = runtime.watchdog_tick()
+    assert second and second["accepted"]
+    assert runtime.transport_failures == 1
+
+
+def test_gate_retention_is_bounded(reference) -> None:
+    plant = FakePlant()
+    runtime = ActuatorGate(
+        run_id="fixture-run-001",
+        branch_id="protected",
+        plant=plant,
+        reference=reference,
+        config=GateConfig(
+            retained_records=3,
+            retained_snapshot_ids=3,
+            startup_interlock_required=False,
+        ),
+    )
+    with runtime.lock:
+        for index in range(8):
+            runtime._remember_snapshot(f"snapshot-{index}")
+            runtime.telemetry.append({"index": index})
+            runtime._local_rejection(None, ["TEST_REJECTION"], index)
+    assert len(runtime.seen_snapshot_ids) == 3
+    assert len(runtime.telemetry) == 3
+    assert len(runtime.receipts) == 3
+    assert [item["receipt_id"] for item in runtime.receipts] == [
+        "gate-reject:0:5",
+        "gate-reject:0:6",
+        "gate-reject:0:7",
+    ]
+    assert runtime.local_receipt_sequence == 8
+
+
+def test_synchronous_recovery_cache_mode_is_deterministic_and_closes(
+    reference, governor_input
+) -> None:
+    plant = FakePlant()
+    clock = ManualMonotonicClock(governor_input["monotonic_time_ns"] + 1_000_000)
+    runtime = ActuatorGate(
+        run_id="fixture-run-001",
+        branch_id="protected",
+        plant=plant,
+        reference=reference,
+        decision_token="decision-secret",
+        monotonic_ns=clock,
+        config=GateConfig(
+            startup_interlock_required=False,
+            asynchronous_recovery_cache=False,
+        ),
+        assurance_config=AssuranceConfig(
+            prediction_horizon_s=5.0, recovery_horizon_s=5.0
+        ),
+    )
+    decision = A1ThresholdSimplex(
+        reference,
+        AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0),
+    ).evaluate(governor_input)
+    receipt = runtime.submit(
+        decision,
+        governor_input,
+        token="decision-secret",
+        now_ns=governor_input["monotonic_time_ns"] + 1_000_000,
+    )
+    assert receipt["accepted"]
+    assert runtime.stored_recovery is not None
+    assert runtime.close(timeout_s=0.0)
+
+
+def test_injected_monotonic_clock_controls_async_cache_and_watchdog(
+    reference, governor_input
+) -> None:
+    plant = FakePlant()
+    logical_now = int(governor_input["monotonic_time_ns"])
+    clock = ManualMonotonicClock(logical_now)
+    runtime = ActuatorGate(
+        run_id="fixture-run-001",
+        branch_id="protected",
+        plant=plant,
+        reference=reference,
+        decision_token="decision-secret",
+        operator_token="operator-secret",
+        monotonic_ns=clock,
+        config=GateConfig(
+            supervisor_timeout_s=0.01,
+            maximum_remote_validity_s=1.0,
+            startup_interlock_required=False,
+        ),
+        assurance_config=AssuranceConfig(
+            prediction_horizon_s=5.0, recovery_horizon_s=5.0
+        ),
+    )
+    decision = A1ThresholdSimplex(
+        reference,
+        AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0),
+    ).evaluate(governor_input)
+    assert runtime.submit(decision, governor_input, token="decision-secret")["accepted"]
+    deadline = time.monotonic() + 1.0
+    while runtime.stored_recovery is None and time.monotonic() < deadline:
+        time.sleep(0.002)
+    assert runtime.stored_recovery is not None
+    assert runtime.stored_recovery.host_valid_until_ns > clock()
+
+    clock.advance_ns(20_000_000)
+    receipt = runtime.watchdog_tick()
+    assert receipt and receipt["accepted"]
+    assert "STORED_VALIDATED_RECOVERY_CONTINUED" in runtime.telemetry[-1]["reason_codes"]
+
+    runtime.reset_handshake(token="operator-secret")
+    assert runtime.last_supervisor_host_ns == clock()
 
 
 def test_gate_reset_handshake_rotates_epoch_and_supervisor_token(reference, governor_input) -> None:

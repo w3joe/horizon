@@ -89,10 +89,36 @@ class NavigationReference:
 
 
 @dataclass(frozen=True)
+class EngineeringBound:
+    position_radius_m: float
+    heading_rad: float
+    speed_mps: float
+    assumption_id: str
+    eligible_model_versions: tuple[str, ...] = ("synthetic-12m-3dof-v1",)
+    required_source_prefixes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class AssuranceConfig:
     configuration_version: str = "assurance-engineering-v1"
+    operating_mode_id: str = "radar-led-constrained-v1"
+    required_health_sources: tuple[str, ...] = (
+        "navigation_environment",
+        "obstacle_perception",
+        "ship_actuator_feedback",
+        "internal_ship_communications",
+        "decision_ai_telemetry",
+    )
+    optional_health_sources: tuple[str, ...] = (
+        "onboard_network",
+        "inter_ship_communications",
+        "neural_sensor_internals",
+    )
     prediction_horizon_s: float = 60.0
     recovery_horizon_s: float = 60.0
+    geometry_chunk_s: float = 2.0
+    candidate_work_budget_s: float = 0.029
+    gate_dispatch_reserve_s: float = 0.010
     cpa_horizon_s: float = 60.0
     tcpa_threshold_s: float = 45.0
     release_margin_multiplier: float = 1.35
@@ -101,6 +127,20 @@ class AssuranceConfig:
     maximum_command_speed_mps: float = 6.0
     ownship_draft_m: float = 1.0
     minimum_under_keel_clearance_m: float = 0.5
+    ownship_odd_bound: EngineeringBound | None = field(
+        default_factory=lambda: EngineeringBound(
+            2.5, 0.03, 0.2, "synthetic-harbor-ownship-odd-bound-v1"
+        )
+    )
+    contact_odd_bound: EngineeringBound | None = field(
+        default_factory=lambda: EngineeringBound(
+            5.0,
+            0.08,
+            0.4,
+            "synthetic-harbor-radar-contact-odd-bound-v1",
+            required_source_prefixes=("radar",),
+        )
+    )
     recovery_turns_rad: tuple[float, ...] = (
         math.radians(70.0),
         math.radians(-70.0),

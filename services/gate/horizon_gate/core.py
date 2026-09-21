@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import copy
 import json
@@ -9,7 +10,7 @@ import math
 import secrets
 import threading
 import time
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -26,6 +27,10 @@ class GateConfig:
     solver_residual_limit: float = 1e-5
     release_clear_decisions: int = 3
     invalid_quarantine_threshold: int = 3
+    startup_interlock_required: bool = True
+    retained_records: int = 2_000
+    retained_snapshot_ids: int = 4_096
+    asynchronous_recovery_cache: bool = True
     allowed_candidates: tuple[str, ...] = ("A1", "A2", "A3", "A4", "A5")
 
 
@@ -104,6 +109,7 @@ class ActuatorGate:
         operator_token: str | None = None,
         config: GateConfig | None = None,
         assurance_config: AssuranceConfig | None = None,
+        monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ):
         self.run_id = run_id
         self.branch_id = branch_id
@@ -112,18 +118,20 @@ class ActuatorGate:
         self.decision_token = decision_token or secrets.token_urlsafe(32)
         self.operator_token = operator_token or secrets.token_urlsafe(32)
         self.config = config or GateConfig()
+        self._monotonic_ns = monotonic_ns
         gate_assurance_config = assurance_config or AssuranceConfig(
             prediction_horizon_s=self.config.command_validity_s
         )
         self.checker = BoundedPredictiveChecker(reference, gate_assurance_config)
         self.lock = threading.RLock()
         self.plant_lock = threading.Lock()
-        self.receipts: list[dict[str, Any]] = []
-        self.telemetry: list[dict[str, Any]] = []
+        self.receipts: deque[dict[str, Any]] = deque(maxlen=self.config.retained_records)
+        self.telemetry: deque[dict[str, Any]] = deque(maxlen=self.config.retained_records)
         self.last_tick = -1
         self.seen_snapshot_ids: set[str] = set()
+        self._snapshot_order: deque[str] = deque(maxlen=self.config.retained_snapshot_ids)
         self.plant_sequence = 0
-        self.last_supervisor_host_ns = time.monotonic_ns()
+        self.last_supervisor_host_ns = self._monotonic_ns()
         self.stored_recovery: StoredRecovery | None = None
         self.quarantined = False
         self.quarantine_reasons: list[str] = []
@@ -133,6 +141,17 @@ class ActuatorGate:
         self.operator_acknowledged = False
         self.epoch = 0
         self.control_generation = 0
+        self._cache_inflight = False
+        self._cache_threads: set[threading.Thread] = set()
+        self.transport_failures = 0
+        self.last_transport_error: str | None = None
+        self.local_receipt_sequence = 0
+        self.event_sequence = 0
+
+    def _next_event_id(self) -> str:
+        value = f"{self.run_id}:{self.branch_id}:gate-event:{self.event_sequence}"
+        self.event_sequence += 1
+        return value
 
     def _schedule_recovery_cache(
         self,
@@ -141,44 +160,131 @@ class ActuatorGate:
         *,
         epoch: int,
     ) -> None:
+        with self.lock:
+            if self._cache_inflight:
+                return
+            self._cache_inflight = True
         source = copy.deepcopy(governor_input)
         source_tick = int(source["tick_index"])
 
         def worker() -> None:
-            selection = self.checker.recovery_from_current(source)
-            if not selection.assessment.safe or selection.command is None:
-                return
-            option_expiry = int(
-                (selection.option or {}).get(
-                    "valid_until_monotonic_ns", decision["expires_monotonic_ns"]
-                )
-            )
-            now = time.monotonic_ns()
-            valid_until = self._map_remote_expiry(
-                source, min(int(decision["expires_monotonic_ns"]), option_expiry), now
-            )
-            with self.lock:
-                if self.epoch != epoch or now >= valid_until or self.recovery_latched:
+            try:
+                selection = self.checker.recovery_from_current(source)
+                if not selection.assessment.safe or selection.command is None:
                     return
-                current_tick = (
-                    int(self.stored_recovery.governor_input["tick_index"])
-                    if self.stored_recovery is not None
-                    else -1
+                option_expiry = int(
+                    (selection.option or {}).get(
+                        "valid_until_monotonic_ns", decision["expires_monotonic_ns"]
+                    )
                 )
-                if source_tick < current_tick:
-                    return
-                self.stored_recovery = StoredRecovery(
-                    command=copy.deepcopy(selection.command),
-                    host_valid_until_ns=valid_until,
-                    source_decision_id=str(decision["decision_id"]),
-                    governor_input=source,
+                now = self._monotonic_ns()
+                valid_until = self._map_remote_expiry(
+                    source, min(int(decision["expires_monotonic_ns"]), option_expiry), now
                 )
+                with self.lock:
+                    if self.epoch != epoch or now >= valid_until or self.recovery_latched:
+                        return
+                    current_tick = (
+                        int(self.stored_recovery.governor_input["tick_index"])
+                        if self.stored_recovery is not None
+                        else -1
+                    )
+                    if source_tick < current_tick:
+                        return
+                    self.stored_recovery = StoredRecovery(
+                        command=copy.deepcopy(selection.command),
+                        host_valid_until_ns=valid_until,
+                        source_decision_id=str(decision["decision_id"]),
+                        governor_input=source,
+                    )
+            finally:
+                with self.lock:
+                    self._cache_inflight = False
+                    self._cache_threads.discard(threading.current_thread())
 
-        threading.Thread(
+        if not self.config.asynchronous_recovery_cache:
+            worker()
+            return
+        thread = threading.Thread(
             target=worker,
             name=f"gate-recovery-cache-{source_tick}",
             daemon=True,
-        ).start()
+        )
+        with self.lock:
+            self._cache_threads.add(thread)
+            thread.start()
+
+    def close(self, *, timeout_s: float = 1.0) -> bool:
+        """Join bounded cache work; deterministic harnesses configure it synchronous."""
+
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            with self.lock:
+                threads = tuple(self._cache_threads)
+            if not threads:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                return False
+            for thread in threads:
+                thread.join(timeout=remaining)
+
+    def prime_recovery(
+        self, governor_input: dict[str, Any], *, token: str
+    ) -> tuple[bool, list[str]]:
+        with self.lock:
+            if not self._authorized(token, self.decision_token):
+                return False, ["UNAUTHORIZED_SUPERVISOR"]
+            epoch = self.epoch
+        try:
+            validate_governor_input(governor_input)
+            if governor_input.get("configuration_hash") != self.reference.digest():
+                raise InputRejected(("CONFIGURATION_HASH_MISMATCH",))
+            if governor_input["run_id"] != self.run_id or governor_input["branch_id"] != self.branch_id:
+                raise InputRejected(("RUN_OR_BRANCH_MISMATCH",))
+            selection = self.checker.recovery_from_current(governor_input)
+        except InputRejected as exc:
+            return False, list(exc.reason_codes)
+        now = self._monotonic_ns()
+        if not selection.assessment.safe or selection.command is None:
+            return False, [*selection.assessment.reason_codes, "NO_VALIDATED_RECOVERY"]
+        option_expiry = int(
+            (selection.option or {}).get(
+                "valid_until_monotonic_ns", governor_input["snapshot"]["valid_until_monotonic_ns"]
+            )
+        )
+        valid_until = self._map_remote_expiry(governor_input, option_expiry, now)
+        with self.lock:
+            if self.epoch != epoch or now >= valid_until:
+                return False, ["RECOVERY_CERTIFICATE_STALE"]
+            self.stored_recovery = StoredRecovery(
+                command=copy.deepcopy(selection.command),
+                host_valid_until_ns=valid_until,
+                source_decision_id="startup-recovery-prime",
+                governor_input=copy.deepcopy(governor_input),
+            )
+        return True, ["STARTUP_RECOVERY_VALIDATED"]
+
+    def report_watchdog_error(self, exc: BaseException) -> None:
+        with self.lock:
+            self.transport_failures += 1
+            self.last_transport_error = type(exc).__name__
+            self.telemetry.append(
+                {
+                    "event_id": self._next_event_id(),
+                    "event_type": "watchdog_error",
+                    "epoch": self.epoch,
+                    "host_monotonic_ns": self._monotonic_ns(),
+                    "assurance_status": "unknown",
+                    "reason_codes": ["WATCHDOG_TRANSPORT_FAILURE", type(exc).__name__],
+                }
+            )
+
+    def _remember_snapshot(self, snapshot_id: str) -> None:
+        if len(self._snapshot_order) == self._snapshot_order.maxlen:
+            self.seen_snapshot_ids.discard(self._snapshot_order[0])
+        self._snapshot_order.append(snapshot_id)
+        self.seen_snapshot_ids.add(snapshot_id)
 
     def _authorized(self, supplied: str, expected: str) -> bool:
         return bool(supplied) and secrets.compare_digest(supplied, expected)
@@ -207,7 +313,9 @@ class ActuatorGate:
         receipt = {
             "contract_type": "GateReceipt",
             "schema_version": "0.1.0",
-            "receipt_id": f"gate-reject:{self.epoch}:{len(self.receipts)}",
+            "receipt_id": (
+                f"gate-reject:{self.epoch}:{self.local_receipt_sequence}"
+            ),
             "run_id": self.run_id,
             "branch_id": self.branch_id,
             "decision_id": str((decision or {}).get("decision_id", "unknown")),
@@ -219,6 +327,7 @@ class ActuatorGate:
             "actuated_monotonic_ns": None,
             "actual_command": None,
         }
+        self.local_receipt_sequence += 1
         self.receipts.append(receipt)
         return receipt
 
@@ -302,6 +411,7 @@ class ActuatorGate:
         self.plant_sequence += 1
         self.control_generation += 1
         event = {
+            "event_id": self._next_event_id(),
             "event_type": "gate_decision",
             "epoch": self.epoch,
             "host_monotonic_ns": now_ns,
@@ -320,28 +430,42 @@ class ActuatorGate:
     def _send_reserved(
         self, reservation: ReservedActuation, *, now_ns: int | None = None
     ) -> dict[str, Any]:
-        with self.plant_lock:
-            send_time = time.monotonic_ns() if now_ns is None else now_ns
+        try:
+            with self.plant_lock:
+                send_time = self._monotonic_ns() if now_ns is None else now_ns
+                with self.lock:
+                    reasons: list[str] = []
+                    if self.epoch != reservation.epoch:
+                        reasons.append("STALE_RESERVED_EPOCH")
+                    if self.control_generation != reservation.generation:
+                        reasons.append("STALE_RESERVED_GENERATION")
+                    if send_time >= reservation.host_valid_until_ns:
+                        reasons.append("RESERVED_COMMAND_EXPIRED")
+                    if reasons:
+                        envelope = reservation.envelope
+                        return self._local_rejection(
+                            {
+                                "decision_id": envelope["decision_id"],
+                                "authority": envelope["authority"],
+                            },
+                            reasons,
+                            send_time,
+                        )
+                receipt = self.plant.command(reservation.envelope)
+        except Exception as exc:
             with self.lock:
-                reasons: list[str] = []
-                if self.epoch != reservation.epoch:
-                    reasons.append("STALE_RESERVED_EPOCH")
-                if self.control_generation != reservation.generation:
-                    reasons.append("STALE_RESERVED_GENERATION")
-                if send_time >= reservation.host_valid_until_ns:
-                    reasons.append("RESERVED_COMMAND_EXPIRED")
-                if reasons:
-                    envelope = reservation.envelope
-                    return self._local_rejection(
-                        {
-                            "decision_id": envelope["decision_id"],
-                            "authority": envelope["authority"],
-                        },
-                        reasons,
-                        send_time,
-                    )
-            receipt = self.plant.command(reservation.envelope)
+                self.transport_failures += 1
+                self.last_transport_error = type(exc).__name__
+                return self._local_rejection(
+                    {
+                        "decision_id": reservation.envelope["decision_id"],
+                        "authority": reservation.envelope["authority"],
+                    },
+                    ["PLANT_TRANSPORT_FAILURE", type(exc).__name__],
+                    self._monotonic_ns() if now_ns is None else now_ns,
+                )
         with self.lock:
+            self.last_transport_error = None
             self.receipts.append(receipt)
             reservation.event["receipt"] = receipt
             self.telemetry.append(reservation.event)
@@ -355,8 +479,8 @@ class ActuatorGate:
         token: str,
         now_ns: int | None = None,
     ) -> dict[str, Any]:
-        arrival = time.monotonic_ns() if now_ns is None else now_ns
-        clock = (lambda: time.monotonic_ns()) if now_ns is None else (lambda: now_ns)
+        arrival = self._monotonic_ns() if now_ns is None else now_ns
+        clock = self._monotonic_ns if now_ns is None else (lambda: now_ns)
         with self.lock:
             if not self._authorized(token, self.decision_token):
                 return self._local_rejection(decision, ["UNAUTHORIZED_SUPERVISOR"], arrival)
@@ -443,11 +567,21 @@ class ActuatorGate:
                     [*selected_assessment.reason_codes, "ACTUAL_COMMAND_REVALIDATION_FAILED"],
                     completion,
                 )
+            if original_action in {"pass", "modify"} and self.config.startup_interlock_required:
+                if (
+                    self.stored_recovery is None
+                    or completion >= self.stored_recovery.host_valid_until_ns
+                ):
+                    return self._local_rejection(
+                        decision,
+                        ["STARTUP_RECOVERY_INTERLOCK", "NO_FRESH_VALIDATED_RECOVERY"],
+                        completion,
+                    )
 
             self.invalid_count = 0
             self.last_supervisor_host_ns = completion
             self.last_tick = int(decision["tick_index"])
-            self.seen_snapshot_ids.add(str(decision["input_snapshot_id"]))
+            self._remember_snapshot(str(decision["input_snapshot_id"]))
             if original_action == "recover" and selected_assessment.safe:
                 remote_expiry = int(decision["expires_monotonic_ns"])
                 if decision.get("recovery") is not None:
@@ -503,7 +637,7 @@ class ActuatorGate:
         return receipt
 
     def watchdog_tick(self, *, now_ns: int | None = None) -> dict[str, Any] | None:
-        now = time.monotonic_ns() if now_ns is None else now_ns
+        now = self._monotonic_ns() if now_ns is None else now_ns
         with self.lock:
             if now - self.last_supervisor_host_ns <= int(self.config.supervisor_timeout_s * 1e9):
                 return None
@@ -520,6 +654,7 @@ class ActuatorGate:
             with self.lock:
                 self.telemetry.append(
                     {
+                        "event_id": self._next_event_id(),
                         "event_type": "watchdog",
                         "epoch": takeover_epoch,
                         "host_monotonic_ns": now,
@@ -528,7 +663,7 @@ class ActuatorGate:
                     }
                 )
             return None
-        effective_now = time.monotonic_ns() if now_ns is None else now_ns
+        effective_now = self._monotonic_ns() if now_ns is None else now_ns
         if stored and effective_now < stored.host_valid_until_ns:
             command = stored.command
             reasons = ["SUPERVISOR_WATCHDOG", "STORED_VALIDATED_RECOVERY_CONTINUED"]
@@ -539,6 +674,7 @@ class ActuatorGate:
                 with self.lock:
                     self.telemetry.append(
                         {
+                            "event_id": self._next_event_id(),
                             "event_type": "watchdog",
                             "epoch": takeover_epoch,
                             "host_monotonic_ns": now,
@@ -585,15 +721,19 @@ class ActuatorGate:
             self.operator_acknowledged = True
             return True
 
-    def reset_handshake(self, *, token: str) -> str | None:
+    def reset_handshake(self, *, token: str, plant_epoch: int | None = None) -> str | None:
         with self.lock:
             if not self._authorized(token, self.operator_token):
                 return None
-            self.epoch += 1
+            next_epoch = self.epoch + 1 if plant_epoch is None else plant_epoch
+            if isinstance(next_epoch, bool) or not isinstance(next_epoch, int) or next_epoch < self.epoch:
+                return None
+            self.epoch = next_epoch
             self.control_generation += 1
             self.decision_token = secrets.token_urlsafe(32)
             self.last_tick = -1
             self.seen_snapshot_ids.clear()
+            self._snapshot_order.clear()
             self.stored_recovery = None
             self.quarantined = False
             self.quarantine_reasons.clear()
@@ -601,7 +741,8 @@ class ActuatorGate:
             self.recovery_latched = False
             self.clear_decisions = 0
             self.operator_acknowledged = False
-            self.last_supervisor_host_ns = time.monotonic_ns()
+            self._cache_inflight = False
+            self.last_supervisor_host_ns = self._monotonic_ns()
             return self.decision_token
 
     def status(self) -> dict[str, Any]:
@@ -616,6 +757,16 @@ class ActuatorGate:
                 "recovery_latched": self.recovery_latched,
                 "operator_acknowledged": self.operator_acknowledged,
                 "last_tick": self.last_tick,
-                "receipts": copy.deepcopy(self.receipts[-200:]),
-                "events": copy.deepcopy(self.telemetry[-200:]),
+                "transport_failures": self.transport_failures,
+                "last_transport_error": self.last_transport_error,
+                "startup_recovery_ready": bool(
+                    self.stored_recovery
+                    and self._monotonic_ns() < self.stored_recovery.host_valid_until_ns
+                ),
+                "retained_receipt_count": len(self.receipts),
+                "retained_snapshot_id_count": len(self.seen_snapshot_ids),
+                "local_receipt_sequence": self.local_receipt_sequence,
+                "event_sequence": self.event_sequence,
+                "receipts": copy.deepcopy(list(self.receipts)[-200:]),
+                "events": copy.deepcopy(list(self.telemetry)[-200:]),
             }

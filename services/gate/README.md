@@ -9,9 +9,10 @@ final issued command against collision, boundary, depth, and actuator limits.
 The gate revalidates the command over its 400 ms plant-command validity window;
 the supervisor owns the declared 60 second predictive envelope. A complete
 60 second recovery-library check is cached asynchronously so plant I/O and the
-watchdog state lock remain bounded. Before that first cache is ready, a killed
-supervisor produces an explicit unknown/no-command watchdog event rather than
-a fabricated safe recovery.
+watchdog state lock remain bounded. Protected autonomy is interlocked until a
+recovery has been explicitly primed and remains fresh. Before that point, a
+killed supervisor produces an explicit unknown/no-command watchdog event
+rather than a fabricated safe recovery.
 
 The watchdog uses host monotonic time, independent of accelerated or paused
 simulation time.  If supervisor output stops it continues the last complete,
@@ -36,7 +37,16 @@ PYTHONPATH=services/gate:services/assurance:services/simulator \
 ```
 
 Endpoints are `GET /health`, `GET /v1/telemetry`, `POST /v1/decision`,
-`POST /v1/operator/acknowledge`, and `POST /v1/operator/reset-handshake`.
+`POST /v1/recovery/prime`, `POST /v1/operator/acknowledge`, and `POST
+/v1/operator/reset-handshake`. Operator routes require the operator bearer
+capability and decision/prime routes require the supervisor bearer capability;
+these files stay server-side.
+
+Deterministic experiment harnesses should inject their
+`ManualMonotonicClock`, set `GateConfig(asynchronous_recovery_cache=False)`,
+prime recovery before the first protected command, and call `gate.close()` at
+episode teardown. Production keeps asynchronous cache refresh so a 60 second
+recovery search does not block plant dispatch.
 
 ## Plant receive contract
 

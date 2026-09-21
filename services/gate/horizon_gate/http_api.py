@@ -55,14 +55,24 @@ class GateRuntime:
     def stop(self) -> None:
         self.stop_event.set()
         self.watchdog.join(timeout=1.0)
+        self.gate.close(timeout_s=1.0)
 
     def _watchdog(self) -> None:
         interval = max(0.01, self.gate.config.supervisor_timeout_s / 3.0)
         while not self.stop_event.wait(interval):
-            self.gate.watchdog_tick()
+            try:
+                self.gate.watchdog_tick()
+            except Exception as exc:
+                self.gate.report_watchdog_error(exc)
 
     def reset(self, operator_token: str) -> bool:
-        decision_token = self.gate.reset_handshake(token=operator_token)
+        try:
+            plant_epoch = int(self.gate.plant.snapshot()["plant_epoch"])
+        except (KeyError, TypeError, ValueError, OSError):
+            return False
+        decision_token = self.gate.reset_handshake(
+            token=operator_token, plant_epoch=plant_epoch
+        )
         if decision_token is None:
             return False
         _write_secret(self.decision_token_file, decision_token)
@@ -109,6 +119,19 @@ class GateHandler(BaseHTTPRequestHandler):
                 )
                 status = HTTPStatus.OK if receipt["accepted"] else HTTPStatus.UNPROCESSABLE_ENTITY
                 self._json(status, receipt)
+                return
+            if self.path == "/v1/recovery/prime":
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > MAX_BODY_BYTES:
+                    raise ValueError("invalid request size")
+                governor_input = json.loads(self.rfile.read(length))
+                accepted, reasons = self.server.runtime.gate.prime_recovery(
+                    governor_input, token=_bearer(self)
+                )
+                self._json(
+                    HTTPStatus.OK if accepted else HTTPStatus.CONFLICT,
+                    {"accepted": accepted, "reason_codes": reasons},
+                )
                 return
             if self.path == "/v1/operator/acknowledge":
                 accepted = self.server.runtime.gate.acknowledge_operator(token=_bearer(self))
@@ -186,4 +209,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

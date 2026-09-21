@@ -9,10 +9,17 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-for relative in ("services/assurance", "services/gate", "services/simulator"):
+for relative in (
+    "services/assurance",
+    "services/gate",
+    "services/simulator",
+    "services/collector",
+    "services/fusion",
+    "fixtures/decision-ai",
+):
     sys.path.insert(0, str(ROOT / relative))
 
-from horizon_assurance.configuration import NavigationReference  # noqa: E402
+from horizon_assurance.configuration import AssuranceConfig, NavigationReference  # noqa: E402
 
 
 @pytest.fixture
@@ -32,7 +39,25 @@ def reference() -> NavigationReference:
 def governor_input(reference: NavigationReference) -> dict:
     message = json.loads((ROOT / "packages/contracts/fixtures/governor-input.json").read_text())
     message["configuration_hash"] = reference.digest()
-    message["health"]["status"] = "healthy"
+    config = AssuranceConfig()
+    health_sources = (*config.required_health_sources, *config.optional_health_sources)
+    message["health"] = {
+        "source_health_ids": [f"fixture-health:{source}" for source in health_sources],
+        "perception_health_id": None,
+        "summaries": [
+            {
+                "health_id": f"fixture-health:{source}",
+                "source_id": source,
+                "status": "healthy",
+                "age_s": 0.0,
+                "capability": "available",
+                "reason_codes": [],
+                "valid_until_monotonic_ns": 4_300_000_000,
+            }
+            for source in health_sources
+        ],
+        "status": "healthy",
+    }
     message["snapshot"]["contacts"][0]["position_ne_m"] = [400.0, 400.0]
     message["snapshot"]["contacts"][0]["velocity_ne_mps"] = [0.0, 0.0]
     message["snapshot"]["environment"]["current_bounded_error_ne_mps"] = [0.02, 0.02]
