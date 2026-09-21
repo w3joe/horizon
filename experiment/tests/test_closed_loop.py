@@ -170,7 +170,14 @@ def test_gate_service_expiry_rejects_before_receiver_mutation(monkeypatch) -> No
     )
 
 
-def test_watchdog_during_queued_gate_work_cancels_stale_generation() -> None:
+def test_watchdog_during_queued_gate_work_cancels_stale_generation(monkeypatch) -> None:
+    from horizon_gate.core import ActuatorGate
+
+    monkeypatch.setattr(
+        ActuatorGate,
+        "prime_recovery",
+        lambda self, governor_input, *, token: (False, ["NO_VALIDATED_RECOVERY"]),
+    )
     request = _request("A3")
     request["max_simulation_time_s"] = 0.6
     request["modeled_gate_service_ns"] = 200_000_000
@@ -178,7 +185,17 @@ def test_watchdog_during_queued_gate_work_cancels_stale_generation() -> None:
     bundle = run_assured_episode(request)
 
     assert bundle["decisions"]
-    assert bundle["watchdog_receipts"]
+    assert bundle["watchdog_receipts"] == []
+    assert bundle["watchdog_actions"]
+    assert all(
+        action["generation_after"] > action["generation_before"]
+        for action in bundle["watchdog_actions"]
+    )
+    assert any(
+        action["command_issued"] is False
+        and "NO_STORED_RECOVERY" in action["reason_codes"]
+        for action in bundle["watchdog_actions"]
+    )
     assert bundle["timing_model"]["scheduler_rejections"]
     rejection = bundle["timing_model"]["scheduler_rejections"][0]
     assert rejection["reason_codes"] == ["SCHEDULER_STALE_EPOCH_OR_GENERATION"]
