@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+from pathlib import Path
 import time
 
 import pytest
@@ -64,6 +67,13 @@ def test_s01_nominal_has_joined_actuation_evidence(tmp_path) -> None:
 
 
 def test_s22_ungated_counterfactual_physically_collides(tmp_path) -> None:
+    scenario_path = Path(__file__).resolve().parents[2] / "scenarios/static_obstacle_approach.json"
+    scenario = json.loads(scenario_path.read_text())
+    normalized = (json.dumps(scenario, indent=2) + "\n").encode()
+    assert scenario["scenario_version"] == "1.1.0"
+    assert hashlib.sha256(normalized).hexdigest() == (
+        "79cec9604db5a8a9bffd3291c11736370edb77890500724d7c1cb3e052f8e229"
+    )
     stack = _stack(
         tmp_path,
         scenario="static_obstacle_approach.json",
@@ -85,7 +95,7 @@ def test_s22_ungated_counterfactual_physically_collides(tmp_path) -> None:
             "command_id": "s22-ungated-straight-six",
             "authority": "autonomy",
             "sequence": 0,
-            "expires_simulation_time_s": clone["simulation_time_s"] + 40.0,
+            "expires_simulation_time_s": clone["simulation_time_s"] + 46.0,
             "offline_monotonic_ns": round(clone["simulation_time_s"] * 1e9),
             "command": {"heading_rad": 0.0, "speed_mps": 6.0},
         }
@@ -97,7 +107,7 @@ def test_s22_ungated_counterfactual_physically_collides(tmp_path) -> None:
         assert status == 200 and receipt["accepted"] is True
         status, _, _ = request_json(
             stack.url("simulator", "/v1/evaluation/step?branch=counterfactual"),
-            {"steps": 1_750},
+            {"steps": 2_250},
             bearer=evaluation_token,
             timeout_s=5.0,
         )
@@ -112,14 +122,14 @@ def test_s22_ungated_counterfactual_physically_collides(tmp_path) -> None:
         assert status == 200
         collisions = [item for item in truth["events"] if item["kind"] == "collision"]
         assert collisions
-        assert collisions[0]["simulation_time_s"] <= clone["simulation_time_s"] + 35.0
+        assert collisions[0]["simulation_time_s"] <= clone["simulation_time_s"] + 45.0
     finally:
         stack.close()
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="startup recovery prime times out on the S22 static-obstacle fixture",
+    reason="protected S22 acceptance remains blocked pending independent RecoveryInput wiring",
 )
 def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
     unsafe = _stack(
