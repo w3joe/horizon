@@ -2,13 +2,34 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import json
 import math
+from pathlib import Path
 import time
 from typing import Any
 
+import jsonschema
+
 from .actuator import assess_actuator_response
+
+
+@lru_cache(maxsize=4)
+def _contract_validator(contract_type: str) -> jsonschema.Draft202012Validator:
+    schema = json.loads((Path(__file__).resolve().parents[3] / "packages/contracts/schema/horizon.schema.json").read_text())
+    return jsonschema.Draft202012Validator({
+        "$defs": schema["$defs"], "$ref": f"#/$defs/{contract_type}"
+    })
+
+
+def _require_contract(value: dict[str, Any], contract_type: str) -> None:
+    try:
+        # JSON Schema alone does not exclude IEEE NaN in a Python float.
+        json.dumps(value, allow_nan=False)
+        _contract_validator(contract_type).validate(value)
+    except (TypeError, ValueError, jsonschema.ValidationError):
+        raise NotReady([f"{contract_type.upper()}_SCHEMA_INVALID"]) from None
 
 
 INPUT_GROUPS = (
@@ -545,6 +566,8 @@ class FusionEngine:
         now_ns: int | None = None,
         request_monotonic_ns: int | None = None,
     ) -> dict[str, Any]:
+        _require_contract(proposal, "ProposedCommand")
+        _require_contract(trace, "AIInferenceTrace")
         current = time.monotonic_ns() if now_ns is None else now_ns
         request_started = current if request_monotonic_ns is None else request_monotonic_ns
         if request_started > current:
@@ -701,6 +724,7 @@ class FusionEngine:
             "ai_trace": copy.deepcopy(trace),
             "actuator_response": copy.deepcopy(actuator_assessment.evidence),
         }
+        _require_contract(governor, "GovernorInput")
         return governor
 
     def diagnostics(self, *, now_ns: int | None = None) -> dict[str, Any]:

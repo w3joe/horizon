@@ -76,6 +76,19 @@ def test_stale_required_source_blocks_assembly() -> None:
         engine.decision_snapshot(now_ns=now_ns)
 
 
+@pytest.mark.parametrize("invalid_speed", ["six", True, float("nan"), float("inf"), -1.0])
+def test_malformed_ai_output_is_not_published_as_governor_input(invalid_speed) -> None:
+    now_ns = time.monotonic_ns()
+    batch, _ = live_batch(now_ns)
+    engine = FusionEngine()
+    engine.update_batch(batch, now_ns=now_ns)
+    proposal, trace = FixturePolicy("nominal").propose(engine.decision_snapshot(now_ns=now_ns))
+    proposal["command"]["speed_mps"] = invalid_speed
+    with pytest.raises(NotReady, match="PROPOSEDCOMMAND_SCHEMA_INVALID"):
+        engine.assemble(proposal, trace, now_ns=max(now_ns, trace["completed_monotonic_ns"]))
+    assert engine.last_evidence is None
+
+
 def contact_observation(source: str, sequence: int, position: list[float], observation_id: str, ancestor: str, now_ns: int, sigma: float = 1.0) -> dict:
     return {
         "contract_type": "Observation", "schema_version": "0.1.0", "observation_id": observation_id, "run_id": "run", "branch_id": "protected", "input_group": "obstacle_perception", "source_id": source, "sequence": sequence,
