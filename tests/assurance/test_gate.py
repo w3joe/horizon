@@ -125,6 +125,46 @@ def test_gate_is_exclusive_and_revalidates_final_command(reference, governor_inp
     assert runtime.stored_recovery is not None
 
 
+@pytest.mark.parametrize("fault", ["invalid", "expired", "missing", "duplicate"])
+def test_gate_independently_rejects_pass_without_qualified_radar(reference, governor_input, fault) -> None:
+    plant = FakePlant()
+    runtime = gate(reference, plant)
+    message = retime_live(governor_input)
+    decision = A1ThresholdSimplex(reference, runtime.checker.config).evaluate(message)
+    assert decision["action"] == "pass"
+    radar = next(item for item in message["health"]["summaries"] if item["source_id"] == "obstacle_perception:radar")
+    if fault == "invalid":
+        radar["status"] = "invalid"
+    elif fault == "expired":
+        radar["valid_until_monotonic_ns"] = time.monotonic_ns() - 1
+    elif fault == "missing":
+        message["health"]["summaries"].remove(radar)
+    else:
+        message["health"]["summaries"].append(copy.deepcopy(radar))
+    receipt = runtime.submit(decision, message, token="decision-secret")
+    assert not receipt["accepted"]
+    assert not plant.envelopes
+    assert any("REQUIRED_HEALTH_SOURCE" in reason for reason in receipt["reason_codes"])
+    runtime.close()
+
+
+def test_recovery_uses_sensor_health_without_primary_ai_health(reference, governor_input) -> None:
+    runtime = gate(reference, FakePlant())
+    message = retime_live(governor_input)
+    for item in message["health"]["summaries"]:
+        if item["source_id"] in {"decision_ai_telemetry", "internal_ship_communications"}:
+            item["status"] = "invalid"
+            item["capability"] = "unavailable"
+    primed, reasons = runtime.prime_recovery(message, token="decision-secret")
+    assert primed, reasons
+    radar = next(item for item in message["health"]["summaries"] if item["source_id"] == "obstacle_perception:radar")
+    radar["status"] = "invalid"
+    primed, reasons = runtime.prime_recovery(message, token="decision-secret")
+    assert not primed
+    assert "REQUIRED_HEALTH_SOURCE_UNAVAILABLE:obstacle_perception:radar" in reasons
+    runtime.close()
+
+
 def test_startup_interlock_requires_recovery_before_autonomy(reference, governor_input) -> None:
     plant = FakePlant()
     governor_input = retime_live(governor_input)

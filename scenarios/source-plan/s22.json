@@ -1,0 +1,19 @@
+{
+  "schema_version": "source-plan-recipe/0.1.0",
+  "source_plan_id": "S22",
+  "title": "Valid snapshot with unsafe AI action",
+  "private_evaluation_configuration": true,
+  "physical_fixtures": [
+    "crossing_recoverable.json"
+  ],
+  "decision_ai_policies": [
+    "unsafe_straight"
+  ],
+  "fixture_status": "integration_recipe",
+  "orchestrator_steps": [],
+  "dependencies": [
+    "A04 assurance/gate"
+  ],
+  "acceptance_condition": "The proposal has valid transport lineage and intervention is attributed to unsafe behavior.",
+  "independent_verification": "pending_A08"
+}

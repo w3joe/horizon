@@ -306,6 +306,11 @@ class AuthoritativeSimulator:
                     rudder_rate_scale=float(fault.parameters.get("rate_scale", 0.3)),
                     rudder_limit_scale=float(fault.parameters.get("limit_scale", 1.0)),
                 )
+            elif fault.kind == "stuck_rudder":
+                # A zero rate limit freezes the physical rudder at its current
+                # position. Feedback reports that measured state; no online
+                # message receives the private fault label.
+                parameters = parameters.degraded(rudder_rate_scale=0.0)
             elif fault.kind == "thrust_reduction":
                 parameters = parameters.degraded(thrust_scale=float(fault.parameters.get("scale", 0.5)))
         return parameters

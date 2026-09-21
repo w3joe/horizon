@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from .configuration import AssuranceConfig, NavigationReference
+from .health_policy import required_health_evidence
 from .predictive import (
     BoundedPredictiveChecker,
     RecoverySelection,
@@ -23,6 +24,7 @@ def _decision(
     *,
     candidate_id: str,
     candidate_version: str,
+    health_config: AssuranceConfig,
     action: str,
     authority: str,
     command: dict[str, Any] | None,
@@ -44,6 +46,14 @@ def _decision(
     )
     if recovery is not None:
         expiry = min(expiry, int(recovery["valid_until_monotonic_ns"]))
+    if action in {"pass", "modify", "recover"}:
+        health_expiry, health_reasons = required_health_evidence(
+            governor_input, health_config, recovery=action == "recover"
+        )
+        expiry = min(expiry, health_expiry)
+        if health_reasons:
+            action, authority, command, recovery = "invalid", "recovery", None, None
+            reasons.extend(health_reasons)
     valid = deadline_met and action != "invalid" and command is not None
     if not deadline_met:
         action = "invalid"
@@ -177,12 +187,15 @@ def _recovery_decision(
 ) -> dict[str, Any]:
     constraints = tuple((*prior_constraints, *selection.assessment.constraints))
     reasons.extend(selection.assessment.reason_codes)
-    if selection.assessment.safe and selection.command is not None:
+    _, health_reasons = required_health_evidence(governor_input, candidate.config, recovery=True)
+    reasons.extend(health_reasons)
+    if selection.assessment.safe and selection.command is not None and not health_reasons:
         reasons.append("VALIDATED_RECOVERY_SELECTED")
         return _decision(
             governor_input,
             candidate_id=candidate.candidate_id,
             candidate_version=candidate.candidate_version,
+            health_config=candidate.config,
             action="recover",
             authority="recovery",
             command=selection.command,
@@ -201,6 +214,7 @@ def _recovery_decision(
         governor_input,
         candidate_id=candidate.candidate_id,
         candidate_version=candidate.candidate_version,
+        health_config=candidate.config,
         action="minimum_risk",
         authority="recovery",
         command=minimum_risk_command,
@@ -342,6 +356,7 @@ class A1ThresholdSimplex(Candidate):
             governor_input,
             candidate_id=self.candidate_id,
             candidate_version=self.candidate_version,
+            health_config=self.config,
             action="pass",
             authority="autonomy",
             command=dict(governor_input["proposal"]["command"]),
@@ -386,6 +401,7 @@ class A3PredictiveBounded(Candidate):
                     governor_input,
                     candidate_id=self.candidate_id,
                     candidate_version=self.candidate_version,
+                    health_config=self.config,
                     action="pass",
                     authority="autonomy",
                     command=dict(proposal),
@@ -535,6 +551,7 @@ class A2ProbabilisticRisk(Candidate):
             governor_input,
             candidate_id=self.candidate_id,
             candidate_version=self.candidate_version,
+            health_config=self.config,
             action="pass",
             authority="autonomy",
             command=dict(governor_input["proposal"]["command"]),
@@ -712,6 +729,7 @@ class A4RobustBarrierFilter(Candidate):
                     governor_input,
                     candidate_id=self.candidate_id,
                     candidate_version=self.candidate_version,
+                    health_config=self.config,
                     action="modify" if changed else "pass",
                     authority="filtered_autonomy" if changed else "autonomy",
                     command=filtered,
@@ -820,6 +838,7 @@ class A5EvidenceHybrid(Candidate):
                         governor_input,
                         candidate_id=self.candidate_id,
                         candidate_version=self.candidate_version,
+                        health_config=self.config,
                         action="modify" if changed else "pass",
                         authority="filtered_autonomy" if changed else "autonomy",
                         command=requested,
@@ -839,6 +858,7 @@ class A5EvidenceHybrid(Candidate):
                         governor_input,
                         candidate_id=self.candidate_id,
                         candidate_version=self.candidate_version,
+                        health_config=self.config,
                         action="modify",
                         authority="filtered_autonomy",
                         command=filtered,
