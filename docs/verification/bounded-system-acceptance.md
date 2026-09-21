@@ -1,0 +1,93 @@
+# Bounded system acceptance evidence
+
+## Scope and method
+
+This packet exercises the real simulator, decision-AI fixture, collector,
+fusion, assurance, and gate HTTP entry points as separate processes. Every run
+uses fresh loopback ports and fresh capability files. The tests do not use the
+standard demonstration ports, and they do not import component internals to
+decide whether an HTTP result passed.
+
+Tested integrated base: `5f6d49d` on Darwin arm64 with Python 3.12.14. Run:
+
+```sh
+PYTHONPATH=. .venv/bin/pytest -q tests/system/test_protected_navigation_acceptance.py
+```
+
+The suite checks joined proposal/decision/receipt identity, actual plant
+actuation, malformed and stale proposal rejection, gate and plant deadline
+enforcement, navigation-source loss, supervisor process loss, an injected
+collector-to-fusion outage and restoration, and paused-reset sensor delivery
+with an explicit recovery certificate. Temporary capabilities and service logs
+remain in pytest's temporary directory; no raw run artifacts are committed.
+
+These are bounded integration checks. They do not establish mission-level
+acceptance, statistical safety, real-vessel validity, or the complete S01--S22
+matrix.
+
+## Executed evidence
+
+| Evidence | Result | Observable assertion |
+|---|---|---|
+| S01 nominal slice | Passed | A real external proposal, A1 decision, accepted gate receipt, actual command, snapshot ID, proposal ID, and decision ID form one joined chain. |
+| S07 GNSS dropout | Passed for loss-of-assurance path | A declared dropout removes fresh fusion authority; collector output contains neither fault labels nor truth keys. Bias detection remains unverified. |
+| S09 expired proposal | Passed | Fusion returns 503 with `PROPOSAL_EXPIRED_IN_SIMULATION_TIME`; no accepted gate receipt exists. |
+| S09 stale lineage | Passed | Fusion returns 503 with `PROPOSAL_ORIGIN_MISMATCH`; no accepted gate receipt exists. |
+| S09 malformed proposal | Passed after `faad120` | Fusion returns 503 with `PROPOSEDCOMMAND_SCHEMA_INVALID`; no malformed GovernorInput or accepted receipt is published. |
+| Decision and plant command expiry | Passed | Gate rejects an expired decision; the simulator independently rejects an expired host command deadline and leaves the active command unchanged. |
+| S12 assurance process loss | Passed for takeover | After an accepted chain, SIGTERM of assurance produces an accepted `gate_watchdog` recovery command and a `SUPERVISOR_WATCHDOG` event. Restart behavior remains unverified. |
+| S17 transport mechanism | Passed for outage/restoration | A loopback fault proxy makes collector-to-fusion unavailable; fusion returns 503/`UPSTREAM_ERROR`, then produces fresh input after restoration. Stale-consumption ancestry under delay remains unverified. |
+| Paused reset | Passed | Physical ticks remain stopped, observation ticks advance, bare resume is rejected, and the exact current gate certificate permits explicit resume. |
+| S22 hazard premise | Passed | An evaluation-only unprotected clone running straight at 6 m/s collides with the stationary barge within 35 simulated seconds. |
+| S22 protected intervention | **Executed failed** | On base `5f6d49d`, startup recovery prime times out for the static-obstacle fixture; the gate stays unprimed and no protected evidence/command is produced. This is a startup blocker, not a collision attributed to accepted RTA authority. |
+
+Two defects found during development were corrected on the tested base. The
+original crossing S22 recipe did not establish a collision hazard and was
+replaced by `static_obstacle_approach.json` in `901e5a4`. Fusion formerly
+published the fixture's string-valued speed as a GovernorInput; `faad120`
+added schema and finite-number validation. The system tests retain both
+regressions.
+
+## S01--S22 coverage ledger
+
+`executed_partial` means the named evidence ran, while at least one source-plan
+acceptance condition remains. A source-plan recipe is never counted as passed
+from catalogue validation or a component test.
+
+| ID | Status in this packet | Executed evidence or remaining dependency |
+|---|---|---|
+| S01 | executed_partial | Joined nominal actuation passed; mission completion and unnecessary-intervention rate need a full episode. |
+| S02 | pending | Crossing intervention and truth-scored clearance episode not run. |
+| S03 | pending | Head-on clearance trace not run. |
+| S04 | pending | Overtaking and benign-close-pass intervention rate not run. |
+| S05 | pending | Hull-aware corridor rejection not run end to end. |
+| S06 | pending | Swept-path under-keel clearance not run end to end. |
+| S07 | executed_partial | GNSS dropout removes authority without label leakage; bias detection/bounds remain. |
+| S08 | pending | Live AIS/radar conflict and conservative protected command not run. |
+| S09 | executed_partial | Expired, stale-lineage, malformed, gate-expiry, and plant-expiry paths passed; decision-AI kill/restart remains. |
+| S10 | pending | Live slow/stuck-rudder capability update not run. |
+| S11 | pending | Remote-link loss during an active avoidance with onboard recovery not run. |
+| S12 | executed_partial | Assurance SIGTERM triggers watchdog recovery; restart and restored lineage remain. |
+| S13 | pending | Dense-traffic recovery-margin comparison not run. |
+| S14 | external_artifact_required | Recorded or declared synthetic fog/OOD perception artifact and calibrated policy are absent. |
+| S15 | pending | Initially unrecoverable minimum-risk outcome and limitation report not run. |
+| S16 | pending | Fault-clear quarantine, acknowledgement, and hysteretic authority release not run. |
+| S17 | executed_partial | Link outage/restoration fails closed; delayed/reordered consumed-input ancestry remains. |
+| S18 | pending | Live peer-claim contradiction constraint check not run. |
+| S19 | external_artifact_required | Instrumented normalization-mismatch artifact is absent. |
+| S20 | external_artifact_required | Integrated bounded diagnostic worker and declared load injector are absent. |
+| S21 | external_artifact_required | Integrated output-only neural appliance artifact is absent. |
+| S22 | executed_failed | Counterfactual collision premise passed; protected startup recovery timed out before an intervention could be observed. |
+
+## Release blockers and limitations
+
+1. Resolve the S22 startup recovery timeout and rerun the strict protected-path
+   test. It is intentionally marked strict expected-failure so an unexpected
+   pass forces review and removal of the marker.
+2. Complete the physical episode and truth-scored checks for S01--S18. The
+   current suite focuses on authority boundaries and failure handling.
+3. Integrate real A07 artifacts before running S14 and S19--S21. Simulated
+   aliases or private truth labels are not acceptable substitutes.
+4. Add the remaining process restart and delayed/reordered message recipes.
+   Service unavailability and a link outage do not prove stale-consumption
+   ancestry handling.
