@@ -15,7 +15,7 @@ import socket
 import subprocess
 import time
 from typing import IO
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,10 +94,28 @@ def verify_public_slice(host: str, ports: dict[str, int]) -> dict[str, str]:
         proposal = json.load(response)
     if proposal.get("proposal", {}).get("contract_type") != "ProposedCommand":
         raise RuntimeError("decision-AI fixture did not return a ProposedCommand")
+
+    governor_url = f"http://{host}:{ports['fusion']}/v1/governor-input?branch=protected"
+    governor: dict[str, object] = {}
+    deadline = time.monotonic() + 4.0
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(governor_url, timeout=0.5) as response:
+                governor = json.load(response)
+            break
+        except HTTPError as exc:
+            if exc.code != 503:
+                raise
+        except (URLError, TimeoutError, ConnectionError):
+            pass
+        time.sleep(0.03)
+    if governor.get("contract_type") != "GovernorInput":
+        raise RuntimeError("fusion did not produce a fresh GovernorInput")
     return {
         "console_to_simulator": "passed",
         "snapshot_boundary": "public_display_only",
         "decision_ai_proposal": "passed",
+        "observation_to_governor_input": "passed",
     }
 
 
@@ -136,6 +154,19 @@ def main() -> int:
             str(ROOT / ".venv/bin/python"), str(ROOT / "fixtures/decision-ai/service.py"),
             "--host", host, "--port", str(ports["decision_ai"]),
         ],
+        "collector": [
+            str(ROOT / ".venv/bin/python"), "-m", "horizon_collector.http_api",
+            "--host", host, "--port", str(ports["collector"]),
+            "--simulator-url", f"http://{host}:{ports['simulator']}",
+            "--branch", "protected",
+        ],
+        "fusion": [
+            str(ROOT / ".venv/bin/python"), "-m", "horizon_fusion.http_api",
+            "--host", host, "--port", str(ports["fusion"]),
+            "--collector-url", f"http://{host}:{ports['collector']}",
+            "--decision-ai-url", f"http://{host}:{ports['decision_ai']}",
+            "--branch", "protected",
+        ],
         "console": [
             str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/console_proxy.py"),
             "--host", host, "--port", str(ports["console"]),
@@ -145,7 +176,13 @@ def main() -> int:
     }
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
-        [str(ROOT), str(ROOT / "packages/contracts/python"), str(ROOT / "services/simulator")]
+        [
+            str(ROOT),
+            str(ROOT / "packages/contracts/python"),
+            str(ROOT / "services/simulator"),
+            str(ROOT / "services/collector"),
+            str(ROOT / "services/fusion"),
+        ]
     )
     managed: list[ManagedProcess] = []
     unavailable = {
@@ -170,7 +207,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
     try:
-        for name in ("simulator", "decision_ai", "console"):
+        for name in ("simulator", "decision_ai", "collector", "fusion", "console"):
             port = ports[name]
             assert_port_free(host, port)
             log_handle = (logs_dir / f"{name}.log").open("wb")
