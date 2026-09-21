@@ -48,6 +48,12 @@ Endpoints are `GET /health`, `GET /v1/telemetry`, `POST /v1/decision`,
 capability and decision/prime routes require the supervisor bearer capability;
 these files stay server-side.
 
+Gate status includes `observed_monotonic_ns`, sampled from the same injected
+host clock used for receipt and expiry checks. A remote display can combine
+that anchor with elapsed time since receipt to age authority data without
+mixing it with wall time or a browser-specific monotonic epoch. The field is
+public telemetry and contains no capability token or simulator truth.
+
 Deterministic experiment harnesses should inject their
 `ManualMonotonicClock`, set `GateConfig(asynchronous_recovery_cache=False)`,
 prime recovery before the first protected command, and call `gate.close()` at
