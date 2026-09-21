@@ -77,6 +77,7 @@ def _run_adapter(args: argparse.Namespace) -> int:
         args.output,
         args.run_id,
         args.max_simulation_time_s,
+        plan.get("timing_profile_id", "idealized-front-zero-v1"),
     )
     summary = summarize_records(records)
     write_json(Path(args.output) / "summary.json", summary)
