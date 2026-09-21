@@ -5,14 +5,16 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 import copy
+from http.client import HTTPConnection
 import json
 import math
 import secrets
+import socket
 import threading
 import time
 from typing import Any, Callable, Protocol
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPHandler, Request, build_opener
 
 from horizon_assurance.configuration import AssuranceConfig, NavigationReference
 from horizon_assurance.health_policy import required_health_evidence
@@ -43,11 +45,24 @@ class PlantClient(Protocol):
     def plant_epoch(self) -> int: ...
 
 
+class _NoDelayHTTPConnection(HTTPConnection):
+    def connect(self) -> None:
+        super().connect()
+        if self.sock is not None:
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+
+class _NoDelayHTTPHandler(HTTPHandler):
+    def http_open(self, request: Request) -> Any:
+        return self.do_open(_NoDelayHTTPConnection, request)
+
+
 class HTTPPlantClient:
     def __init__(self, base_url: str, branch_id: str, plant_token: str):
         self.base_url = base_url.rstrip("/")
         self.branch_id = branch_id
         self._plant_token = plant_token
+        self._opener = build_opener(_NoDelayHTTPHandler())
 
     def _request(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         request = Request(
@@ -59,7 +74,7 @@ class HTTPPlantClient:
                 "Authorization": f"Bearer {self._plant_token}",
             },
         )
-        with urlopen(request, timeout=0.04) as response:  # noqa: S310 - configured plant endpoint
+        with self._opener.open(request, timeout=0.04) as response:  # noqa: S310 - configured plant endpoint
             return json.load(response)
 
     def command(self, envelope: dict[str, Any]) -> dict[str, Any]:

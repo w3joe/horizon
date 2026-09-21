@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import socket
 from socketserver import TCPServer
 import threading
 from typing import Any
@@ -82,6 +83,11 @@ class GateRuntime:
 
 class GateHandler(BaseHTTPRequestHandler):
     server: "GateHTTPServer"
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.connection.settimeout(2.0)
 
     def log_message(self, format: str, *args: object) -> None:
         return

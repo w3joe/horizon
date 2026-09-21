@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 import copy
+from http.client import HTTPConnection
 import math
+import socket
 import threading
 import time
+from urllib.request import urlopen
 
 import pytest
 
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
-from horizon_gate.core import ActuatorGate, GateConfig, HTTPPlantClient, StoredRecovery
-from horizon_gate.http_api import GateHTTPServer, GateRuntime
+from horizon_gate.core import (
+    ActuatorGate,
+    GateConfig,
+    HTTPPlantClient,
+    StoredRecovery,
+    _NoDelayHTTPConnection,
+)
+from horizon_gate.http_api import GateHTTPServer, GateHandler, GateRuntime
 from horizon_sim.clock import ManualMonotonicClock
 
 
@@ -467,6 +476,48 @@ def test_gate_server_binds_numeric_loopback_without_name_lookup(
         assert server.server_port == server.server_address[1]
     finally:
         server.server_close()
+
+
+def test_gate_control_server_disables_nagle_on_accepted_socket(
+    reference, tmp_path
+) -> None:
+    observed = []
+
+    class RecordingHandler(GateHandler):
+        def setup(self) -> None:
+            super().setup()
+            observed.append(
+                self.connection.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
+            )
+
+    runtime = GateRuntime(gate(reference, FakePlant()), str(tmp_path / "decision.token"))
+    server = GateHTTPServer(("127.0.0.1", 0), runtime)
+    server.RequestHandlerClass = RecordingHandler
+    worker = threading.Thread(target=server.handle_request)
+    worker.start()
+    try:
+        with urlopen(f"http://127.0.0.1:{server.server_port}/health", timeout=1) as response:
+            assert response.status == 200
+        worker.join(timeout=1)
+        assert len(observed) == 1 and observed[0] != 0
+    finally:
+        server.server_close()
+
+
+def test_gate_plant_client_disables_nagle_after_connect(monkeypatch) -> None:
+    calls = []
+
+    class FakeSocket:
+        def setsockopt(self, level, option, value):
+            calls.append((level, option, value))
+
+    def fake_connect(connection):
+        connection.sock = FakeSocket()
+
+    monkeypatch.setattr(HTTPConnection, "connect", fake_connect)
+    connection = _NoDelayHTTPConnection("127.0.0.1")
+    connection.connect()
+    assert calls == [(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]
 
 
 def test_watchdog_takeover_invalidates_slow_validation(reference, governor_input) -> None:
