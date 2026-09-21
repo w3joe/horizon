@@ -375,6 +375,10 @@ class CollectorStore:
                 cursor > page_cursor and value["branch_id"] == branch
                 for cursor, value in self._records
             )
+            if not has_more:
+                # A reset may purge every retained record. A consumer must
+                # still be able to acknowledge the gap and catch up once.
+                page_cursor = max(page_cursor, self._cursor)
             return {
                 "cursor": page_cursor,
                 "cursor_lost": cursor_lost,

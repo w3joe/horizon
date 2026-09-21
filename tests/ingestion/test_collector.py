@@ -45,6 +45,22 @@ def test_replay_does_not_refresh_validity_and_queue_is_bounded() -> None:
     assert diagnostics["replayed_or_out_of_order"] == 1
 
 
+def test_purged_reset_history_advances_empty_page_cursor_once() -> None:
+    store = CollectorStore()
+    store.update_plant_epoch("protected", "run", 0)
+    assert store.ingest(observation(sequence=0))
+    assert store.ingest(observation(sequence=1))
+    store.update_plant_epoch("protected", "run", 1)
+    gap = store.batch(branch="protected", after_cursor=0)
+    assert gap["observations"] == []
+    assert gap["cursor_lost"]
+    assert gap["cursor"] == 2
+    caught_up = store.batch(branch="protected", after_cursor=gap["cursor"])
+    assert not caught_up["cursor_lost"]
+    assert store.ingest(observation(sequence=0, event=0.0))
+    assert len(store.batch(branch="protected", after_cursor=gap["cursor"])["observations"]) == 1
+
+
 def test_reset_epoch_allows_restarted_sequences_only_after_snapshot_regression() -> None:
     store = CollectorStore(maximum_records=8)
     store.update_snapshot("protected", {"contract_type": "SimulationSnapshot", "display_only": True, "run_id": "run", "branch_id": "protected", "tick_index": 10})

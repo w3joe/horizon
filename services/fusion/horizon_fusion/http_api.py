@@ -60,6 +60,10 @@ class FusionLoop:
     def cycle_once(self) -> None:
         query = urlencode({"branch": self.branch, "after_cursor": self.cursor, "limit": 512})
         batch = _get_json(f"{self.collector_url}/v1/batch?{query}")
+        new_plant_epoch = (
+            batch.get("plant_epoch") is not None
+            and batch["plant_epoch"] != self.engine.plant_epoch
+        )
         if batch.get("cursor_lost"):
             self.engine.invalidate_collection("COLLECTOR_CURSOR_LOSS")
         self.cursor = int(batch.get("cursor", self.cursor))
@@ -70,7 +74,13 @@ class FusionLoop:
             with self.lock:
                 self.latest = None
                 self.last_processed_snapshot_id = None
-        if batch.get("cursor_lost") or batch.get("has_more"):
+        # A reset deliberately discards old-epoch history. Permit a complete
+        # replacement page to establish the new lineage; normal freshness
+        # checks below still reject stale or incomplete inputs.
+        complete_reset_page = new_plant_epoch and {
+            "gnss", "imu", "radar", "actuator"
+        }.issubset({item.get("source_id") for item in batch.get("observations", [])})
+        if (batch.get("cursor_lost") and not complete_reset_page) or batch.get("has_more"):
             with self.lock:
                 self.latest = None
                 self.last_processed_snapshot_id = None
