@@ -11,10 +11,37 @@ sys.path.insert(0, str(SCRIPTS))
 
 from demo_capture import (  # noqa: E402
     MAX_ARTIFACT_BYTES,
+    extract_public_evidence,
     identify_intervention,
     summarize_outcome,
     write_artifact,
 )
+
+
+def test_proposal_wrapper_uses_its_authoritative_issue_time() -> None:
+    evidence = extract_public_evidence(
+        captured_inputs=[
+            (
+                0.06,
+                {
+                    "proposal": {
+                        "command_id": "proposal-1",
+                        "issued_simulation_time_s": 7.04,
+                        "command": {"heading_rad": 0.0, "speed_mps": 6.0},
+                    }
+                },
+            )
+        ],
+        assurance={"control_events": []},
+        gate={"receipts": [], "events": []},
+        command_observations={},
+        host_samples=[],
+        duration_s=45.0,
+        plant_epoch=2,
+        start_simulation_s=7.0,
+    )
+
+    assert evidence["proposals"][0]["time_s"] == 0.04
 
 
 def test_outcome_summary_publishes_aggregates_without_truth_records() -> None:

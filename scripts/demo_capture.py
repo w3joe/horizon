@@ -28,8 +28,8 @@ from tests.system.horizon_stack import HorizonStack, request_json, wait_for  # n
 
 MANIFEST_SCHEMA = "horizon.demo-manifest.v1"
 REPLAY_SCHEMA = "horizon.demo-replay.v1"
-RUN_ID = "unsafe-route-v3"
-TITLE = "Unsafe course · safety takeover"
+RUN_ID = "unsafe-route-v4"
+TITLE = "Unsafe course · preventive safety guard"
 SCENARIO_FILE = "static_obstacle_approach.json"
 SCENARIO_VERSION = "1.1.0"
 SCENARIO_SEED = 1
@@ -177,6 +177,7 @@ def extract_public_evidence(
     host_samples: list[tuple[int, float]],
     duration_s: float,
     plant_epoch: int,
+    start_simulation_s: float,
 ) -> dict[str, list[dict[str, Any]]]:
     proposals: list[dict[str, Any]] = []
     seen_proposals: set[str] = set()
@@ -185,7 +186,17 @@ def extract_public_evidence(
         command_id = proposal.get("command_id") if isinstance(proposal, dict) else None
         if isinstance(command_id, str) and command_id not in seen_proposals:
             seen_proposals.add(command_id)
-            proposals.append(_wrap(relative_s, proposal))
+            issued_simulation_s = proposal.get("issued_simulation_time_s")
+            issued_relative_s = (
+                float(issued_simulation_s) - start_simulation_s
+                if isinstance(issued_simulation_s, (int, float))
+                and not isinstance(issued_simulation_s, bool)
+                and math.isfinite(float(issued_simulation_s))
+                else relative_s
+            )
+            if not 0.0 <= issued_relative_s <= duration_s:
+                issued_relative_s = relative_s
+            proposals.append(_wrap(issued_relative_s, proposal))
 
     decisions: list[dict[str, Any]] = []
     decision_times: dict[str, float] = {}
@@ -200,7 +211,7 @@ def extract_public_evidence(
             continue
         relative_s = None
         if isinstance(summary, dict) and isinstance(summary.get("simulation_time_s"), (int, float)):
-            relative_s = float(summary["simulation_time_s"])
+            relative_s = float(summary["simulation_time_s"]) - start_simulation_s
         decision = event.get("decision")
         decision_id = decision.get("decision_id") if isinstance(decision, dict) else None
         if isinstance(decision_id, str) and relative_s is not None:
@@ -516,6 +527,7 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
         host_samples=host_samples,
         duration_s=duration_s,
         plant_epoch=epoch,
+        start_simulation_s=start_s,
     )
     intervention = identify_intervention(
         evidence["gate_events"],
