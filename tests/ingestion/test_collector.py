@@ -244,3 +244,30 @@ def test_non_finite_and_deep_payloads_are_rejected() -> None:
     too_deep["payload"] = nested
     with pytest.raises(ValueError, match="bounds"):
         CollectorStore(maximum_records=8).ingest(too_deep)
+
+
+def test_host_clock_health_age_uses_original_source_receipt_and_caps_validity() -> None:
+    store = CollectorStore(maximum_records=8)
+    old_but_valid = observation(received=1_000_000_000, valid=1_000_000_000_000, event=1.0)
+    store.ingest(old_but_valid, received_ns=5_000_000_000)
+    value = store.batch(branch="protected")["observations"][0]
+    assert value["time"]["valid_until_monotonic_ns"] == 61_000_000_000
+    navigation = store.diagnostics(now_ns=5_000_000_000)["groups"]["navigation_environment"]
+    assert navigation["age_s"] == 4.0
+
+
+def test_huge_finite_clock_input_is_predictably_rejected() -> None:
+    value = observation(event=1e300)
+    with pytest.raises(ValueError, match="bounded clock range"):
+        CollectorStore(maximum_records=8).ingest(
+            value,
+            received_ns=10_000_000_000,
+            simulation_time_s=1e300,
+        )
+    mapped_overflow = observation(received=0, valid=1_000_000_000, event=1.0)
+    with pytest.raises(ValueError, match="bounded non-negative integer"):
+        CollectorStore(maximum_records=8).ingest(
+            mapped_overflow,
+            received_ns=2**63 - 1,
+            simulation_time_s=1.0,
+        )
