@@ -512,6 +512,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     plant_period_ns = round(simulator.parameters.fixed_step_s * 1e9)
     modeled_stage_latencies_ns = _stage_latencies(request, plant_period_ns)
     decisions: list[dict[str, Any]] = []
+    decision_dispositions: list[dict[str, Any]] = []
     proposals: list[dict[str, Any]] = []
     gate_receipts: list[dict[str, Any]] = []
     watchdog_receipts: list[dict[str, Any]] = []
@@ -763,12 +764,30 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                     "candidate_wall_time_ns": candidate_wall_ns,
                                 }
                             )
+                            disposition = {
+                                "decision_id": str(decision["decision_id"]),
+                                "disposition": "evaluated_pending",
+                                "stage": "candidate",
+                                "submitted_to_gate": False,
+                                "gate_receipt_id": None,
+                                "reason_codes": [],
+                            }
+                            decision_dispositions.append(disposition)
                             fresh_proposal_count += 1
                             fresh_this_tick = True
                             if not advance_stage(
                                 "candidate",
                                 floor_ns=int(decision["decided_monotonic_ns"]),
                             ):
+                                disposition.update(
+                                    {
+                                        "disposition": "censored",
+                                        "reason_codes": [
+                                            "SIMULATION_HORIZON_DURING_CANDIDATE_SERVICE"
+                                        ],
+                                        "completed_monotonic_ns": clock(),
+                                    }
+                                )
                                 break
                             decisions[-1]["simulation_time_s"] = (
                                 simulator.simulation_time_s
@@ -777,6 +796,16 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                 queued_epoch = gate.epoch
                                 queued_generation = gate.control_generation
                             if not advance_stage("gate"):
+                                disposition.update(
+                                    {
+                                        "disposition": "censored",
+                                        "stage": "gate",
+                                        "reason_codes": [
+                                            "SIMULATION_HORIZON_DURING_GATE_SERVICE"
+                                        ],
+                                        "completed_monotonic_ns": clock(),
+                                    }
+                                )
                                 break
                             with gate.lock:
                                 stale = (
@@ -784,6 +813,16 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                     or gate.control_generation != queued_generation
                                 )
                             if stale:
+                                disposition.update(
+                                    {
+                                        "disposition": "scheduler_rejected",
+                                        "stage": "gate",
+                                        "reason_codes": [
+                                            "SCHEDULER_STALE_EPOCH_OR_GENERATION"
+                                        ],
+                                        "completed_monotonic_ns": clock(),
+                                    }
+                                )
                                 scheduler_rejections.append(
                                     {
                                         "decision_id": decision["decision_id"],
@@ -818,6 +857,19 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                         source="supervisor",
                                     )
                                 )
+                                disposition.update(
+                                    {
+                                        "disposition": "submitted",
+                                        "stage": "gate",
+                                        "submitted_to_gate": True,
+                                        "gate_receipt_id": receipt.get("receipt_id"),
+                                        "accepted": receipt.get("accepted") is True,
+                                        "reason_codes": list(
+                                            receipt.get("reason_codes", [])
+                                        ),
+                                        "completed_monotonic_ns": clock(),
+                                    }
+                                )
                 if not fresh_this_tick:
                     no_fresh_input_ticks += 1
             else:
@@ -826,6 +878,12 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                 advance_idle_step()
     finally:
         gate_closed = gate.close(timeout_s=1.0)
+
+    if any(
+        item["disposition"] == "evaluated_pending"
+        for item in decision_dispositions
+    ):
+        raise RuntimeError("candidate decision lacks a terminal scheduler disposition")
 
     truth_frames, authority_audit = _operational_truth_frames(
         simulator, plant, decisions
@@ -911,6 +969,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
             for item in simulator.events
         ],
         "decisions": decisions,
+        "decision_dispositions": decision_dispositions,
         "proposals": proposals,
         "gate_receipts": gate_receipts,
         "watchdog_receipts": watchdog_receipts,

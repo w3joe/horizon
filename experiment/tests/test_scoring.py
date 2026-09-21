@@ -40,6 +40,28 @@ def test_recovery_fixture_has_positive_sampled_lead_time_and_cost() -> None:
     assert record["mission"]["recovery_duration_s"] == 2.0
 
 
+def test_censored_recovery_decision_is_not_counted_as_an_intervention() -> None:
+    bundle = run_fixture(_job("STUB_RECOVERY"))
+    decision_id = bundle["decisions"][0]["decision_id"]
+    bundle["gate_receipts"] = []
+    bundle["decision_dispositions"] = [
+        {
+            "decision_id": decision_id,
+            "disposition": "censored",
+            "submitted_to_gate": False,
+        }
+    ]
+    record = score_closed_loop(bundle)
+    assert record["intervention"] == {
+        "occurred": False,
+        "first_time_s": None,
+        "last_recovery_opportunity_s": 2.0,
+        "lead_time_s": None,
+    }
+    assert record["gate"]["assessment_status"] == "complete"
+    assert record["trace_complete"] is True
+
+
 def test_recovery_boundary_comes_from_unprotected_reference_not_protected_frames() -> None:
     bundle = run_fixture(_job("STUB_RECOVERY"))
     for frame in bundle["truth_frames"]:

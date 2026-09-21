@@ -46,7 +46,18 @@ def test_real_a1_a5_adapter_preserves_deadlines_authority_and_truth_separation()
         )
         assert len(bundle["source_health_audit"]) == len(bundle["decisions"])
         assert len(bundle["proposals"]) == len(bundle["decisions"])
-        assert len(bundle["gate_receipts"]) == len(bundle["decisions"])
+        assert len(bundle["decision_dispositions"]) == len(bundle["decisions"])
+        submitted = [
+            item
+            for item in bundle["decision_dispositions"]
+            if item["disposition"] == "submitted"
+        ]
+        assert len(bundle["gate_receipts"]) == len(submitted)
+        assert all(
+            item["disposition"]
+            in {"submitted", "censored", "scheduler_rejected"}
+            for item in bundle["decision_dispositions"]
+        )
         assert bundle["cadence"]["fresh_proposals"] == len(bundle["decisions"])
         for decision, health_record in zip(
             bundle["decisions"], bundle["source_health_audit"]
@@ -87,14 +98,49 @@ def test_real_a1_a5_adapter_preserves_deadlines_authority_and_truth_separation()
             assert bundle["cadence"]["post_prime_expired_inputs"] > 0
             assert bundle["proposals"] == []
             assert bundle["gate_receipts"] == []
-        for decision, receipt in zip(bundle["decisions"], bundle["gate_receipts"]):
+        receipts_by_decision = {
+            item["decision_id"]: item for item in bundle["gate_receipts"]
+        }
+        for decision in bundle["decisions"]:
+            receipt = receipts_by_decision.get(decision["decision_id"])
             if not decision["deadline_met"]:
                 assert decision["action"] == "invalid"
-                assert receipt["accepted"] is False
+                if receipt is not None:
+                    assert receipt["accepted"] is False
         record = score_closed_loop(bundle)
         assert record["mission"]["censored"] is True
         assert record["mission"]["route_delay_s"] is None
         assert record["artifact_hashes"]["assumption_audit"]
+
+
+def test_a5_horizon_censors_evaluated_decision_without_fabricating_gate_receipt() -> None:
+    request = _request("A5")
+    request["max_simulation_time_s"] = 0.25
+    request["modeled_candidate_service_ns"] = 100_000_000
+    request["modeled_gate_service_ns"] = 0
+
+    bundle = run_assured_episode(request)
+
+    assert len(bundle["decisions"]) == 1
+    assert bundle["gate_receipts"] == []
+    assert bundle["decision_dispositions"] == [
+        {
+            "decision_id": bundle["decisions"][0]["decision_id"],
+            "disposition": "censored",
+            "stage": "candidate",
+            "submitted_to_gate": False,
+            "gate_receipt_id": None,
+            "reason_codes": ["SIMULATION_HORIZON_DURING_CANDIDATE_SERVICE"],
+            "completed_monotonic_ns": bundle["timing_model"]["events"][-1][
+                "completed_monotonic_ns"
+            ],
+        }
+    ]
+    assert bundle["timing_model"]["events"][-1]["stage"] == "candidate"
+    assert bundle["timing_model"]["events"][-1]["completed"] is False
+    record = score_closed_loop(bundle)
+    assert record["trace_complete"] is True
+    assert record["intervention"]["occurred"] is False
 
 
 def test_fixed_health_metadata_is_derived_from_assurance_configuration() -> None:

@@ -47,6 +47,13 @@ field. Startup passive and receiver-expiry fallback periods are preserved rather
 the authority of the latest receipt. Recovery feasibility remains null until an independent
 evaluator supplies a reference.
 
+Every evaluated decision has one terminal `decision_dispositions` record. A `submitted` record
+joins to a gate receipt by `decision_id`; a `censored` record identifies candidate or gate work that
+crossed the finite simulation horizon; a `scheduler_rejected` record identifies a stale epoch or
+generation before submission. No gate receipt is fabricated for work that never reached the gate.
+Archived bundles without this field remain readable when each decision already has a receipt;
+otherwise the scorer reports gate evidence as `unknown`.
+
 ## A07 health registration
 
 H0-H4 entrypoints are registered separately through a deliberate adapter. Missing artifacts,
