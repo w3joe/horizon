@@ -51,6 +51,16 @@ def test_recovery_boundary_comes_from_unprotected_reference_not_protected_frames
     assert record["intervention"]["lead_time_s"] is None
 
 
+def test_recovery_reference_ignores_feasibility_after_hazard_window() -> None:
+    bundle = run_fixture(_job("STUB_RECOVERY"))
+    bundle["recovery_reference"]["feasible_samples"].append(
+        {"simulation_time_s": 20.0, "feasible": True}
+    )
+    assert score_closed_loop(bundle)["intervention"]["last_recovery_opportunity_s"] == 2.0
+    bundle["recovery_reference"].pop("hazard_window_end_s")
+    assert score_closed_loop(bundle)["intervention"]["last_recovery_opportunity_s"] is None
+
+
 def test_failed_mission_cost_is_censored_instead_of_rewarding_early_end() -> None:
     record = score_closed_loop(run_fixture(_job("STUB_PASS")))
     assert record["mission"]["completed"] is False
@@ -70,6 +80,13 @@ def test_gate_violation_is_derived_from_expiry_not_producer_flag() -> None:
     }
 
 
+def test_gate_acceptance_at_expiry_is_stale() -> None:
+    bundle = run_fixture(_job("STUB_PASS"))
+    expiry = bundle["proposals"][0]["expires_monotonic_ns"]
+    bundle["gate_receipts"][0]["received_monotonic_ns"] = expiry
+    assert score_closed_loop(bundle)["gate"]["unsafe_or_stale_accepted_count"] == 1
+
+
 def test_missing_gate_evidence_is_unknown_not_zero_evidence() -> None:
     bundle = run_fixture(_job("STUB_PASS"))
     bundle.pop("proposals")
@@ -82,10 +99,6 @@ def test_scored_fixture_matches_shared_evaluation_contract() -> None:
     schema = json.loads(
         (REPOSITORY_ROOT / "packages/contracts/schema/horizon.schema.json").read_text()
     )
-    mission_schema = schema["$defs"]["EvaluationRecord"]["properties"]["mission"]
-    gate_schema = schema["$defs"]["EvaluationRecord"]["properties"]["gate"]
-    if "censored" not in mission_schema["properties"] or "assessment_status" not in gate_schema["properties"]:
-        pytest.xfail("shared EvaluationRecord censoring/gate-evidence delta is pending A01")
     evaluator_schema = {"$ref": "#/$defs/EvaluationRecord", "$defs": schema["$defs"]}
     Draft202012Validator(evaluator_schema).validate(
         score_closed_loop(run_fixture(_job("STUB_RECOVERY")))
