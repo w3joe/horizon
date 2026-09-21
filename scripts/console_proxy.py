@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 from socketserver import TCPServer
 import threading
+import time
 from typing import Any, ClassVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -160,6 +161,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     gate_operator_token_file: ClassVar[Path | None] = None
     declared_fault_ids: ClassVar[frozenset[str]] = frozenset()
     operator_lock: ClassVar[threading.RLock] = threading.RLock()
+    resume_readiness_timeout_s: ClassVar[float] = 3.0
+    resume_readiness_poll_s: ClassVar[float] = 0.025
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -318,6 +321,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     ) -> tuple[HTTPStatus, dict[str, Any]]:
         if action == "resume":
             readiness = self._operator_status()
+            deadline = time.monotonic() + self.resume_readiness_timeout_s
+            while not readiness["resume_permitted"] and time.monotonic() < deadline:
+                time.sleep(self.resume_readiness_poll_s)
+                readiness = self._operator_status()
             if not readiness["resume_permitted"]:
                 return HTTPStatus.CONFLICT, {
                     "accepted": False,

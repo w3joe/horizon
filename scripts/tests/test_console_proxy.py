@@ -159,6 +159,7 @@ def test_reset_pauses_then_resets_and_never_auto_resumes(
 
 def test_resume_is_blocked_until_gate_epoch_and_recovery_are_ready(monkeypatch) -> None:
     handler = object.__new__(ConsoleHandler)
+    handler.resume_readiness_timeout_s = 0.0
     monkeypatch.setattr(
         ConsoleHandler,
         "_operator_status",
@@ -167,6 +168,36 @@ def test_resume_is_blocked_until_gate_epoch_and_recovery_are_ready(monkeypatch) 
     status, payload = handler._operator_action("resume", {})
     assert status == HTTPStatus.CONFLICT
     assert payload["error"] == "STARTUP_RECOVERY_NOT_READY"
+
+
+def test_explicit_resume_waits_for_bounded_recovery_window_then_calls_plant_once(
+    monkeypatch,
+) -> None:
+    handler = object.__new__(ConsoleHandler)
+    handler.resume_readiness_timeout_s = 1.0
+    handler.resume_readiness_poll_s = 0.0
+    statuses = iter(
+        [
+            {"resume_permitted": False, "state": "reset_in_progress"},
+            {"resume_permitted": False, "state": "reset_in_progress"},
+            {"resume_permitted": True, "state": "ready"},
+            {"resume_permitted": True, "state": "ready"},
+        ]
+    )
+    calls = []
+
+    monkeypatch.setattr(ConsoleHandler, "_operator_status", lambda self: next(statuses))
+
+    def fake_upstream(self, service, path, *, body=None, token_file=None):
+        del self, body, token_file
+        calls.append((service, path))
+        return 200, {"accepted": True, "paused": False}
+
+    monkeypatch.setattr(ConsoleHandler, "_json_upstream", fake_upstream)
+    status, payload = handler._operator_action("resume", {})
+    assert status == HTTPStatus.OK
+    assert payload["accepted"] is True
+    assert calls == [("simulator", "/v1/operator/resume?branch=protected")]
 
 
 def test_fault_requires_declared_id_and_boolean_enabled() -> None:
