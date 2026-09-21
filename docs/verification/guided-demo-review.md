@@ -41,6 +41,21 @@ Manual review used Safari at approximately 890 × 768 on the local proxy. Observ
   WaSR-T reproduction with explicit separation from the simulated encounter.
 - Live mode no longer displays a selected fixture scenario as the launched scenario.
 
+## Automated checks
+
+The final implementation passed `./scripts/check.sh`: 327 Python tests,
+contract generation/schema validation, TypeScript checks, and the production
+console build. The tested implementation commit is
+`354e9c961cbcb6274bea80b788baeacdca927155`; integrated main differs only in this
+review document. The focused experiment suite passed 71 tests.
+
+The last full run exposed an experiment-boundary accounting issue: a candidate
+decision could finish at the finite horizon before reaching the gate. The fix
+records submitted, censored, and scheduler-rejected decisions explicitly and
+joins real receipts by decision ID. Deterministic regressions cover censored A5
+decisions and ensure unsubmitted recovery proposals are not scored as applied
+interventions. No receipt is fabricated and control deadlines are unchanged.
+
 ## Limits
 
 This review establishes local demo behavior, not deployment safety, calibrated
