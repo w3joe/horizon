@@ -100,7 +100,12 @@ class AuthoritativeSimulator:
         self.ownship = self.scenario.ownship.copy()
         self.traffic = [TrafficState(item, item.state.copy()) for item in self.scenario.traffic]
         self.parameters = self.base_parameters
-        self.active_command = TargetCommand(self.ownship.heading_rad, self.ownship.surge_mps, "initial")
+        self.active_command = TargetCommand(
+            self.ownship.heading_rad, 0.0, "plant-startup-passive"
+        )
+        self.active_command_authority = "plant_startup_passive"
+        self.active_declared_authority: str | None = None
+        self.active_controller_enabled = False
         self.active_command_expiry_s = math.inf
         self.active_command_host_expiry_ns: int | None = None
         self.receipts: list[dict[str, Any]] = []
@@ -110,6 +115,7 @@ class AuthoritativeSimulator:
         self.observations: deque[dict[str, Any]] = deque(maxlen=20_000)
         self.sensors = SensorSuite(self.seed, self.parameters.fixed_step_s)
         self.sensors.initialize_prior(self.ownship)
+        self.observation_tick_index = 0
         self.path_length_m = 0.0
         self._collision_pairs: set[tuple[str, str]] = set()
         self._boundary_violating = False
@@ -235,6 +241,9 @@ class AuthoritativeSimulator:
                 reason_codes.append("HOST_DEADLINE_EXPIRED_BEFORE_ACTUATION")
         if accepted:
             self.active_command = TargetCommand(wrap_angle(float(heading)), float(speed), command_id)
+            self.active_command_authority = endpoint_authority
+            self.active_declared_authority = authority
+            self.active_controller_enabled = True
             self.active_command_expiry_s = float(expires_s)
             self.active_command_host_expiry_ns = host_expiry
             self.last_sequence = sequence
@@ -307,21 +316,22 @@ class AuthoritativeSimulator:
         for _ in range(steps):
             if self.simulation_time_s >= self.scenario.duration_s:
                 break
-            if (
-                self.active_command_host_expiry_ns is not None
-                and self._monotonic_ns() >= self.active_command_host_expiry_ns
-            ):
-                self._expire_active_command("host_monotonic_deadline")
-            elif self.simulation_time_s >= self.active_command_expiry_s:
+            host_expired = self._expire_host_command_if_needed()
+            if not host_expired and self.simulation_time_s >= self.active_command_expiry_s:
                 self._expire_active_command("simulation_deadline")
             previous_ownship = self.ownship.copy()
             previous_traffic = [item.state.copy() for item in self.traffic]
             self.parameters = self._fault_adjusted_parameters()
             self.ownship = integrate_step(
-                self.ownship, self.active_command, self.scenario.environment, self.parameters
+                self.ownship,
+                self.active_command,
+                self.scenario.environment,
+                self.parameters,
+                controller_enabled=self.active_controller_enabled,
             )
             self._step_traffic()
             self.tick_index += 1
+            self.observation_tick_index += 1
             self.simulation_time_s = self.tick_index * self.parameters.fixed_step_s
             path_increment = math.hypot(
                 self.ownship.north_m - previous_ownship.north_m,
@@ -332,11 +342,33 @@ class AuthoritativeSimulator:
             self._sample_sensors()
             self._record_truth(path_increment)
 
+    def observe_while_paused(self, steps: int = 1) -> None:
+        """Advance sensor cadence and host expiry without moving physical state."""
+
+        if steps < 0:
+            raise ValueError("steps must be nonnegative")
+        for _ in range(steps):
+            self._expire_host_command_if_needed()
+            self.observation_tick_index += 1
+            self._sample_sensors(capture_clock="host_cadence_while_physics_paused")
+
+    def _expire_host_command_if_needed(self) -> bool:
+        if (
+            self.active_command_host_expiry_ns is not None
+            and self._monotonic_ns() >= self.active_command_host_expiry_ns
+        ):
+            self._expire_active_command("host_monotonic_deadline")
+            return True
+        return False
+
     def _expire_active_command(self, reason: str) -> None:
         expired_id = self.active_command.command_id
         self.active_command = TargetCommand(
             self.ownship.heading_rad, 0.0, f"plant-expiry-neutral:{reason}"
         )
+        self.active_command_authority = "plant_expiry_fallback"
+        self.active_declared_authority = None
+        self.active_controller_enabled = True
         self.active_command_expiry_s = math.inf
         self.active_command_host_expiry_ns = None
         self._event("command_expired", {"reason": reason, "expired_command_id": expired_id})
@@ -401,18 +433,22 @@ class AuthoritativeSimulator:
             }
         )
 
-    def _sample_sensors(self) -> None:
+    def _sample_sensors(self, *, capture_clock: str = "simulation_fixed_step") -> None:
         delivered = self.sensors.sample(
             run_id=self.run_id,
             branch_id=self.branch_id,
             plant_epoch=self.plant_epoch,
-            tick_index=self.tick_index,
+            observation_tick_index=self.observation_tick_index,
+            physical_tick_index=self.tick_index,
             simulation_time_s=self.simulation_time_s,
             ownship=self.ownship,
             traffic=[(item.spec, item.state) for item in self.traffic],
             depth_m=self.scenario.depth_at(self.ownship.north_m, self.ownship.east_m),
             parameters=self.parameters,
             faults=self._active_faults(),
+            active_command=self.active_command,
+            controller_enabled=self.active_controller_enabled,
+            capture_clock=capture_clock,
         )
         self.observations.extend(delivered)
 
@@ -463,7 +499,7 @@ class AuthoritativeSimulator:
                 "recovery_feasible_sampled": None,
                 "mission_progress": {"distance_remaining_m": distance_remaining},
                 "path_increment_m": path_increment_m,
-                "active_authority": "gate" if self.protected else "evaluation_bypass",
+                "active_authority": self.active_command_authority,
                 "actual_actuator": {
                     "rudder_rad": self.ownship.rudder_rad,
                     "thrust_fraction": self.ownship.thrust_fraction,
@@ -493,11 +529,12 @@ class AuthoritativeSimulator:
             "contract_type": "SimulationSnapshot",
             "schema_version": "0.1.0",
             "snapshot_id": (
-                f"{self.run_id}:{self.branch_id}:epoch-{self.plant_epoch}:snapshot:{self.tick_index}"
+                f"{self.run_id}:{self.branch_id}:epoch-{self.plant_epoch}:snapshot:"
+                f"{self.observation_tick_index}"
             ),
             "run_id": self.run_id,
             "branch_id": self.branch_id,
-            "tick_index": self.tick_index,
+            "tick_index": self.observation_tick_index,
             "simulation_time_s": self.simulation_time_s,
             "frame": "NED",
             "ownship": {

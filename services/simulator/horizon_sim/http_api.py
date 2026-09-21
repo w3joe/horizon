@@ -50,8 +50,11 @@ class SimulatorRuntime:
         deadline = time.monotonic()
         while not self.stop_event.is_set():
             deadline += period
-            if not self.paused.is_set():
-                with self.lock:
+            with self.lock:
+                if self.paused.is_set():
+                    for branch in self.branches.values():
+                        branch.observe_while_paused()
+                else:
                     for branch in self.branches.values():
                         branch.step()
             self.stop_event.wait(max(0.0, deadline - time.monotonic()))
@@ -135,6 +138,10 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                         "status": "ok",
                         "service": "horizon-simulator",
                         "plant_epoch": branch.plant_epoch,
+                        "paused": self.server.runtime.paused.is_set(),
+                        "physical_tick_index": branch.tick_index,
+                        "observation_tick_index": branch.observation_tick_index,
+                        "active_authority": branch.active_command_authority,
                     }
                 self._json(HTTPStatus.OK, health)
                 return
@@ -226,6 +233,9 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                         "plant_epoch": branch.plant_epoch,
                         "paused": self.server.runtime.paused.is_set(),
                         "simulation_time_s": branch.simulation_time_s,
+                        "physical_tick_index": branch.tick_index,
+                        "observation_tick_index": branch.observation_tick_index,
+                        "active_authority": branch.active_command_authority,
                         "manual_fault_active": bool(branch.manual_faults),
                     }
                 self._json(HTTPStatus.OK, status)

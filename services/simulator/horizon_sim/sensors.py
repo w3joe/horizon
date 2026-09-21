@@ -9,7 +9,13 @@ import math
 import random
 from typing import Any
 
-from .model import PlantParameters, VesselState, wrap_angle
+from .model import (
+    PlantParameters,
+    TargetCommand,
+    VesselState,
+    requested_actuation,
+    wrap_angle,
+)
 from .scenario import FaultSpec, TrafficSpec
 
 
@@ -32,6 +38,15 @@ DEFAULT_SENSORS = (
     SensorDefinition("ais", "obstacle_perception", 1.0, 0.60, 3.0, "m,m/s", "NED"),
     SensorDefinition("actuator", "ship_actuator_feedback", 10.0, 0.04, 0.30, "rad,fraction", "BODY"),
 )
+ACTUATOR_SETPOINT = SensorDefinition(
+    "actuator_setpoint",
+    "internal_ship_communications",
+    10.0,
+    0.04,
+    0.30,
+    "rad,fraction",
+    "BODY",
+)
 
 
 def _derived_seed(seed: int, label: str) -> int:
@@ -51,6 +66,7 @@ class SensorSuite:
             for item in self.definitions
         }
         self._sequence = {item.source_id: 0 for item in self.definitions}
+        self._sequence[ACTUATOR_SETPOINT.source_id] = 0
         self._pending: list[tuple[int, int, dict[str, Any]]] = []
         self._tie_breaker = 0
         self.latest: dict[str, dict[str, Any]] = {}
@@ -93,16 +109,73 @@ class SensorSuite:
         run_id: str,
         branch_id: str,
         plant_epoch: int,
-        tick_index: int,
+        observation_tick_index: int,
+        physical_tick_index: int,
         simulation_time_s: float,
         ownship: VesselState,
         traffic: list[tuple[TrafficSpec, VesselState]],
         depth_m: float,
         parameters: PlantParameters,
         faults: tuple[FaultSpec, ...],
+        active_command: TargetCommand,
+        controller_enabled: bool,
+        capture_clock: str,
     ) -> list[dict[str, Any]]:
+        def enqueue(
+            definition: SensorDefinition,
+            *,
+            source_id: str,
+            sequence: int,
+            payload: dict[str, Any],
+            delay_s: float,
+        ) -> str:
+            delivery_tick = observation_tick_index + max(
+                0, round(delay_s / self.fixed_step_s)
+            )
+            received_ns = round(delivery_tick * self.fixed_step_s * 1e9)
+            observation_id = (
+                f"{run_id}:{branch_id}:epoch-{plant_epoch}:{source_id}:{sequence}"
+            )
+            payload = dict(payload)
+            payload["_simulator"] = {
+                "capture_clock": capture_clock,
+                "capture_observation_tick": observation_tick_index,
+                "physical_tick_index": physical_tick_index,
+            }
+            observation = {
+                "contract_type": "Observation",
+                "schema_version": "0.1.0",
+                "observation_id": observation_id,
+                "run_id": run_id,
+                "branch_id": branch_id,
+                "input_group": definition.input_group,
+                "source_id": source_id,
+                "sequence": sequence,
+                "time": {
+                    "event_time_s": simulation_time_s,
+                    "received_monotonic_ns": received_ns,
+                    "valid_until_monotonic_ns": received_ns
+                    + round(definition.validity_s * 1e9),
+                    "clock_uncertainty_ms": 2.0 if source_id != "ais" else 100.0,
+                },
+                "units": definition.units,
+                "frame": definition.frame,
+                "capability": "available",
+                "provenance": {
+                    "kind": "synthetic",
+                    "source_id": f"simulator/{source_id}",
+                    "artifact_uri": None,
+                    "sha256": None,
+                    "rights": "generated synthetic fixture",
+                },
+                "payload": payload,
+            }
+            self._tie_breaker += 1
+            heapq.heappush(self._pending, (delivery_tick, self._tie_breaker, observation))
+            return observation_id
+
         for definition in self.definitions:
-            if tick_index % self._period_ticks(definition) != 0:
+            if observation_tick_index % self._period_ticks(definition) != 0:
                 continue
             if definition.source_id == "radar" and self._active(faults, "radar_dropout", simulation_time_s):
                 continue
@@ -122,42 +195,40 @@ class SensorSuite:
             for fault in self._active(faults, "sensor_delay", simulation_time_s):
                 if fault.parameters.get("source_id") in {None, definition.source_id}:
                     delay_s += float(fault.parameters.get("additional_delay_s", 0.0))
-            delivery_tick = tick_index + max(0, round(delay_s / self.fixed_step_s))
-            received_ns = round(delivery_tick * self.fixed_step_s * 1e9)
-            observation = {
-                "contract_type": "Observation",
-                "schema_version": "0.1.0",
-                "observation_id": (
-                    f"{run_id}:{branch_id}:epoch-{plant_epoch}:{definition.source_id}:{sequence}"
-                ),
-                "run_id": run_id,
-                "branch_id": branch_id,
-                "input_group": definition.input_group,
-                "source_id": definition.source_id,
-                "sequence": sequence,
-                "time": {
-                    "event_time_s": simulation_time_s,
-                    "received_monotonic_ns": received_ns,
-                    "valid_until_monotonic_ns": received_ns + round(definition.validity_s * 1e9),
-                    "clock_uncertainty_ms": 2.0 if definition.source_id != "ais" else 100.0,
-                },
-                "units": definition.units,
-                "frame": definition.frame,
-                "capability": "available",
-                "provenance": {
-                    "kind": "synthetic",
-                    "source_id": f"simulator/{definition.source_id}",
-                    "artifact_uri": None,
-                    "sha256": None,
-                    "rights": "generated synthetic fixture",
-                },
-                "payload": payload,
-            }
-            self._tie_breaker += 1
-            heapq.heappush(self._pending, (delivery_tick, self._tie_breaker, observation))
+            if definition.source_id == "actuator":
+                setpoint_source = ACTUATOR_SETPOINT.source_id
+                setpoint_sequence = self._sequence[setpoint_source]
+                self._sequence[setpoint_source] += 1
+                requested_rudder, requested_thrust = requested_actuation(
+                    ownship,
+                    active_command,
+                    parameters,
+                    controller_enabled=controller_enabled,
+                )
+                setpoint_id = enqueue(
+                    ACTUATOR_SETPOINT,
+                    source_id=setpoint_source,
+                    sequence=setpoint_sequence,
+                    payload={
+                        "message_type": "actuator_setpoint",
+                        "command_id": active_command.command_id,
+                        "commanded_rudder_rad": requested_rudder,
+                        "commanded_thrust_fraction": requested_thrust,
+                    },
+                    delay_s=delay_s,
+                )
+                payload["applied_command_id"] = active_command.command_id
+                payload["command_observation_id"] = setpoint_id
+            enqueue(
+                definition,
+                source_id=definition.source_id,
+                sequence=sequence,
+                payload=payload,
+                delay_s=delay_s,
+            )
 
         delivered: list[dict[str, Any]] = []
-        while self._pending and self._pending[0][0] <= tick_index:
+        while self._pending and self._pending[0][0] <= observation_tick_index:
             _, _, observation = heapq.heappop(self._pending)
             delivered.append(observation)
             self.latest[observation["source_id"]] = observation

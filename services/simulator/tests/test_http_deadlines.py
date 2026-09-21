@@ -105,6 +105,11 @@ def test_real_http_queue_pause_resume_and_reset_close_expiry_gaps() -> None:
             simulator.gate_token,
         )[0] == 200
         time.sleep(0.20)
+        with runtime.lock:
+            assert runtime.paused.is_set()
+            assert simulator.active_command.command_id == (
+                "plant-expiry-neutral:host_monotonic_deadline"
+            )
         assert _post(base, "/v1/operator/resume", {}, "operator-token")[0] == 200
         time.sleep(0.05)
         with runtime.lock:
@@ -132,6 +137,59 @@ def test_real_http_queue_pause_resume_and_reset_close_expiry_gaps() -> None:
         )
         assert stale_status == 422
         assert "STALE_PLANT_EPOCH" in stale["reason_codes"]
+    finally:
+        runtime.stop()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2.0)
+
+
+def test_paused_http_reset_streams_complete_new_epoch_sensor_readiness() -> None:
+    simulator = AuthoritativeSimulator(
+        load_scenario(ROOT / "scenarios" / "crossing_recoverable.json"),
+        seed=23,
+        run_id="paused-reset-readiness",
+    )
+    runtime = SimulatorRuntime(simulator, realtime=True)
+    server = SimulatorHTTPServer(("127.0.0.1", 0), runtime, operator_token="operator-token")
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    runtime.start()
+    server_thread.start()
+    try:
+        assert _post(base, "/v1/operator/pause", {}, "operator-token")[0] == 200
+        reset_status, reset = _post(
+            base, "/v1/operator/reset", {}, "operator-token"
+        )
+        assert reset_status == 200
+        epoch = reset["plant_epoch"]
+        deadline = time.monotonic() + 1.0
+        batch = {"observations": []}
+        while time.monotonic() < deadline:
+            batch = _get(base, "/v1/observations?branch=protected")
+            sources = {item["source_id"] for item in batch["observations"]}
+            if {"gnss", "imu", "radar", "actuator", "actuator_setpoint"}.issubset(
+                sources
+            ):
+                break
+            time.sleep(0.01)
+        snapshot = _get(base, "/v1/public/snapshot?branch=protected")
+        health = _get(base, "/health")
+
+        assert batch["plant_epoch"] == epoch
+        assert snapshot["simulation_time_s"] == 0.0
+        assert snapshot["tick_index"] > 0
+        assert simulator.tick_index == 0
+        assert health["paused"] is True
+        assert health["physical_tick_index"] == 0
+        assert health["observation_tick_index"] >= snapshot["tick_index"]
+        assert health["active_authority"] == "plant_startup_passive"
+        assert all(f":epoch-{epoch}:" in item["observation_id"] for item in batch["observations"])
+        assert any(
+            item["payload"]["_simulator"]["capture_clock"]
+            == "host_cadence_while_physics_paused"
+            for item in batch["observations"]
+        )
     finally:
         runtime.stop()
         server.shutdown()
