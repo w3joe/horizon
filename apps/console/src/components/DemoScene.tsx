@@ -59,6 +59,7 @@ const oceanVertex = /* glsl */ `
 `;
 
 const oceanFragment = /* glsl */ `
+  uniform float uTime;
   uniform vec3 uDeep;
   uniform vec3 uShallow;
   uniform vec3 uAccent;
@@ -66,7 +67,9 @@ const oceanFragment = /* glsl */ `
   varying vec3 vSeaNormal;
   varying vec3 vSeaPosition;
   void main() {
-    vec3 normal = normalize(vSeaNormal);
+    float rippleA = sin(vSeaPosition.x * 0.31 + vSeaPosition.z * 0.18 + uTime * 0.72);
+    float rippleB = sin(vSeaPosition.x * -0.21 + vSeaPosition.z * 0.37 - uTime * 0.61);
+    vec3 normal = normalize(vSeaNormal + vec3(rippleA * 0.018, 0.0, rippleB * 0.018));
     vec3 viewDirection = normalize(cameraPosition - vSeaPosition);
     vec3 sunDirection = normalize(vec3(-0.42, 0.78, -0.46));
     vec3 halfDirection = normalize(viewDirection + sunDirection);
@@ -179,7 +182,7 @@ function CameraDirector({ snapshot, trail, mode }: {
       const aspect = Math.max(size.width / Math.max(size.height, 1), 1);
       const northSpan = maxNorth - minNorth;
       const eastSpan = maxEast - minEast;
-      const padding = Math.max(14, Math.min(24, Math.max(northSpan, eastSpan) * 0.08));
+      const padding = Math.max(34, Math.min(46, Math.max(northSpan, eastSpan) * 0.14));
       const verticalSpan = Math.max(82, northSpan + padding * 2, (eastSpan + padding * 2) / aspect);
       camera.position.set(center[0], 245, center[2] + 0.01);
       camera.up.set(0, 0, -1);
@@ -339,7 +342,7 @@ function TrailWake({ trail, protectedBranch, playing }: {
   playing: boolean;
 }) {
   const geometry = useMemo(() => {
-    const points = trail.slice(-140).map((point) => new THREE.Vector3(...ned(point.north, point.east, 0.09)));
+    const points = trail.slice(-140).map((point) => new THREE.Vector3(...ned(point.north, point.east, 0.43)));
     if (points.length < 2) return null;
     const curve = new THREE.CatmullRomCurve3(points, false, "centripetal");
     return new THREE.TubeGeometry(curve, Math.max(8, points.length * 2), 0.09, 5, false);
