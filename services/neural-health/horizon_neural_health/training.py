@@ -41,6 +41,7 @@ def build_reference(
             learning_rate=float(options.get("learning_rate", 0.01)),
             l1=float(options.get("l1", 1e-3)),
             seed=int(options.get("seed", 0)),
+            tolerance=float(options.get("tolerance", 1e-7)),
         )
         parameters["offline_intervention_validation"] = intervention_validation or {
             "completed_controls": False,
