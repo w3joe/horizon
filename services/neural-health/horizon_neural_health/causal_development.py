@@ -44,11 +44,8 @@ def run_controls(
     if len(rows) != len(frames):
         raise ValueError("feature/frame count mismatch")
     codes = np.asarray([encode_h4(values, reference.parameters) for _row, values in rows])
-    variances = codes.var(axis=0)
-    feature_index = int(variances.argmax())
-    decoded_standard = np.asarray(reference.parameters["decoder"], dtype=np.float64)[:, feature_index]
+    decoder = np.asarray(reference.parameters["decoder"], dtype=np.float64)
     scale = np.asarray(reference.parameters["standardization_scale"], dtype=np.float64)
-    decoded_raw = decoded_standard * scale
 
     spec = ModelSpec(
         family="wasr_t",
@@ -61,9 +58,19 @@ def run_controls(
     model = load_official_model(spec, device=device, fp16=False)
     layer = model.backbone["layer4"]
     results = []
+    selected_features = []
     # Fixed before intervention results: near 1/4, 3/4, and final frame.
     for target_index in (75, 223, 295):
         source_index = target_index - 1
+        differences = np.abs(codes[source_index] - codes[target_index])
+        feature_index = int(differences.argmax())
+        decoded_raw = decoder[:, feature_index] * scale
+        selected_features.append({
+            "pair": f"{frames[source_index].stem}->{frames[target_index].stem}",
+            "feature_index": feature_index,
+            "matched_code_difference": float(differences[feature_index]),
+            "semantic_label": None,
+        })
         context_start = target_index - 5
         context_paths = frames[context_start : target_index + 1]
         context = [{"image": preprocess_image(path, device, False)} for path in context_paths]
@@ -121,9 +128,9 @@ def run_controls(
         "split_manifest_sha256": sha256_file(split_manifest_path),
         "analysis_code": _code_identity(),
         "feature_selection": {
-            "rule": "highest SAE-code variance across the declared development cache",
-            "feature_index": feature_index,
-            "semantic_label": None,
+            "rule": "per pair, largest adjacent-frame SAE-code difference before intervention outcomes",
+            "selected": selected_features,
+            "semantic_claim": "none; pair-specific exploratory features",
         },
         "target_selection": "fixed frame indices 75, 223, 295 before intervention outcomes",
         "metric": "absolute change in mean class-0 logit inside RAW MODD2 obstacle boxes",
