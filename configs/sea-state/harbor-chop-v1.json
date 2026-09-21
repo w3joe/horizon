@@ -18,7 +18,7 @@
     "peak_period_s": 4.0,
     "direction_rad": 1.1,
     "directional_spread_rad": 0.28,
-    "component_count": 9
+    "component_count": 4
   },
   "development_envelope": {
     "max_significant_wave_height_m": 0.8,

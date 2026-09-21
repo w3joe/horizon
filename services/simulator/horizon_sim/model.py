@@ -40,6 +40,8 @@ class Environment:
     current_east_mps: float = 0.0
     wind_force_n: float = 0.0
     wind_force_e: float = 0.0
+    wave_force_n: float = 0.0
+    wave_force_e: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -196,8 +198,10 @@ def integrate_step(
 
     c = math.cos(state.heading_rad)
     s = math.sin(state.heading_rad)
-    wind_body_x = c * environment.wind_force_n + s * environment.wind_force_e
-    wind_body_y = -s * environment.wind_force_n + c * environment.wind_force_e
+    environmental_force_n = environment.wind_force_n + environment.wave_force_n
+    environmental_force_e = environment.wind_force_e + environment.wave_force_e
+    wind_body_x = c * environmental_force_n + s * environmental_force_e
+    wind_body_y = -s * environmental_force_n + c * environmental_force_e
 
     prop_force = (
         parameters.thrust_forward_n * thrust

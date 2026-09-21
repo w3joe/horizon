@@ -66,13 +66,28 @@ class AuthoritativeSimulator:
         evaluation_token: str | None = None,
         monotonic_ns: Callable[[], int] | None = None,
         maximum_host_command_validity_s: float = 2.0,
+        marine_model: Any | None = None,
     ):
         self.scenario = scenario
         self.seed = int(seed)
         self.run_id = run_id
         self.branch_id = branch_id
         self.protected = protected
-        self.base_parameters = parameters or PlantParameters()
+        configured_parameters = parameters or PlantParameters()
+        self.marine_model = marine_model
+        if marine_model is not None:
+            if not math.isclose(
+                marine_model.fixed_step_s,
+                configured_parameters.fixed_step_s,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                raise ValueError("marine and horizontal fixed steps must match")
+            self.base_parameters = replace(
+                configured_parameters, model_version=marine_model.model_version
+            )
+        else:
+            self.base_parameters = configured_parameters
         self.parameters = self.base_parameters
         self.gate_token = gate_token or secrets.token_urlsafe(32)
         self.evaluation_token = evaluation_token or secrets.token_urlsafe(32)
@@ -123,9 +138,48 @@ class AuthoritativeSimulator:
         self._boundary_violating = False
         self._grounding = False
         self.manual_faults: list[FaultSpec] = []
+        self._reset_marine_state()
         self._sample_sensors()
         self._record_truth(0.0)
         self._initialized = True
+
+    def _reset_marine_state(self) -> None:
+        if self.marine_model is None:
+            self.marine_motion = None
+            self.marine_sample = None
+            self.marine_qualification = None
+            self.marine_reason_codes: tuple[str, ...] = ()
+            self._effective_environment = self.scenario.environment
+            return
+        self.marine_motion = self.marine_model.initial_state()
+        self.marine_sample = self.marine_model.sample(
+            time_s=self.simulation_time_s,
+            north_m=self.ownship.north_m,
+            east_m=self.ownship.east_m,
+            heading_rad=self.ownship.heading_rad,
+            surge_mps=self.ownship.surge_mps,
+            sway_mps=self.ownship.sway_mps,
+        )
+        self._effective_environment = self._combined_environment(self.marine_sample)
+        self.marine_qualification, self.marine_reason_codes = self.marine_model.qualify(
+            self.marine_motion,
+            self.marine_sample,
+            current_ne_mps=(
+                self._effective_environment.current_north_mps,
+                self._effective_environment.current_east_mps,
+            ),
+        )
+
+    def _combined_environment(self, sample: Any) -> Any:
+        environment = self.scenario.environment
+        return type(environment)(
+            current_north_mps=environment.current_north_mps + sample.current_ne_mps[0],
+            current_east_mps=environment.current_east_mps + sample.current_ne_mps[1],
+            wind_force_n=environment.wind_force_n + sample.wind_force_ne_n[0],
+            wind_force_e=environment.wind_force_e + sample.wind_force_ne_n[1],
+            wave_force_n=sample.wave_force_ne_n[0],
+            wave_force_e=sample.wave_force_ne_n[1],
+        )
 
     def clone(self, branch_id: str, *, protected: bool | None = None) -> "AuthoritativeSimulator":
         """Clone every deterministic state component for a paired branch."""
@@ -329,17 +383,52 @@ class AuthoritativeSimulator:
             previous_ownship = self.ownship.copy()
             previous_traffic = [item.state.copy() for item in self.traffic]
             self.parameters = self._fault_adjusted_parameters()
+            if self.marine_model is not None:
+                marine_step = self.marine_model.advance(
+                    self.marine_motion,
+                    time_s=self.simulation_time_s,
+                    north_m=self.ownship.north_m,
+                    east_m=self.ownship.east_m,
+                    heading_rad=self.ownship.heading_rad,
+                    surge_mps=self.ownship.surge_mps,
+                    sway_mps=self.ownship.sway_mps,
+                )
+                self.marine_motion = marine_step.motion
+                self._effective_environment = self._combined_environment(
+                    marine_step.environment
+                )
             self.ownship = integrate_step(
                 self.ownship,
                 self.active_command,
-                self.scenario.environment,
+                self._effective_environment,
                 self.parameters,
                 controller_enabled=self.active_controller_enabled,
             )
-            self._step_traffic()
+            self._step_traffic(self._effective_environment)
             self.tick_index += 1
             self.observation_tick_index += 1
             self.simulation_time_s = self.tick_index * self.parameters.fixed_step_s
+            if self.marine_model is not None:
+                self.marine_sample = self.marine_model.sample(
+                    time_s=self.simulation_time_s,
+                    north_m=self.ownship.north_m,
+                    east_m=self.ownship.east_m,
+                    heading_rad=self.ownship.heading_rad,
+                    surge_mps=self.ownship.surge_mps,
+                    sway_mps=self.ownship.sway_mps,
+                )
+                self._effective_environment = self._combined_environment(self.marine_sample)
+                (
+                    self.marine_qualification,
+                    self.marine_reason_codes,
+                ) = self.marine_model.qualify(
+                    self.marine_motion,
+                    self.marine_sample,
+                    current_ne_mps=(
+                        self._effective_environment.current_north_mps,
+                        self._effective_environment.current_east_mps,
+                    ),
+                )
             path_increment = math.hypot(
                 self.ownship.north_m - previous_ownship.north_m,
                 self.ownship.east_m - previous_ownship.east_m,
@@ -380,15 +469,15 @@ class AuthoritativeSimulator:
         self.active_command_host_expiry_ns = None
         self._event("command_expired", {"reason": reason, "expired_command_id": expired_id})
 
-    def _step_traffic(self) -> None:
+    def _step_traffic(self, environment: Any) -> None:
         dt = self.parameters.fixed_step_s
         for item in self.traffic:
             state = item.state
             c, s = math.cos(state.heading_rad), math.sin(state.heading_rad)
             item.state = replace(
                 state,
-                north_m=state.north_m + (c * state.surge_mps + self.scenario.environment.current_north_mps) * dt,
-                east_m=state.east_m + (s * state.surge_mps + self.scenario.environment.current_east_mps) * dt,
+                north_m=state.north_m + (c * state.surge_mps + environment.current_north_mps) * dt,
+                east_m=state.east_m + (s * state.surge_mps + environment.current_east_mps) * dt,
             )
 
     def _detect_events(self, ownship_start: VesselState, traffic_start: list[VesselState]) -> None:
@@ -418,7 +507,7 @@ class AuthoritativeSimulator:
         self._boundary_violating = boundary_margin < 0.0
         ukc = (
             self.scenario.depth_at(self.ownship.north_m, self.ownship.east_m)
-            - own_hull.draft_m
+            - self._effective_draft_m()
             - self.scenario.chart_uncertainty_m
         )
         if ukc < 0.0 and not self._grounding:
@@ -473,10 +562,14 @@ class AuthoritativeSimulator:
         )
         ukc = (
             self.scenario.depth_at(self.ownship.north_m, self.ownship.east_m)
-            - self.parameters.hull.draft_m
+            - self._effective_draft_m()
             - self.scenario.chart_uncertainty_m
         )
         return hull_clearance, boundary, ukc
+
+    def _effective_draft_m(self) -> float:
+        heave_down_m = 0.0 if self.marine_motion is None else self.marine_motion.heave_down_m
+        return max(0.0, self.parameters.hull.draft_m + heave_down_m)
 
     def _record_truth(self, path_increment_m: float) -> None:
         hull_clearance, boundary, ukc = self._margins()
@@ -487,8 +580,7 @@ class AuthoritativeSimulator:
             if final_waypoint
             else 0.0
         )
-        self.truth_log.append(
-            {
+        record = {
                 "run_id": self.run_id,
                 "branch_id": self.branch_id,
                 "scenario_id": self.scenario.scenario_id,
@@ -515,7 +607,22 @@ class AuthoritativeSimulator:
                 },
                 "violation_event_ids": event_ids,
             }
-        )
+        if self.marine_motion is not None:
+            record["marine_motion"] = {
+                "heave_down_m": self.marine_motion.heave_down_m,
+                "attitude_rp_rad": [
+                    self.marine_motion.roll_rad,
+                    self.marine_motion.pitch_rad,
+                ],
+                "angular_velocity_rp_rps": [
+                    self.marine_motion.roll_rate_rps,
+                    self.marine_motion.pitch_rate_rps,
+                ],
+                "effective_draft_m": self._effective_draft_m(),
+                "qualification": self.marine_qualification,
+                "reason_codes": list(self.marine_reason_codes),
+            }
+        self.truth_log.append(record)
 
     @staticmethod
     def _truth_vessel(vessel_id: str, state: VesselState, hull: Hull) -> dict[str, Any]:
@@ -533,7 +640,7 @@ class AuthoritativeSimulator:
         """Return display-only state reconstructed from delivered sensors."""
         estimate = self.sensors.estimated_ownship(self.ownship)
         contacts = self.sensors.estimated_traffic()
-        return {
+        result = {
             "contract_type": "SimulationSnapshot",
             "schema_version": "0.1.0",
             "snapshot_id": (
@@ -565,10 +672,44 @@ class AuthoritativeSimulator:
             "active_command_id": self.active_command.command_id,
             "display_only": True,
         }
+        if self.marine_model is not None:
+            result["ownship"].update(
+                {
+                    "heave_down_m": self.marine_motion.heave_down_m,
+                    "attitude_rp_rad": [
+                        self.marine_motion.roll_rad,
+                        self.marine_motion.pitch_rad,
+                    ],
+                    "angular_velocity_rp_rps": [
+                        self.marine_motion.roll_rate_rps,
+                        self.marine_motion.pitch_rate_rps,
+                    ],
+                }
+            )
+            result["marine_environment"] = {
+                "model_version": self.marine_model.model_version,
+                "sea_state_id": self.marine_model.config.sea_state_id,
+                "config_sha256": self.marine_model.config.config_sha256,
+                "current_ne_mps": [
+                    self._effective_environment.current_north_mps,
+                    self._effective_environment.current_east_mps,
+                ],
+                "wind_ne_mps": list(self.marine_sample.wind_ne_mps),
+                "surface_elevation_m": self.marine_sample.surface_elevation_m,
+                "wave_direction_rad": self.marine_model.config.wave_direction_rad,
+                "significant_wave_height_m": (
+                    self.marine_model.config.significant_wave_height_m
+                ),
+                "peak_period_s": self.marine_model.config.peak_period_s,
+                "wave_components": self.marine_model.public_wave_components(),
+                "qualification": self.marine_qualification,
+                "reason_codes": list(self.marine_reason_codes),
+            }
+        return result
 
     def public_reference(self) -> dict[str, Any]:
         """Static online safety reference with no truth state or fault labels."""
-        return {
+        result = {
             "reference_type": "SimulatorReference",
             "schema_version": "0.1.0",
             "scenario_id": self.scenario.scenario_id,
@@ -599,10 +740,54 @@ class AuthoritativeSimulator:
             },
             "configured_clearance_m": 20.0,
             "disturbance_bounds": {
-                "current_speed_mps": 0.5,
+                "current_speed_mps": (
+                    0.5
+                    if self.marine_model is None
+                    else max(
+                        0.5,
+                        self.marine_model.config.development_envelope.max_current_speed_mps,
+                    )
+                ),
                 "qualification": "configured bound, not current truth",
             },
         }
+        if self.marine_model is None:
+            result["operating_mode_qualification"] = {
+                "plant_mode_id": self.base_parameters.model_version,
+                "physical_model_status": "characterized",
+                "assurance_status": "qualified",
+                "reason_codes": ["BASELINE_ASSURANCE_CONFIGURATION"],
+                "config_sha256": self.scenario.sha256,
+            }
+            return result
+        result["operating_mode_qualification"] = {
+            "plant_mode_id": self.marine_model.model_version,
+            "physical_model_status": self.marine_qualification,
+            "assurance_status": "unknown",
+            "reason_codes": [
+                *self.marine_reason_codes,
+                "MARINE_MODE_NOT_ASSURANCE_QUALIFIED",
+            ],
+            "config_sha256": self.marine_model.config.config_sha256,
+        }
+        result["marine_model"] = {
+            "sea_state_id": self.marine_model.config.sea_state_id,
+            "config_sha256": self.marine_model.config.config_sha256,
+            "attitude_provenance": "modeled_display_only_not_sensor_measurement",
+            "surface_formula": (
+                "eta_up=sum(a*cos(k*(north*cos(direction)+east*sin(direction))"
+                "-omega*time+phase))"
+            ),
+            "wave_components": self.marine_model.public_wave_components(),
+            "characterization": self.marine_model.characterization(),
+            "horizontal_projection_assumption": {
+                "assumption_id": "marine-attitude-horizontal-projection-v1",
+                "sensor_height_m": 2.5,
+                "method": "sensor_height*abs(tan(max_abs_roll_or_pitch))",
+                "qualification": "not_online_sensor_calibrated",
+            },
+        }
+        return result
 
     def observation_batch(self, after_sequence: int = -1) -> list[dict[str, Any]]:
         return [copy.deepcopy(item) for item in self.observations if item["sequence"] > after_sequence]

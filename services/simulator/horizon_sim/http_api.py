@@ -177,6 +177,15 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                         "physical_tick_index": branch.tick_index,
                         "observation_tick_index": branch.observation_tick_index,
                         "active_authority": branch.active_command_authority,
+                        "plant_mode_id": branch.base_parameters.model_version,
+                        "physical_model_status": (
+                            "characterized"
+                            if branch.marine_model is None
+                            else branch.marine_qualification
+                        ),
+                        "assurance_status": (
+                            "qualified" if branch.marine_model is None else "unknown"
+                        ),
                     }
                 self._json(HTTPStatus.OK, health)
                 return
@@ -383,10 +392,19 @@ def main() -> None:
     parser.add_argument("--gate-token-file")
     parser.add_argument("--evaluation-token-file")
     parser.add_argument("--operator-token-file")
+    parser.add_argument("--marine-config")
     args = parser.parse_args()
 
+    marine_model = None
+    if args.marine_config:
+        from horizon_marine import MarineEnvironmentModel, load_sea_state
+
+        marine_model = MarineEnvironmentModel(load_sea_state(args.marine_config))
     simulator = AuthoritativeSimulator(
-        load_scenario(args.scenario), seed=args.seed, run_id=args.run_id
+        load_scenario(args.scenario),
+        seed=args.seed,
+        run_id=args.run_id,
+        marine_model=marine_model,
     )
     _write_capability(args.gate_token_file, simulator.gate_token)
     _write_capability(args.evaluation_token_file, simulator.evaluation_token)

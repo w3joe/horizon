@@ -367,13 +367,17 @@ class MarineEnvironmentModel:
         return MarineStep(motion, sample, qualification, reasons)
 
     def qualify(
-        self, state: MarineMotionState, sample: EnvironmentSample
+        self,
+        state: MarineMotionState,
+        sample: EnvironmentSample,
+        *,
+        current_ne_mps: tuple[float, float] | None = None,
     ) -> tuple[str, tuple[str, ...]]:
         envelope = self.config.development_envelope
         values = {
             "significant_wave_height_m": self.config.significant_wave_height_m,
             "wind_speed_mps": _norm(sample.wind_ne_mps),
-            "current_speed_mps": _norm(sample.current_ne_mps),
+            "current_speed_mps": _norm(current_ne_mps or sample.current_ne_mps),
             "abs_roll_rad": abs(state.roll_rad),
             "abs_pitch_rad": abs(state.pitch_rad),
             "abs_heave_m": abs(state.heave_down_m),
