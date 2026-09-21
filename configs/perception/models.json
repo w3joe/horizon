@@ -1,0 +1,23 @@
+{
+  "schema_version": "horizon.perception-models.v1",
+  "models": [
+    {
+      "id": "wasrt_mastr1325_resnet101",
+      "family": "wasr_t",
+      "architecture": "wasr_temporal_resnet101",
+      "source_commit": "1b5360af20408e09bbf0116a0029f7e0c0800e7c",
+      "weights_sha256": "6e70dd6583a984e6a10ceeb5c42ac8f00c6f45d6e3ed41605e4e85a9797954ef",
+      "input_size": [512, 384],
+      "class_ids": {"obstacle": 0, "water": 1, "sky": 2},
+      "history_length": 5
+    },
+    {
+      "id": "wasr_mastr1325_resnet101",
+      "family": "wasr",
+      "architecture": "wasr_resnet101",
+      "source_commit": "fdb2b036ab9e43bc92a44816852b667737ee79cd",
+      "weights_sha256": "5f54dec28a9eac45d3e277819ccf33290421395c7ecac52e1755e3e285c009b0",
+      "class_ids": {"obstacle": 0, "water": 1, "sky": 2}
+    }
+  ]
+}

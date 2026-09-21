@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import math
+
+from horizon_neural_health.artifact import CalibrationArtifact, ReferenceArtifact
+from horizon_neural_health.models import fit_h2, fit_h3, fit_h4, score_h2, score_h3, score_h4
+from horizon_neural_health.monitors import evaluate
+from horizon_neural_health.training import build_calibration, build_reference
+
+
+def payload(method_id: str, embedding=None, context="harbor_day"):
+    return {
+        "method_id": method_id,
+        "sensor_id": "camera-1",
+        "inference_id": "inference-1",
+        "frame_ids": ["frame-1"],
+        "valid_until_ns": 42,
+        "reference_model_version": "wasrt:test",
+        "class_probabilities": [0.02, 0.93, 0.05],
+        "obstacle_relevant_probabilities": [[0.15, 0.8, 0.05]],
+        "conventional_checks": {
+            "underexposure": 0.0,
+            "overexposure": 0.0,
+            "blur": 0.0,
+            "occlusion": 0.0,
+            "frozen_frame": 0.0,
+            "timestamp_fault": 0.0,
+            "horizon_error": 0.0,
+            "temporal_output_change": 0.0,
+        },
+        "risk_context": {"operating_domain": context},
+        "embedding": embedding,
+    }
+
+
+def calibration(method_id: str, reference_hash=None):
+    artifact = build_calibration(
+        method_id,
+        [
+            {"score": 0.1, "missed_obstacle": False},
+            {"score": 0.2, "missed_obstacle": False},
+            {"score": 0.8, "missed_obstacle": True},
+            {"score": 0.9, "missed_obstacle": True},
+        ],
+        {"operating_domain": ["harbor_day"]},
+        "cal-v1",
+        0.5,
+        reference_hash,
+    )
+    return CalibrationArtifact.from_dict(artifact)
+
+
+def test_h2_mahalanobis_separates_shifted_feature():
+    fit = fit_h2([[0.0, 0.1], [0.1, 0.0], [-0.1, 0.0]], regularization=0.01)
+    assert score_h2([3.0, 3.0], fit) > score_h2([0.0, 0.0], fit)
+
+
+def test_h3_pca_reconstruction_separates_off_subspace():
+    fit = fit_h3([[-2.0, 0.0], [-1.0, 0.0], [1.0, 0.0], [2.0, 0.0]], components=1)
+    assert score_h3([0.0, 3.0], fit) > score_h3([1.5, 0.0], fit)
+
+
+def test_h4_small_sae_is_deterministic_and_finite():
+    rows = [[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]]
+    first = fit_h4(rows, hidden=2, epochs=5, seed=7)
+    second = fit_h4(rows, hidden=2, epochs=5, seed=7)
+    assert first == second
+    assert math.isfinite(score_h4([0.2, 0.1], first))
+
+
+def test_missing_calibration_and_out_of_scope_are_unknown():
+    assert evaluate(payload("H0"))["status"] == "unknown"
+    result = evaluate(payload("H0", context="night"), calibration("H0"))
+    assert result["status"] == "unknown"
+    assert result["missed_obstacle_risk"]["kind"] == "unknown"
+
+
+def test_calibrated_health_can_be_healthy_while_risk_remains_unknown():
+    result = evaluate(payload("H0"), calibration("H0"))
+    assert result["status"] in {"healthy", "degraded"}
+    assert result["missed_obstacle_risk"] == {
+        "kind": "unknown",
+        "reason": "risk_band_not_heldout_validated",
+    }
+
+
+def test_h4_refuses_reference_without_intervention_controls():
+    reference_body = build_reference(
+        "H2", [[0.0, 0.0], [1.0, 1.0]], "encoder", ["nominal-a"], "ref-v1"
+    )
+    reference_body["method_id"] = "H4"
+    # Re-hash a structurally valid H4 reference which lacks the required evidence.
+    from horizon_neural_health.artifact import canonical_hash
+    reference_body["artifact_hash"] = canonical_hash({k: v for k, v in reference_body.items() if k != "artifact_hash"})
+    reference = ReferenceArtifact.from_dict(reference_body)
+    result = evaluate(payload("H4", [0.0, 0.0]), calibration("H4", reference.artifact_hash), reference)
+    assert result["status"] == "unknown"
+    assert result["reasons"] == ["offline_intervention_validation_missing"]
