@@ -39,6 +39,8 @@ class PlantClient(Protocol):
 
     def snapshot(self) -> dict[str, Any]: ...
 
+    def plant_epoch(self) -> int: ...
+
 
 class HTTPPlantClient:
     def __init__(self, base_url: str, branch_id: str, plant_token: str):
@@ -66,6 +68,13 @@ class HTTPPlantClient:
     def snapshot(self) -> dict[str, Any]:
         query = urlencode({"branch": self.branch_id})
         return self._request(f"/v1/public/snapshot?{query}")
+
+    def plant_epoch(self) -> int:
+        # Epoch is transport metadata, deliberately outside SimulationSnapshot.
+        epoch = self._request("/health")["plant_epoch"]
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+            raise ValueError("invalid plant epoch")
+        return epoch
 
 
 @dataclass

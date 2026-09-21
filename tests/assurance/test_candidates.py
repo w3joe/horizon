@@ -229,11 +229,11 @@ def test_radar_mode_ignores_optional_unknown_but_falls_back_on_required_loss(
     assert allowed["action"] == "pass"
 
     required_degraded = copy.deepcopy(governor_input)
-    fusion_health(required_degraded, degraded_source="obstacle_perception")
+    fusion_health(required_degraded, degraded_source="obstacle_perception:radar")
     fallback = A1ThresholdSimplex(reference, fast_config()).evaluate(required_degraded)
     assert fallback["action"] in {"recover", "minimum_risk"}
     assert any(
-        reason.startswith("REQUIRED_HEALTH_SOURCE_DEGRADED:obstacle_perception")
+        reason.startswith("REQUIRED_HEALTH_SOURCE_DEGRADED:obstacle_perception:radar")
         for reason in fallback["reason_codes"]
     )
 
@@ -243,11 +243,11 @@ def test_radar_mode_ignores_optional_unknown_but_falls_back_on_required_loss(
     missing_required["health"]["summaries"] = [
         item
         for item in missing_required["health"]["summaries"]
-        if item["source_id"] != "obstacle_perception"
+        if item["source_id"] != "obstacle_perception:radar"
     ]
     missing = A1ThresholdSimplex(reference, fast_config()).evaluate(missing_required)
     assert missing["action"] in {"recover", "minimum_risk"}
-    assert "REQUIRED_HEALTH_SOURCE_MISSING:obstacle_perception" in missing["reason_codes"]
+    assert "REQUIRED_HEALTH_SOURCE_MISSING:obstacle_perception:radar" in missing["reason_codes"]
 
 
 def test_configured_odd_bounds_require_model_and_contact_source_eligibility(
@@ -279,7 +279,7 @@ def test_a5_conditions_declared_bounds_and_speed_for_degraded_required_source(
     reference, governor_input
 ) -> None:
     message = copy.deepcopy(governor_input)
-    fusion_health(message, degraded_source="obstacle_perception")
+    fusion_health(message, degraded_source="obstacle_perception:radar")
     message["proposal"]["command"]["speed_mps"] = 5.0
     decision = A5EvidenceHybrid(reference, fast_config()).evaluate(message)
     VALIDATOR.validate(decision)

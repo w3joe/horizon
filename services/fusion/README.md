@@ -20,6 +20,15 @@ authority. Neural internals default to `output_only/unknown`; unvalidated
 camera or representation signals never shrink geometric uncertainty or clear
 occupied space.
 
+The radar-led operating mode requires the separate `obstacle_perception:radar`
+health record. The complete obstacle group still reports uncertain AIS timing
+as degraded. Contact contributors with unavailable/degraded capability, stale
+data, or clock uncertainty above the declared 50 ms engineering threshold are
+excluded from fused kinematics and time alignment; their original observations
+and group health remain available as evidence. This threshold is not a
+calibrated error probability. Missing or unqualified radar still forces the
+governor out of normal autonomy.
+
 Actuator capability stays degraded while it is based on public configured
 limits. The response monitor only restricts that capability after at least
 five feedback samples over a sufficiently excited command step, and only when

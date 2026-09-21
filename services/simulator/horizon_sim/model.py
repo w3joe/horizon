@@ -122,21 +122,17 @@ def _rate_limited_first_order(
     return actual + clamp(delta, -rate_limit * dt_s, rate_limit * dt_s)
 
 
-def integrate_step(
+def requested_actuation(
     state: VesselState,
     command: TargetCommand,
-    environment: Environment,
     parameters: PlantParameters,
-) -> VesselState:
-    """Advance one fixed semi-implicit Euler step.
+    *,
+    controller_enabled: bool = True,
+) -> tuple[float, float]:
+    """Return the low-level rudder/thrust request for the current state."""
 
-    Body x is forward, body y is starboard, yaw/heading is clockwise from
-    north.  Positive rudder command therefore produces a positive (starboard)
-    yaw rate.  Uniform current is represented as NED water velocity and is
-    added only in kinematics; hydrodynamic damping acts on through-water body
-    velocity.  This is the documented v1 constant-current simplification.
-    """
-    dt = parameters.fixed_step_s
+    if not controller_enabled:
+        return 0.0, 0.0
     target_speed = clamp(command.speed_mps, 0.0, parameters.speed_command_limit_mps)
     h_error = heading_error(command.heading_rad, state.heading_rad)
     requested_rudder = clamp(
@@ -153,6 +149,32 @@ def integrate_step(
         equilibrium_thrust + parameters.speed_kp * (target_speed - state.surge_mps),
         -1.0,
         1.0,
+    )
+    return requested_rudder, requested_thrust
+
+
+def integrate_step(
+    state: VesselState,
+    command: TargetCommand,
+    environment: Environment,
+    parameters: PlantParameters,
+    *,
+    controller_enabled: bool = True,
+) -> VesselState:
+    """Advance one fixed semi-implicit Euler step.
+
+    Body x is forward, body y is starboard, yaw/heading is clockwise from
+    north.  Positive rudder command therefore produces a positive (starboard)
+    yaw rate.  Uniform current is represented as NED water velocity and is
+    added only in kinematics; hydrodynamic damping acts on through-water body
+    velocity.  This is the documented v1 constant-current simplification.
+    """
+    dt = parameters.fixed_step_s
+    requested_rudder, requested_thrust = requested_actuation(
+        state,
+        command,
+        parameters,
+        controller_enabled=controller_enabled,
     )
 
     rudder = _rate_limited_first_order(

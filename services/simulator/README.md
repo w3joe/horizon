@@ -36,6 +36,33 @@ reviving when tick numbers restart. Snapshot and observation opaque IDs include
 the epoch, while `/v1/observations` exposes `plant_epoch` on its non-schema
 batch wrapper. The static `/v1/reference` digest remains epoch-free.
 
+Physics time and observation cadence are separate. While an operator pause is
+active, the physical integration tick, vessel state, traffic state, and
+simulation time remain frozen. The realtime loop still advances a sensor
+cadence, takes new noisy measurements of that frozen physical state, and
+delivers them through the unchanged per-source delay queues. The public
+snapshot `tick_index` and opaque snapshot ID identify this observation cadence;
+`simulation_time_s` identifies physical time. Each synthetic payload records
+its `capture_clock`, observation tick, and physical tick under `_simulator`.
+This lets a reset establish fresh measured readiness without injecting truth,
+zeroing configured delays, extending an old record, or silently resuming the
+plant. Host-monotonic command expiry is also checked while physics is paused.
+
+Before the first accepted gate command, the protected plant reports
+`plant-startup-passive` authority. Its heading/speed controller is disabled,
+the physical initial velocity remains state, and existing actuator state
+decays toward zero through the declared actuator dynamics. It does not hold the
+initial speed with a nonexpiring hidden target. Accepted gate commands enable
+the controller and carry their actual authority; receiver expiry is reported
+as `plant_expiry_fallback`.
+
+At every actuator feedback capture, the simulator also emits an
+`internal_ship_communications` `actuator_setpoint` observation. It contains the
+actual low-level requested rudder/thrust and accepted command ID. The feedback
+names that command and the exact setpoint observation ID. Setpoint IDs remain
+unique even when high-level command IDs change quickly; consumers must analyze
+the linked time-varying sequence rather than fabricate a stable step command.
+
 Run a manual-step service from the repository root:
 
 ```sh

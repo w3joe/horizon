@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import time
@@ -40,7 +41,7 @@ def test_only_gate_capability_can_write_protected_plant() -> None:
     forged["source_id"] = "gate"
     with pytest.raises(AuthorityError):
         sim.submit_gate_command(forged, token="claimed-gate")
-    assert sim.active_command.command_id == "initial"
+    assert sim.active_command.command_id == "plant-startup-passive"
 
     receipt = sim.submit_gate_command(forged, token=sim.gate_token)
     assert receipt["accepted"] is True
@@ -81,9 +82,16 @@ def test_reset_replays_random_queues_and_physics_exactly() -> None:
     assert len(second_observations) == len(first_observations)
     for first, second in zip(first_observations, second_observations, strict=True):
         assert first["observation_id"] != second["observation_id"]
-        assert {k: v for k, v in first.items() if k != "observation_id"} == {
-            k: v for k, v in second.items() if k != "observation_id"
-        }
+        first = copy.deepcopy(first)
+        second = copy.deepcopy(second)
+        for observation in (first, second):
+            observation.pop("observation_id")
+            payload = observation["payload"]
+            payload.pop("command_observation_id", None)
+            if observation["source_id"] in {"actuator", "actuator_setpoint"}:
+                payload.pop("applied_command_id", None)
+                payload.pop("command_id", None)
+        assert first == second
 
 
 def test_cloned_branches_match_then_diverge_after_commands() -> None:
@@ -123,6 +131,92 @@ def test_public_position_prior_does_not_follow_truth_before_gnss_delivery() -> N
     sim.step(2)
     assert sim.ownship.north_m > 0.0
     assert sim.public_snapshot()["ownship"]["position_ne_m"] == initial_public_position
+
+
+def test_protected_startup_is_passive_until_gate_accepts_command() -> None:
+    sim = simulator()
+    initial = sim.ownship.copy()
+
+    assert sim.active_command.command_id == "plant-startup-passive"
+    assert sim.active_command_authority == "plant_startup_passive"
+    assert sim.active_controller_enabled is False
+    sim.step()
+
+    assert sim.ownship.thrust_fraction < initial.thrust_fraction
+    assert sim.ownship.rudder_rad == 0.0
+    assert sim.ownship.surge_mps < initial.surge_mps
+    assert sim.truth_log[0]["active_authority"] == "plant_startup_passive"
+
+
+def test_paused_observation_clock_delivers_fresh_measurements_without_motion() -> None:
+    sim = simulator()
+    initial_ownship = sim.ownship.copy()
+    initial_traffic = [item.state.copy() for item in sim.traffic]
+    initial_truth_records = len(sim.truth_log)
+
+    sim.observe_while_paused(80)
+
+    assert sim.tick_index == 0
+    assert sim.simulation_time_s == 0.0
+    assert sim.ownship == initial_ownship
+    assert [item.state for item in sim.traffic] == initial_traffic
+    assert len(sim.truth_log) == initial_truth_records
+    assert sim.observation_tick_index == 80
+    assert sim.public_snapshot()["tick_index"] == 80
+    assert {
+        "gnss",
+        "imu",
+        "depth",
+        "radar",
+        "ais",
+        "actuator",
+        "actuator_setpoint",
+    }.issubset(sim.sensors.latest)
+    first_imu = next(
+        item
+        for item in sim.observations
+        if item["source_id"] == "imu" and item["sequence"] == 0
+    )
+    assert first_imu["time"]["received_monotonic_ns"] == 20_000_000
+    assert first_imu["time"]["valid_until_monotonic_ns"] == 170_000_000
+    assert sim.sensors.latest["imu"]["observation_id"] != first_imu["observation_id"]
+    for observation in sim.sensors.latest.values():
+        assert observation["time"]["event_time_s"] == 0.0
+        assert (
+            observation["payload"]["_simulator"]["capture_clock"]
+            == "host_cadence_while_physics_paused"
+        )
+        assert observation["payload"]["_simulator"]["physical_tick_index"] == 0
+
+
+def test_actuator_feedback_names_exact_low_level_setpoint_observation() -> None:
+    sim = simulator()
+    assert sim.submit_gate_command(
+        envelope(sim, 0, 0.5, 4.0), token=sim.gate_token
+    )["accepted"]
+    sim.step(20)
+    setpoints = {
+        item["observation_id"]: item
+        for item in sim.observations
+        if item["source_id"] == "actuator_setpoint"
+        and item["payload"]["command_id"] == "command-0"
+    }
+    feedback = [
+        item
+        for item in sim.observations
+        if item["source_id"] == "actuator"
+        and item["payload"].get("applied_command_id") == "command-0"
+    ]
+
+    assert setpoints and feedback
+    for sample in feedback:
+        setpoint_id = sample["payload"]["command_observation_id"]
+        assert setpoint_id in setpoints
+        setpoint = setpoints[setpoint_id]
+        assert setpoint["input_group"] == "internal_ship_communications"
+        assert setpoint["payload"]["message_type"] == "actuator_setpoint"
+        assert setpoint["payload"]["command_id"] == sample["payload"]["applied_command_id"]
+        assert setpoint["payload"]["commanded_rudder_rad"] != 0.5
 
 
 def test_public_reference_excludes_truth_contacts_and_fault_labels() -> None:
@@ -180,7 +274,7 @@ def test_protected_deadline_checked_after_auth_before_mutation() -> None:
     receipt = sim.submit_gate_command(command, token=sim.gate_token)
     assert receipt["accepted"] is False
     assert "HOST_DEADLINE_EXPIRED_BEFORE_ACTUATION" in receipt["reason_codes"]
-    assert sim.active_command.command_id == "initial"
+    assert sim.active_command.command_id == "plant-startup-passive"
 
 
 @pytest.mark.parametrize(
@@ -218,6 +312,26 @@ def test_applied_command_falls_back_when_host_deadline_expires() -> None:
     sim.step()
     assert sim.active_command.command_id == "plant-expiry-neutral:host_monotonic_deadline"
     assert sim.active_command.speed_mps == 0.0
+    assert sim.events[-1]["kind"] == "command_expired"
+
+
+def test_host_deadline_expires_while_physics_remains_paused() -> None:
+    clock = ManualMonotonicClock(1_000_000_000)
+    sim = AuthoritativeSimulator(
+        load_scenario(SCENARIO), seed=17, run_id="paused-expiry", monotonic_ns=clock
+    )
+    command = envelope(sim, 0, 0.5, 4.0)
+    command["expires_monotonic_ns"] = 1_100_000_000
+    assert sim.submit_gate_command(command, token=sim.gate_token)["accepted"]
+    state = sim.ownship.copy()
+
+    clock.set_ns(1_100_000_000)
+    sim.observe_while_paused()
+
+    assert sim.ownship == state
+    assert sim.tick_index == 0
+    assert sim.active_command.command_id == "plant-expiry-neutral:host_monotonic_deadline"
+    assert sim.active_command_authority == "plant_expiry_fallback"
     assert sim.events[-1]["kind"] == "command_expired"
 
 

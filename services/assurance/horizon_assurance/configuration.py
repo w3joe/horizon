@@ -104,7 +104,7 @@ class AssuranceConfig:
     operating_mode_id: str = "radar-led-constrained-v1"
     required_health_sources: tuple[str, ...] = (
         "navigation_environment",
-        "obstacle_perception",
+        "obstacle_perception:radar",
         "ship_actuator_feedback",
         "internal_ship_communications",
         "decision_ai_telemetry",

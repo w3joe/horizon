@@ -9,7 +9,7 @@ import pytest
 
 from horizon_assurance.candidates import A1ThresholdSimplex
 from horizon_assurance.configuration import AssuranceConfig
-from horizon_gate.core import ActuatorGate, GateConfig, StoredRecovery
+from horizon_gate.core import ActuatorGate, GateConfig, HTTPPlantClient, StoredRecovery
 from horizon_gate.http_api import GateHTTPServer, GateRuntime
 from horizon_sim.clock import ManualMonotonicClock
 
@@ -690,6 +690,34 @@ def test_gate_reset_handshake_rotates_epoch_and_supervisor_token(reference, gove
     assert new and new != old
     assert runtime.epoch == 1
     assert runtime.last_tick == -1
+
+
+def test_http_reset_reads_epoch_metadata_without_changing_snapshot(reference, tmp_path, monkeypatch) -> None:
+    plant = HTTPPlantClient("http://127.0.0.1:8100", "protected", "private-test-token")
+    requested = []
+
+    def request(path, body=None):
+        requested.append(path)
+        assert path == "/health"
+        return {"status": "ok", "plant_epoch": 3}
+
+    monkeypatch.setattr(plant, "_request", request)
+    actuator_gate = gate(reference, plant)
+    destination = tmp_path / "decision.token"
+    runtime = GateRuntime(actuator_gate, str(destination))
+    assert runtime.reset("operator-secret")
+    assert requested == ["/health"]
+    assert actuator_gate.epoch == 3
+    assert destination.read_text().strip() == actuator_gate.decision_token
+    actuator_gate.close()
+
+
+@pytest.mark.parametrize("epoch", [True, "3", -1, None])
+def test_http_plant_epoch_rejects_invalid_metadata(epoch, monkeypatch) -> None:
+    plant = HTTPPlantClient("http://127.0.0.1:8100", "protected", "private-test-token")
+    monkeypatch.setattr(plant, "_request", lambda path: {"plant_epoch": epoch})
+    with pytest.raises(ValueError, match="invalid plant epoch"):
+        plant.plant_epoch()
 
 
 def test_watchdog_continues_fresh_recovery_then_reports_unknown(reference, governor_input) -> None:
