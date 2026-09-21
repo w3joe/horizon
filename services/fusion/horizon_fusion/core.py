@@ -380,39 +380,104 @@ class FusionEngine:
             )
             if group in group_sources:
                 group_sources[group].append(item)
+        required_sources = {
+            "navigation_environment": {"gnss", "imu"},
+            "obstacle_perception": {"radar"},
+            "ship_actuator_feedback": {"actuator"},
+        }
+        capability_order = {
+            "unavailable": 0,
+            "output_only": 1,
+            "degraded": 2,
+            "available": 3,
+        }
+
+        def source_age(value: dict[str, Any]) -> float:
+            collector = value.get("payload", {}).get("_collector", {})
+            mapped = collector.get("mapped_event_monotonic_ns")
+            anchor = mapped if isinstance(mapped, int) else int(value["time"]["received_monotonic_ns"])
+            return max(0.0, (now_ns - anchor) / 1e9) + float(value["time"]["clock_uncertainty_ms"]) / 1000.0
+
         statuses: list[str] = []
         for group in INPUT_GROUPS:
             sources = group_sources[group]
             fresh = [v for v in sources if int(v["time"]["valid_until_monotonic_ns"]) >= now_ns]
+            reason_codes: list[str] = []
             if group == "decision_ai_telemetry":
-                status, capability, reasons, valid = (
-                    ("healthy", "available", [], now_ns + 350_000_000)
-                    if trace.get("status") == "ok"
-                    else ("invalid", "degraded", ["DECISION_AI_TRACE_NOT_OK"], now_ns)
-                )
+                completed_ns = int(trace.get("completed_monotonic_ns", 0))
+                age_s = max(0.0, (now_ns - completed_ns) / 1e9)
+                valid = completed_ns + 350_000_000
+                if trace.get("status") == "ok" and 0 < completed_ns <= now_ns and valid >= now_ns:
+                    status, capability = "healthy", "available"
+                else:
+                    status, capability = "invalid", "degraded"
+                    reason_codes.append("DECISION_AI_TRACE_NOT_CURRENT")
             elif group == "internal_ship_communications":
                 consumed = trace.get("consumed_input_ids")
-                status, capability, reasons, valid = (
-                    ("healthy", "available", [], now_ns + 350_000_000)
-                    if isinstance(consumed, list) and consumed
-                    else ("unknown", "degraded", ["AI_CONSUMPTION_NOT_ATTESTED"], now_ns + 100_000_000)
-                )
+                completed_ns = int(trace.get("completed_monotonic_ns", 0))
+                age_s = max(0.0, (now_ns - completed_ns) / 1e9)
+                valid = completed_ns + 350_000_000
+                if isinstance(consumed, list) and consumed and 0 < completed_ns <= now_ns and valid >= now_ns:
+                    status, capability = "healthy", "available"
+                else:
+                    status, capability = "unknown", "degraded"
+                    reason_codes.append("AI_CONSUMPTION_NOT_CURRENT")
             elif fresh:
-                status, capability, reasons = "healthy", "available", []
+                declared = [str(value.get("capability", "available")) for value in fresh]
+                capability = min(declared, key=lambda item: capability_order.get(item, -1))
+                fresh_source_ids = {str(value["source_id"]) for value in fresh}
+                missing = sorted(required_sources.get(group, set()) - fresh_source_ids)
                 valid = min(int(v["time"]["valid_until_monotonic_ns"]) for v in fresh)
+                age_s = max(source_age(value) for value in fresh)
+                if missing:
+                    status = "unknown"
+                    if capability == "available":
+                        capability = "degraded"
+                    reason_codes.extend(f"REQUIRED_SOURCE_MISSING:{item}" for item in missing)
+                elif capability in {"unavailable", "output_only"}:
+                    status = "unknown"
+                    reason_codes.append(f"CAPABILITY_{capability.upper()}")
+                elif capability == "degraded":
+                    status = "degraded"
+                    reason_codes.append("SOURCE_CAPABILITY_DEGRADED")
+                else:
+                    status = "healthy"
+                uncertainty_ms = max(float(value["time"]["clock_uncertainty_ms"]) for value in fresh)
+                if uncertainty_ms > 50.0:
+                    if status == "healthy":
+                        status = "degraded"
+                    reason_codes.append("CLOCK_UNCERTAINTY_HIGH")
+                if group == "onboard_network":
+                    if any(value.get("capture_status") == "lost" for value in fresh):
+                        status = "invalid"
+                        reason_codes.append("CAPTURE_LOSS")
+                    if any(value.get("application_status") not in {"received", "consumed"} for value in fresh):
+                        if status == "healthy":
+                            status = "degraded"
+                        reason_codes.append("APPLICATION_CONSUMPTION_UNKNOWN")
+                elif group == "inter_ship_communications":
+                    if status == "healthy":
+                        status = "degraded"
+                    reason_codes.append("PEER_CLAIM_NOT_INDEPENDENT_MOTION")
+                elif group == "neural_sensor_internals":
+                    if status == "healthy":
+                        status = "degraded"
+                    reason_codes.append("NEURAL_HEALTH_CONTRACT_NOT_BOUND")
             elif group == "neural_sensor_internals":
-                status, capability, reasons, valid = "unknown", "output_only", ["INTERNAL_ACTIVATIONS_UNAVAILABLE"], now_ns + 100_000_000
+                status, capability, valid, age_s = "unknown", "output_only", now_ns + 100_000_000, 0.0
+                reason_codes.append("INTERNAL_ACTIVATIONS_UNAVAILABLE")
             else:
-                status, capability, reasons, valid = "unknown", "unavailable", ["NO_FRESH_SOURCE"], now_ns + 100_000_000
+                status, capability, valid, age_s = "unknown", "unavailable", now_ns + 100_000_000, 0.0
+                reason_codes.append("NO_FRESH_SOURCE")
             statuses.append(status)
             records.append(
                 {
                     "health_id": f"{self.last_run_branch[0]}:{self.last_run_branch[1]}:health:{self.epoch}:{group}:{self.last_tick}",
                     "source_id": group,
                     "status": status,
-                    "age_s": 0.0 if fresh or group in {"decision_ai_telemetry", "internal_ship_communications"} else 0.1,
+                    "age_s": age_s,
                     "capability": capability,
-                    "reason_codes": reasons,
+                    "reason_codes": sorted(set(reason_codes)),
                     "valid_until_monotonic_ns": valid,
                 }
             )

@@ -27,7 +27,11 @@ def live_batch(now_ns: int) -> tuple[dict, AuthoritativeSimulator]:
     store.update_snapshot("protected", simulator.public_snapshot())
     store.update_reference("protected", simulator.public_reference())
     for item in simulator.observation_batch():
-        store.ingest(item, received_ns=now_ns)
+        store.ingest(
+            item,
+            received_ns=now_ns,
+            simulation_time_s=simulator.simulation_time_s,
+        )
     return store.batch(branch="protected"), simulator
 
 
@@ -38,12 +42,21 @@ def test_live_public_observations_to_separate_ai_to_schema_valid_governor_input(
     engine.update_batch(batch, now_ns=now_ns)
     decision_snapshot = engine.decision_snapshot(now_ns=now_ns)
     proposal, trace = FixturePolicy("nominal").propose(decision_snapshot)
-    governor = engine.assemble(proposal, trace, now_ns=now_ns + 1_000_000)
+    assembly_now = max(now_ns + 1_000_000, trace["completed_monotonic_ns"])
+    governor = engine.assemble(proposal, trace, now_ns=assembly_now)
     VALIDATOR.validate(governor)
     assert governor["configuration_hash"] == canonical_sha256(simulator.public_reference())
     assert governor["proposal"]["origin_snapshot_id"] == governor["snapshot"]["snapshot_id"]
     assert governor["snapshot"]["actuator"]["rudder_rad"] == pytest.approx(batch["observations"][-1]["payload"].get("rudder_rad", governor["snapshot"]["actuator"]["rudder_rad"]))
     assert governor["decision_deadline_monotonic_ns"] - governor["monotonic_time_ns"] == 40_000_000
+    health = {item["source_id"]: item for item in governor["health"]["summaries"]}
+    assert health["navigation_environment"]["status"] == "healthy"
+    assert health["navigation_environment"]["age_s"] >= 0.002
+    assert health["obstacle_perception"]["status"] == "degraded"
+    assert "CLOCK_UNCERTAINTY_HIGH" in health["obstacle_perception"]["reason_codes"]
+    assert health["ship_actuator_feedback"]["status"] == "healthy"
+    assert health["onboard_network"]["status"] == "unknown"
+    assert health["internal_ship_communications"]["status"] == "healthy"
     assert engine.last_evidence is not None
     VALIDATOR.validate(engine.last_evidence["bundle"])
     for track in engine.last_evidence["tracks"]:

@@ -5,7 +5,7 @@ from pathlib import Path
 import threading
 import time
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import jsonschema
 
@@ -84,6 +84,20 @@ def test_real_http_observation_fusion_ai_governor_pipeline() -> None:
         }
         assert fusion_diagnostics["plant_authority"] is False
         VALIDATOR.validate(evidence["bundle"])
+
+        bad_request = Request(
+            f"{collector_url}/v1/ingest",
+            data=b"null",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urlopen(bad_request, timeout=0.5)
+            raise AssertionError("non-object collector payload unexpectedly succeeded")
+        except HTTPError as exc:
+            assert exc.code == 400
+            assert json.load(exc)["error"] == "BAD_REQUEST"
+        assert _json(f"{collector_url}/health")[0] == 200
     finally:
         fusion_loop.stop()
         poller.stop()
