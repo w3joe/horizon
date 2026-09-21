@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -216,22 +217,77 @@ def sha256_tree(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_run_metadata(spec: dict, app_id: str) -> None:
-    output = Path(spec["output"]["local_path"])
-    spec_path = ROOT / "infra/modal/jobs" / f"{spec['job_id']}.json"
-    entrypoint = ROOT / spec["modal_entrypoint"]
-    metadata = {
-        "job_id": spec["job_id"],
-        "reservation_id": spec["reservation_id"],
+def sha256_tracked_tree(path: Path) -> str:
+    relative = path.resolve().relative_to(ROOT)
+    files = subprocess.check_output(
+        ["git", "ls-files", "-z", "--", str(relative)], cwd=ROOT
+    ).split(b"\0")
+    digest = hashlib.sha256()
+    for encoded in sorted(item for item in files if item):
+        item = ROOT / os.fsdecode(encoded)
+        digest.update(str(item.relative_to(ROOT)).encode())
+        digest.update(b"\0")
+        digest.update(sha256_file(item).encode())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def capture_launch_provenance(spec: dict, entrypoint: Path, spec_path: Path) -> dict[str, Any]:
+    declared_paths = [entrypoint.parent.resolve().relative_to(ROOT), spec_path.resolve().relative_to(ROOT)]
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--", *map(str, declared_paths)],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    if status:
+        raise RuntimeError("refusing cloud run: declared source tree or job spec is dirty")
+    return {
+        "captured_utc": datetime.now(timezone.utc).isoformat(),
         "repository_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
+        "entrypoint": spec["modal_entrypoint"],
+        "entrypoint_sha256": sha256_file(entrypoint),
+        "job_spec_sha256": sha256_file(spec_path),
+        "declared_source_tree": str(entrypoint.parent.resolve().relative_to(ROOT)),
+        "declared_source_tree_sha256": sha256_tracked_tree(entrypoint.parent),
+    }
+
+
+def write_launch_state(spec: dict, provenance: dict[str, Any]) -> Path:
+    output = Path(spec["output"]["local_path"])
+    path = output.parent / f"{spec['job_id']}-launch-state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "job_id": spec["job_id"],
+                "reservation_id": spec["reservation_id"],
+                "status": "launching",
+                "provenance": provenance,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return path
+
+
+def write_run_metadata(spec: dict, app_id: str, provenance: dict[str, Any]) -> None:
+    output = Path(spec["output"]["local_path"])
+    metadata = {
+        "job_id": spec["job_id"],
+        "reservation_id": spec["reservation_id"],
+        "repository_commit": provenance["repository_commit"],
+        "launch_provenance": provenance,
         "modal_app_id": app_id,
         "limits": spec["limits"],
         "code": {
-            "entrypoint": spec["modal_entrypoint"],
-            "entrypoint_sha256": sha256_file(entrypoint),
-            "job_spec_sha256": sha256_file(spec_path),
+            "entrypoint": provenance["entrypoint"],
+            "entrypoint_sha256": provenance["entrypoint_sha256"],
+            "job_spec_sha256": provenance["job_spec_sha256"],
+            "declared_source_tree": provenance["declared_source_tree"],
+            "declared_source_tree_sha256": provenance["declared_source_tree_sha256"],
         },
         "artifacts": {
             "manifest_sha256": sha256_file(output / "manifest.json"),
@@ -249,12 +305,14 @@ def execute_job(
     spec: dict,
     entrypoint: Path,
     environment: dict[str, str],
+    launch_provenance: dict[str, Any],
 ) -> None:
     output = Path(spec["output"]["local_path"])
     before = list_apps(environment)
     volume_created = False
     app_id: str | None = None
     termination = "not_started"
+    write_launch_state(spec, launch_provenance)
     begin(ledger_path, reservation_id)
     try:
         create_rc = modal(["volume", "create", spec["modal_volume_name"]], environment)
@@ -291,7 +349,7 @@ def execute_job(
         validate_download(spec)
         if app_id is None:
             raise RuntimeError("cannot write run metadata without an exact provider app ID")
-        write_run_metadata(spec, app_id)
+        write_run_metadata(spec, app_id, launch_provenance)
         if not delete_volume(spec, environment):
             raise RuntimeError("download verified but dedicated Volume deletion failed")
     except BaseException as error:
@@ -347,12 +405,20 @@ def main() -> int:
     output = Path(spec["output"]["local_path"])
     if output.exists():
         raise SystemExit(f"refusing cloud run: local output path already exists: {output}")
+    launch_provenance = capture_launch_provenance(spec, entrypoint, spec_path)
     environment = os.environ.copy()
     environment["HORIZON_MODAL_JOB_SPEC"] = str(spec_path)
     environment["HORIZON_DATA_ROOT"] = str(Path(spec["input"]["source_path"]).parents[1])
     environment["HORIZON_MODAL_RUN_ID"] = spec["job_id"]
     environment["HORIZON_MODAL_VOLUME"] = spec["modal_volume_name"]
-    execute_job(args.ledger, args.reservation, spec, entrypoint, environment)
+    execute_job(
+        args.ledger,
+        args.reservation,
+        spec,
+        entrypoint,
+        environment,
+        launch_provenance,
+    )
     print("Modal attempt finished; reconcile the inclusive provider charge before another reservation.")
     return 0
 

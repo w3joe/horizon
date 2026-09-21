@@ -4,7 +4,7 @@
   "reservation_id": "a07-wasrt-sequence-002",
   "owner": "A07",
   "purpose": "Corrected one-sequence WaSR-T reproduction and instrumentation smoke",
-  "code_commit_recording": "Resolved from git HEAD by the central launcher into platform-run.json",
+  "code_commit_recording": "Commit and declared source/spec hashes captured before launch into launch-state and reused unchanged in platform-run.json",
   "modal_entrypoint": "services/perception/modal_wasrt_smoke.py",
   "modal_app_name": "horizon-a07-wasrt-smoke",
   "modal_volume_name": "horizon-a07-artifacts-002",

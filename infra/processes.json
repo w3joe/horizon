@@ -14,12 +14,12 @@
     "gate": {
       "implementation_path": "services/gate/horizon_gate/http_api.py",
       "health_path": "/health",
-      "status": "pending_owner_entrypoint"
+      "status": "runnable"
     },
     "assurance": {
       "implementation_path": "services/assurance/horizon_assurance/http_api.py",
       "health_path": "/health",
-      "status": "pending_owner_entrypoint"
+      "status": "runnable"
     },
     "fusion": {
       "implementation_path": "services/fusion/horizon_fusion/http_api.py",
