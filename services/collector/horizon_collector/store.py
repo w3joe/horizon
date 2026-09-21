@@ -20,6 +20,9 @@ INPUT_GROUPS = (
     "neural_sensor_internals",
 )
 
+MAX_CLOCK_SECONDS = (2**63 - 1) / 1_000_000_000
+MAX_SOURCE_VALIDITY_NS = 60_000_000_000
+
 
 class CollectorStore:
     """Thread-safe bounded store that normalizes receipt time to the local host clock."""
@@ -175,7 +178,7 @@ class CollectorStore:
         original_valid = self._bounded_integer(
             original_time.get("valid_until_monotonic_ns"), "valid_until_monotonic_ns"
         )
-        validity_ns = original_valid - original_received
+        validity_ns = min(original_valid - original_received, MAX_SOURCE_VALIDITY_NS)
         event_time_s = self._finite_nonnegative(original_time.get("event_time_s"), "event_time_s")
         clock_uncertainty_ms = self._finite_nonnegative(
             original_time.get("clock_uncertainty_ms"), "clock_uncertainty_ms"
@@ -189,23 +192,23 @@ class CollectorStore:
             clock_time_s = self._finite_nonnegative(simulation_time_s, "simulation_time_s")
             if event_time_s > clock_time_s + clock_uncertainty_ms / 1000.0:
                 raise ValueError("event time is ahead of simulation clock beyond uncertainty")
-            event_age_ns = max(0, round((clock_time_s - event_time_s) * 1e9))
+            event_age_ns = self._seconds_to_ns(max(0.0, clock_time_s - event_time_s), "simulation event age")
             mapped_event_ns = max(0, now_ns - event_age_ns)
-            usable_expiry_ns = max(0, mapped_event_ns + validity_ns - uncertainty_ns)
+            usable_expiry_ns = self._bounded_integer(max(0, mapped_event_ns + validity_ns - uncertainty_ns), "mapped valid_until_monotonic_ns")
         elif effective_domain == "replay_relative":
             if replay_time_s is None:
                 raise ValueError("replay_time_s is required for replay_relative clock_domain")
             clock_time_s = self._finite_nonnegative(replay_time_s, "replay_time_s")
             if event_time_s > clock_time_s + clock_uncertainty_ms / 1000.0:
                 raise ValueError("event time is ahead of replay clock beyond uncertainty")
-            event_age_ns = max(0, round((clock_time_s - event_time_s) * 1e9))
+            event_age_ns = self._seconds_to_ns(max(0.0, clock_time_s - event_time_s), "replay event age")
             mapped_event_ns = max(0, now_ns - event_age_ns)
-            usable_expiry_ns = max(0, mapped_event_ns + validity_ns - uncertainty_ns)
+            usable_expiry_ns = self._bounded_integer(max(0, mapped_event_ns + validity_ns - uncertainty_ns), "mapped valid_until_monotonic_ns")
         elif effective_domain == "host_monotonic":
             if replay_time_s is not None:
                 raise ValueError("replay_time_s requires replay_relative clock_domain")
             mapped_event_ns = None
-            usable_expiry_ns = max(0, original_valid - uncertainty_ns)
+            usable_expiry_ns = max(0, original_received + validity_ns - uncertainty_ns)
         else:
             raise ValueError("clock_domain must be host_monotonic or replay_relative")
         value = copy.deepcopy(record)
@@ -247,7 +250,18 @@ class CollectorStore:
         parsed = float(value)
         if not math.isfinite(parsed) or parsed < 0:
             raise ValueError(f"{name} must be finite and non-negative")
+        if parsed > MAX_CLOCK_SECONDS:
+            raise ValueError(f"{name} exceeds the bounded clock range")
         return parsed
+
+    @staticmethod
+    def _seconds_to_ns(value: float, name: str) -> int:
+        if not math.isfinite(value) or value < 0 or value > MAX_CLOCK_SECONDS:
+            raise ValueError(f"{name} exceeds the bounded clock range")
+        result = round(value * 1_000_000_000)
+        if result > 2**63 - 1:
+            raise ValueError(f"{name} exceeds the bounded clock range")
+        return result
 
     @classmethod
     def _validate_structure(cls, record: dict[str, Any]) -> None:
@@ -436,7 +450,8 @@ class CollectorStore:
                 def conservative_age(value: dict[str, Any]) -> float:
                     collector = value.get("payload", {}).get("_collector", {})
                     mapped = collector.get("mapped_event_monotonic_ns")
-                    anchor = mapped if isinstance(mapped, int) else int(value["time"]["received_monotonic_ns"])
+                    original_received = collector.get("original_received_monotonic_ns")
+                    anchor = mapped if isinstance(mapped, int) else original_received if isinstance(original_received, int) else int(value["time"]["received_monotonic_ns"])
                     return max(0.0, (current - anchor) / 1e9) + float(value["time"]["clock_uncertainty_ms"]) / 1000.0
 
                 group_status[group] = {

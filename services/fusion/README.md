@@ -19,3 +19,11 @@ lineage and source-quality evidence. The service never receives plant-writing
 authority. Neural internals default to `output_only/unknown`; unvalidated
 camera or representation signals never shrink geometric uncertainty or clear
 occupied space.
+
+Actuator capability stays degraded while it is based on public configured
+limits. The response monitor only restricts that capability after at least
+five feedback samples over a sufficiently excited command step, and only when
+each feedback record is explicitly linked to the command observation through
+collector ancestry. A few matching samples never promote the configured
+limits to nominal. The evidence route reports the exact command and feedback
+observation IDs used by an assessment.

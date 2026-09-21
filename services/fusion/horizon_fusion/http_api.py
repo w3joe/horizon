@@ -61,7 +61,7 @@ class FusionLoop:
         query = urlencode({"branch": self.branch, "after_cursor": self.cursor, "limit": 512})
         batch = _get_json(f"{self.collector_url}/v1/batch?{query}")
         if batch.get("cursor_lost"):
-            self.last_error_reasons = ["COLLECTOR_CURSOR_LOSS"]
+            self.engine.invalidate_collection("COLLECTOR_CURSOR_LOSS")
         self.cursor = int(batch.get("cursor", self.cursor))
         previous_epoch = self.engine.epoch
         previous_lineage = self.engine.last_run_branch
@@ -70,6 +70,14 @@ class FusionLoop:
             with self.lock:
                 self.latest = None
                 self.last_processed_snapshot_id = None
+        if batch.get("cursor_lost") or batch.get("has_more"):
+            with self.lock:
+                self.latest = None
+                self.last_processed_snapshot_id = None
+                self.last_error_reasons = [
+                    "COLLECTOR_CURSOR_LOSS" if batch.get("cursor_lost") else "COLLECTOR_BACKLOG"
+                ]
+            return
         decision_snapshot = self.engine.decision_snapshot()
         if decision_snapshot["snapshot_id"] == self.last_processed_snapshot_id:
             return

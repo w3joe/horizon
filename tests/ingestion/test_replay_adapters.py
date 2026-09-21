@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from itertools import islice
 import os
 from pathlib import Path
 import struct
@@ -165,3 +167,54 @@ def test_hermetic_canoe_manifest_parser(tmp_path: Path) -> None:
     assert records[0]["capability"] == "degraded"
     for item in records:
         VALIDATOR.validate(item)
+
+
+def test_recorded_canoe_csv_rows_are_hash_verified_parsed_and_time_aligned() -> None:
+    manifest_path = require_external(DATA_ROOT / "datasets/canoe/acquisition.json")
+    records = list(canoe.replay_recorded_csv(
+        manifest_path,
+        run_id="recorded",
+        branch_id="offline",
+        maximum_rows_per_source=2,
+    ))
+    assert len(records) == 4
+    assert [item["payload"]["source_unix_time_us"] for item in records] == sorted(
+        item["payload"]["source_unix_time_us"] for item in records
+    )
+    imu = records[0]
+    motor = next(item for item in records if item["source_id"] == "canoe/motor-power")
+    assert imu["payload"]["source_unix_time_us"] == 1755706569007588
+    assert imu["payload"]["angular_velocity_xyz"][0] == pytest.approx(0.021305288720633905)
+    assert imu["payload"]["linear_acceleration_xyz"][2] == pytest.approx(10.184933862304687)
+    assert imu["payload"]["partial_source_file"] is True
+    assert imu["capability"] == "degraded"
+    assert motor["payload"]["source_unix_time_us"] == 1755706569314048
+    assert motor["payload"]["starboard_power_w"] == 61.5
+    assert motor["payload"]["port_power_w"] == 63.0
+    assert motor["payload"]["total_power_w"] == 270.7
+    assert motor["payload"]["maneuvering_capability_inference"] is False
+    for item in records:
+        VALIDATOR.validate(item)
+
+
+def test_canoe_csv_parser_rejects_hash_mismatch_and_reordered_time(tmp_path: Path) -> None:
+    path = tmp_path / "imu.csv"
+    path.write_text(
+        "time,wx,wy,wz,ax,ay,az\n"
+        "1000000,0,0,0,0,0,9.8\n"
+        "999999,nan,0,0,0,0,9.8\n"
+    )
+    artifact = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size, "partial": True}
+    with pytest.raises(ValueError, match="strictly increasing"):
+        list(canoe.replay_imu_csv(path, artifact, run_id="hermetic", branch_id="offline"))
+    artifact["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="SHA-256"):
+        next(iter(canoe.replay_imu_csv(path, artifact, run_id="hermetic", branch_id="offline")))
+
+
+def test_canoe_csv_parser_rejects_nonfinite_values(tmp_path: Path) -> None:
+    path = tmp_path / "motor.csv"
+    path.write_text("time,starboard,port,total\n1000000,nan,1,2\n")
+    artifact = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
+    with pytest.raises(ValueError, match="non-finite"):
+        list(islice(canoe.replay_motor_power_csv(path, artifact, run_id="hermetic", branch_id="offline"), 1))
