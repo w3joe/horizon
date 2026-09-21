@@ -8,6 +8,19 @@ from horizon_neural_health.monitors import evaluate
 from horizon_neural_health.training import build_calibration, build_reference
 
 
+def provenance(layer="decoder_logits", dimension=3, groups=None):
+    groups = groups or ["nominal-a"]
+    return {
+        "model_weights_sha256": "a" * 64,
+        "preprocessing_sha256": "b" * 64,
+        "sensor_geometry_version": "camera-test-v1",
+        "layer": layer,
+        "input_dimension": dimension,
+        "projection": {"method": "identity", "output_dimension": dimension},
+        "source_groups": groups,
+    }
+
+
 def payload(method_id: str, embedding=None, context="harbor_day"):
     return {
         "method_id": method_id,
@@ -30,6 +43,7 @@ def payload(method_id: str, embedding=None, context="harbor_day"):
         },
         "risk_context": {"operating_domain": context},
         "embedding": embedding,
+        "artifact_provenance": provenance(),
     }
 
 
@@ -46,6 +60,7 @@ def calibration(method_id: str, reference_hash=None):
         "cal-v1",
         0.5,
         reference_hash,
+        provenance=provenance(),
     )
     return CalibrationArtifact.from_dict(artifact)
 
@@ -82,17 +97,62 @@ def test_calibrated_health_can_be_healthy_while_risk_remains_unknown():
         "kind": "unknown",
         "reason": "risk_band_not_heldout_validated",
     }
+    assert result["camera_free_space_usable"] is False
 
 
 def test_h4_refuses_reference_without_intervention_controls():
     reference_body = build_reference(
-        "H2", [[0.0, 0.0], [1.0, 1.0]], "encoder", ["nominal-a"], "ref-v1"
+        "H2",
+        [[0.0, 0.0], [1.0, 1.0]],
+        "encoder",
+        ["nominal-a"],
+        "ref-v1",
+        provenance=provenance("encoder", 2),
     )
     reference_body["method_id"] = "H4"
     # Re-hash a structurally valid H4 reference which lacks the required evidence.
     from horizon_neural_health.artifact import canonical_hash
     reference_body["artifact_hash"] = canonical_hash({k: v for k, v in reference_body.items() if k != "artifact_hash"})
     reference = ReferenceArtifact.from_dict(reference_body)
-    result = evaluate(payload("H4", [0.0, 0.0]), calibration("H4", reference.artifact_hash), reference)
+    request = payload("H4", [0.0, 0.0])
+    request["artifact_provenance"] = provenance("encoder", 2)
+    artifact = build_calibration(
+        "H4",
+        [
+            {"score": 0.1, "missed_obstacle": False},
+            {"score": 0.8, "missed_obstacle": True},
+        ],
+        {"operating_domain": ["harbor_day"]},
+        "cal-v1",
+        0.5,
+        reference.artifact_hash,
+        provenance=provenance("encoder", 2),
+    )
+    result = evaluate(request, CalibrationArtifact.from_dict(artifact), reference)
     assert result["status"] == "unknown"
     assert result["reasons"] == ["offline_intervention_validation_missing"]
+
+
+def test_calibration_threshold_is_tie_aware():
+    artifact = build_calibration(
+        "H0",
+        [
+            *[{"score": 0.5, "missed_obstacle": False} for _ in range(10)],
+            {"score": 0.9, "missed_obstacle": True},
+        ],
+        {"operating_domain": ["harbor_day"]},
+        "cal-ties",
+        0.1,
+        provenance=provenance(),
+    )
+    false_alarms = sum(0.5 >= artifact["alarm_threshold"] for _ in range(10))
+    assert false_alarms / 10 <= 0.1
+
+
+def test_one_class_and_nonfinite_input_return_unknown():
+    request = payload("H0")
+    request.pop("obstacle_relevant_probabilities")
+    request["class_probabilities"] = [1.0]
+    assert evaluate(request, calibration("H0"))["status"] == "unknown"
+    request = payload("H2", [float("nan"), 0.0])
+    assert evaluate(request)["status"] == "unknown"

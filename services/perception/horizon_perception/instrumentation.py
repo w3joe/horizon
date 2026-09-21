@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from time import perf_counter_ns
 from typing import Any
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -105,3 +106,71 @@ def summarize_tensor(name: str, value: Any) -> TensorSummary:
         pooled_mean=tuple(float(x) for x in mean.cpu().tolist()),
         pooled_standard_deviation=tuple(float(x) for x in std.cpu().tolist()),
     )
+
+
+class SpatialActivationRecorder:
+    """Capture a frozen, small channel set for offline visual diagnostics."""
+
+    def __init__(self, model: Any, family: str, channels: dict[str, tuple[int, ...]]):
+        self._summary_recorder = ActivationRecorder(model, family)
+        self.channels = channels
+        self.records: dict[str, dict[int, Any]] = {}
+        self.hooks: list[Any] = []
+
+    def install(self) -> "SpatialActivationRecorder":
+        modules = self._summary_recorder._modules()
+        unknown = set(self.channels) - set(modules)
+        if unknown:
+            raise ValueError(f"unknown probe layers: {sorted(unknown)}")
+        for name, indexes in self.channels.items():
+            self.hooks.append(modules[name].register_forward_hook(self._hook(name, indexes)))
+        return self
+
+    def _hook(self, name: str, indexes: tuple[int, ...]):
+        def capture(_module: Any, _inputs: Any, output: Any) -> None:
+            if output.ndim != 4 or output.shape[0] != 1:
+                raise ValueError(f"spatial probe {name} requires [1,C,H,W] output")
+            if any(index < 0 or index >= output.shape[1] for index in indexes):
+                raise IndexError(f"spatial probe channel outside {name} shape {tuple(output.shape)}")
+            self.records[name] = {
+                index: output[0, index].detach().float().cpu().clone() for index in indexes
+            }
+            return None
+
+        return capture
+
+    def remove(self) -> None:
+        for hook in self.hooks:
+            hook.remove()
+        self.hooks.clear()
+
+    def write(self, output_dir: Path, frame_id: str) -> list[dict[str, Any]]:
+        import numpy as np
+        from PIL import Image
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        manifest = []
+        for layer, channels in sorted(self.records.items()):
+            for index, tensor in sorted(channels.items()):
+                array = tensor.numpy()
+                minimum, maximum = float(array.min()), float(array.max())
+                if maximum > minimum:
+                    normalized = (array - minimum) / (maximum - minimum)
+                else:
+                    normalized = np.zeros_like(array)
+                relative = Path(frame_id) / f"{layer}-channel-{index}.png"
+                path = output_dir / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                Image.fromarray((normalized * 255).astype("uint8"), mode="L").save(path)
+                manifest.append({
+                    "frame_id": frame_id,
+                    "layer": layer,
+                    "channel": index,
+                    "shape": list(array.shape),
+                    "minimum": minimum,
+                    "maximum": maximum,
+                    "normalization": "per_map_minmax_for_display_only",
+                    "path": str(relative),
+                    "semantic_label": None,
+                })
+        return manifest

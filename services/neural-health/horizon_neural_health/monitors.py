@@ -11,7 +11,7 @@ from .models import score_h2, score_h3, score_h4
 
 
 def _entropy(probabilities: list[float]) -> float:
-    if not probabilities or any(not math.isfinite(p) or p < 0 for p in probabilities):
+    if len(probabilities) < 2 or any(not math.isfinite(p) or p < 0 for p in probabilities):
         raise ValueError("output probabilities must be finite and non-negative")
     total = sum(probabilities)
     if total <= 0:
@@ -21,6 +21,18 @@ def _entropy(probabilities: list[float]) -> float:
 
 
 def _base_score(payload: dict[str, Any]) -> tuple[float, list[str], bool]:
+    summary = payload.get("output_health")
+    if isinstance(summary, dict):
+        entropy = float(summary["entropy_p95"])
+        if not math.isfinite(entropy) or not 0 <= entropy <= 1:
+            raise ValueError("pixelwise entropy summary is invalid")
+        reasons = []
+        threshold = float(payload.get("output_entropy_threshold", 0.72))
+        if entropy >= threshold:
+            reasons.append("output_uncertainty")
+        if summary.get("roi_capability") != "versioned_roi":
+            reasons.append("uncalibrated_output_roi")
+        return entropy, reasons, False
     regions = payload.get("obstacle_relevant_probabilities")
     if regions:
         entropy = max(_entropy([float(x) for x in region]) for region in regions)
@@ -70,6 +82,10 @@ def _record(
         return unknown_record(payload, method_id, "calibration_method_mismatch")
     if reference and calibration.reference_hash != reference.artifact_hash:
         return unknown_record(payload, method_id, "calibration_reference_mismatch")
+    runtime_provenance = payload.get("artifact_provenance")
+    expected_provenance = reference.provenance if reference else calibration.provenance
+    if runtime_provenance != expected_provenance or calibration.provenance != expected_provenance:
+        return unknown_record(payload, method_id, "artifact_provenance_mismatch")
     context = payload.get("risk_context", {})
     risk, scope = calibration.risk(score, context)
     if invalid:
@@ -93,7 +109,9 @@ def _record(
         calibration_version=calibration.version,
         capability="internal_activations" if reference else "output_and_conventional",
         completeness="complete",
-        camera_free_space_usable=status == HealthStatus.HEALTHY,
+        camera_free_space_usable=(
+            status == HealthStatus.HEALTHY and risk.get("kind") == "calibrated_band"
+        ),
         missed_obstacle_risk=risk,
         risk_scope=scope,
         geometric_uncertainty={"kind": "unknown", "reason": "health_score_has_no_metric_geometry"},
@@ -131,7 +149,12 @@ def _representation(
         return unknown_record(payload, method_id, "missing_or_wrong_dimension_embedding")
     try:
         conventional, reasons, invalid = _conventional(payload)
-        representation = scorer([float(x) for x in vector], reference.parameters)
+        numeric_vector = [float(x) for x in vector]
+        if any(not math.isfinite(value) for value in numeric_vector):
+            raise ValueError("embedding contains nonfinite values")
+        representation = scorer(numeric_vector, reference.parameters)
+        if not math.isfinite(representation):
+            raise ValueError("representation score is nonfinite")
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return unknown_record(payload, method_id, "invalid_representation_evidence")
     score = max(conventional, representation)
@@ -151,7 +174,8 @@ def h3(payload, calibration=None, reference=None):
 
 
 def h4(payload, calibration=None, reference=None):
-    if reference is not None and not reference.parameters.get("offline_intervention_validation"):
+    validation = reference.parameters.get("offline_intervention_validation", {}) if reference else {}
+    if reference is not None and validation.get("completed_controls") is not True:
         return unknown_record(payload, "H4", "offline_intervention_validation_missing")
     return _representation(payload, "H4", score_h4, calibration, reference)
 

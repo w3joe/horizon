@@ -1,0 +1,60 @@
+{
+  "schema_version": "horizon.perception-splits.v1",
+  "frozen_at": "2026-09-21",
+  "dataset": "MODD2_RAW",
+  "dataset_acquisition_manifest_sha256": "5403217fe8d1b0a34b32b8f2063549e39b59197ed8e5c5bded1f5bf3006bca1d",
+  "grouping_rule": "all sequences sharing the kopeNN collection prefix remain in one split",
+  "selection_rule": "development contains root-inspected kope81; remaining whole collection groups assigned before label/model evaluation to retain nonempty calibration and heldout partitions",
+  "development": {
+    "collection_groups": ["kope81"],
+    "sequences": [
+      "kope81-00-00000560-00001080",
+      "kope81-00-00004330-00004850",
+      "kope81-00-00006800-00007095",
+      "kope81-00-00010940-00011100",
+      "kope81-00-00015980-00016270",
+      "kope81-00-00019370-00019710",
+      "kope81-00-00021520-00022080",
+      "kope81-00-00022350-00022520"
+    ]
+  },
+  "calibration": {
+    "collection_groups": ["kope67", "kope75"],
+    "sequences": [
+      "kope67-00-00004500-00005050",
+      "kope67-00-00025200-00025670",
+      "kope67-00-00027400-00027650",
+      "kope67-00-00040950-00041190",
+      "kope67-00-00060561-00061461",
+      "kope67-00-00061851-00062671",
+      "kope67-00-00062671-00063461",
+      "kope67-00-00067272-00067942",
+      "kope67-00-00074432-00074612",
+      "kope75-00-00013780-00014195",
+      "kope75-00-00021500-00022160",
+      "kope75-00-00037550-00037860",
+      "kope75-00-00062200-00062500"
+    ]
+  },
+  "heldout": {
+    "collection_groups": ["kope71", "kope82"],
+    "sequences": [
+      "kope71-01-00011210-00011320",
+      "kope71-01-00011520-00011800",
+      "kope71-01-00011800-00012000",
+      "kope71-01-00014337-00014547",
+      "kope71-01-00017650-00017825",
+      "kope82-00-00011177-00011797",
+      "kope82-00-00012030-00012700"
+    ]
+  },
+  "excluded_from_evaluation": {
+    "MaSTr1325": "checkpoint training-family overlap; nominal reference only",
+    "WaSR-T examples/sequence": "upstream integration/reproduction example only"
+  },
+  "audit_status": {
+    "exact_hash_mastr_modd2": "0 exact matches among 1325 MaSTr and 23479 MODD2 JPG/PNG files",
+    "cross_split_perceptual_near_duplicates": "pending_before_heldout_evaluation",
+    "heldout_labels_opened": false
+  }
+}

@@ -56,13 +56,11 @@ class SequentialPerceptionRunner:
 
         image = preprocess_image(image_path, self.device, self.fp16)
         self.recorder.clear()
-        if self.device.startswith("cuda"):
-            torch.cuda.synchronize()
+        synchronize_device(self.device, torch)
         started = perf_counter_ns()
         with torch.inference_mode():
             output = self.model({"image": image})["out"]
-        if self.device.startswith("cuda"):
-            torch.cuda.synchronize()
+        synchronize_device(self.device, torch)
         elapsed = perf_counter_ns() - started
         cold_start = self.frame_count == 0
         result = FrameResult(
@@ -105,3 +103,12 @@ def preprocess_image(path: Path, device: str, fp16: bool):
     std = torch.tensor(IMAGENET_STD)[:, None, None]
     tensor = ((tensor - mean) / std).unsqueeze(0).to(device)
     return tensor.half() if fp16 else tensor
+
+
+def synchronize_device(device: str, torch_module: Any) -> None:
+    """Synchronize asynchronous accelerators before reading wall-clock time."""
+    kind = str(device).split(":", 1)[0]
+    if kind == "cuda":
+        torch_module.cuda.synchronize()
+    elif kind == "mps":
+        torch_module.mps.synchronize()

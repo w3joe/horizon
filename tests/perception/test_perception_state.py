@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from horizon_perception.runner import SequentialPerceptionRunner
+from horizon_perception.runner import SequentialPerceptionRunner, synchronize_device
 
 
 class FakeModel:
@@ -50,6 +50,22 @@ def test_lineage_fault_invalidates_and_clears_temporal_state():
     assert runner.recorder.clears == 1
     assert runner.sequence_id is None
     assert runner.last_timestamp_ns is None
+
+
+def test_device_synchronization_dispatches_mps_and_cuda():
+    class Counter:
+        def __init__(self):
+            self.calls = 0
+
+        def synchronize(self):
+            self.calls += 1
+
+    fake = type("FakeTorch", (), {"mps": Counter(), "cuda": Counter()})()
+    synchronize_device("mps", fake)
+    synchronize_device("cuda:0", fake)
+    synchronize_device("cpu", fake)
+    assert fake.mps.calls == 1
+    assert fake.cuda.calls == 1
 
 
 def test_hooks_do_not_mutate_tiny_model_output():
