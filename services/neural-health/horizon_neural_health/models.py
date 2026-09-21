@@ -104,6 +104,12 @@ def fit_h4(
     """Fit a small ReLU SAE with deterministic vectorized full-batch SGD."""
     import numpy as np
 
+    if type(epochs) is not int or epochs < 1:
+        raise ValueError("SAE epochs must be a positive integer")
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError("SAE learning rate must be finite and positive")
+    if not math.isfinite(tolerance) or tolerance < 0 or not math.isfinite(l1) or l1 < 0:
+        raise ValueError("SAE tolerance and sparsity weight must be finite and nonnegative")
     matrix = _matrix(rows)
     normalized, mean, scale, constant = _standardize(matrix)
     width = normalized.shape[1]
@@ -150,6 +156,9 @@ def fit_h4(
         "seed": int(seed),
         "fit_samples": int(matrix.shape[0]),
         "epochs_completed": len(losses),
+        "epochs_requested": epochs,
+        "learning_rate": float(learning_rate),
+        "convergence_tolerance": float(tolerance),
         "initial_loss": losses[0],
         "final_loss": losses[-1],
         "converged": stable >= 10,

@@ -82,6 +82,7 @@ def run_development(
         "encoder",
         common["source_groups"],
         "h2-modd2-development-v1",
+        fit_split="development",
         provenance=projected_provenance,
         regularization=1e-3,
     )
@@ -91,6 +92,7 @@ def run_development(
         "encoder",
         common["source_groups"],
         "h3-modd2-development-v1",
+        fit_split="development",
         provenance=projected_provenance,
         components=16,
     )
@@ -100,6 +102,7 @@ def run_development(
         "encoder",
         common["source_groups"],
         "h4-modd2-development-v1",
+        fit_split="development",
         provenance=sae_provenance,
         hidden=16,
         epochs=3000,
