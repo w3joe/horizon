@@ -89,6 +89,13 @@ Rejected receipts are never cached. Run, branch, tick, proposal, snapshot, and
 decision identities must all join, and an epoch synchronization clears the
 prior cache before any result from the new epoch is available.
 
+After an epoch reset rotates the gate token, the loop immediately attempts
+startup recovery priming from that same GovernorInput while its snapshot,
+proposal, health, and recovery-option expiries remain valid. This permission
+step is separate from the 40 ms decision-computation deadline and never submits
+a decision from the retained input. An expired source-validity window produces
+`startup_recovery_input_stale`; the loop never extends an old expiry.
+
 ## Local latency characterization
 
 On 2026-09-21, an Apple M1 Max (32 GiB, macOS 26.6.2) ran the default A3 60

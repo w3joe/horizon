@@ -52,7 +52,10 @@ class AssuranceRuntime:
     def record_control_event(self, event: dict[str, Any]) -> None:
         with self.lock:
             self.control_events.append(event)
-            if event.get("event_type") == "gate_epoch_synchronized":
+            if (
+                event.get("event_type") == "gate_epoch_synchronized"
+                or event.get("epoch_synchronized") is True
+            ):
                 epoch = int(event["epoch"])
                 self.latest_evidence = None
                 self.latest_evidence_epoch = epoch
