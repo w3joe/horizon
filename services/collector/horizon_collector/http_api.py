@@ -115,7 +115,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(HTTPStatus.NOT_FOUND, {"error": "NOT_FOUND"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if urlparse(self.path).path.rstrip("/") != "/v1/ingest":
+        parsed = urlparse(self.path)
+        if parsed.path.rstrip("/") != "/v1/ingest":
             self._json(HTTPStatus.NOT_FOUND, {"error": "NOT_FOUND"})
             return
         try:
@@ -123,10 +124,25 @@ class Handler(BaseHTTPRequestHandler):
             if length <= 0 or length > 1_000_000:
                 raise ValueError("body must be between 1 byte and 1 MB")
             value = json.loads(self.rfile.read(length))
+            if not isinstance(value, (dict, list)):
+                raise TypeError("request body must be an object or array of objects")
             records = value if isinstance(value, list) else [value]
             if len(records) > 512:
                 raise ValueError("at most 512 records per request")
-            accepted = sum(self.server.store.ingest(item) for item in records)
+            if any(not isinstance(item, dict) for item in records):
+                raise TypeError("every collector record must be an object")
+            query = parse_qs(parsed.query)
+            clock_domain = query.get("clock_domain", ["host_monotonic"])[0]
+            replay_text = query.get("replay_time_s", [None])[0]
+            replay_time_s = None if replay_text is None else float(replay_text)
+            accepted = sum(
+                self.server.store.ingest(
+                    item,
+                    clock_domain=clock_domain,
+                    replay_time_s=replay_time_s,
+                )
+                for item in records
+            )
             self._json(HTTPStatus.ACCEPTED, {"accepted": accepted, "replayed": len(records) - accepted})
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": "BAD_REQUEST", "message": str(exc)})
