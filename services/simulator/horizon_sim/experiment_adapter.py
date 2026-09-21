@@ -63,6 +63,7 @@ def run_episode(request: dict[str, Any]) -> dict[str, Any]:
         seed=int(request["seed"]),
         run_id=str(request["run_id"]),
         branch_id=str(request["branch_id"]),
+        protected=False,
     )
     max_time = min(float(request["max_simulation_time_s"]), scenario.duration_s)
     planner_period_ticks = round(0.2 / simulator.parameters.fixed_step_s)
@@ -87,7 +88,11 @@ def run_episode(request: dict[str, Any]) -> dict[str, Any]:
                     "speed_mps": min(4.0, simulator.parameters.speed_command_limit_mps),
                 },
             }
-            simulator.submit_gate_command(envelope, token=simulator.gate_token)
+            simulator.submit_counterfactual_command(
+                envelope,
+                token=simulator.evaluation_token,
+                offline_monotonic_ns=round(simulator.simulation_time_s * 1e9),
+            )
             issued_ns = round(simulator.simulation_time_s * 1e9)
             proposals.append(
                 {

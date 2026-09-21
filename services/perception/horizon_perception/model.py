@@ -67,6 +67,9 @@ def _upstream_import_path(path: Path) -> Iterator[None]:
         lightning = types.ModuleType("pytorch_lightning")
         loggers = types.ModuleType("pytorch_lightning.loggers")
         loggers.LoggerCollection = type("LoggerCollection", (), {})
+        # The pinned utility module evaluates this training-only return
+        # annotation while importing the inference architecture.
+        loggers.LightningLoggerBase = type("LightningLoggerBase", (), {})
         lightning.loggers = loggers
         sys.modules["pytorch_lightning"] = lightning
         sys.modules["pytorch_lightning.loggers"] = loggers

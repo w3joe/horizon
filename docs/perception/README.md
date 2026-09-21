@@ -35,3 +35,19 @@ Runtime health never outputs steering, obstacle-free truth, or metre-valued unce
 MaSTr1325 is nominal/reference material with training overlap for the official checkpoint. It cannot supply held-out evidence. A local exact SHA-256 audit on 21 September 2026 compared 1,325 MaSTr image files with 23,479 MODD2 JPG/PNG camera files and found zero byte-identical files. This excludes exact duplicates only; it does not establish session, location, or near-duplicate independence.
 
 MODD2 remains additional raw stereo/IMU material with sequence calibration and annotations. It is not the official MODS benchmark. The full official MODS dataset is unavailable through the current route because the old URL returns 404 and the current SharePoint requires institutional login. Until that access boundary changes, Horizon cannot claim official MODS reproduction or a final held-out perception result.
+# Local integration verification
+
+On 2026-09-21 the pinned WaSR-T checkpoint was loaded and evaluated on the first
+four provided example frames using local CPU, PyTorch 2.5.1, torchvision 0.20.1,
+Pillow 10.4.0, and four CPU threads. Instrumented versus uninstrumented outputs
+and temporal reset replay were exactly equal (maximum absolute difference 0).
+Encoder, temporal-fusion, and decoder-logit summaries were captured. The
+training-only Lightning compatibility shim includes the logger type used by an
+eagerly evaluated upstream annotation; importing the real model exposed this
+requirement.
+
+The local artifacts are outside Git under
+`horizon-runs/compute/local-wasrt-preflight/`. This is a four-frame integration
+check, not held-out evidence or a GPU performance measurement. The first Modal
+attempt was stopped during image construction after this import issue was
+found locally; no successful GPU inference is claimed for that attempt.
