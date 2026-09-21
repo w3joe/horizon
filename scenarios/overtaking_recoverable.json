@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.1.0",
+  "scenario_id": "overtaking-recoverable-v1",
+  "scenario_version": "1.0.0",
+  "family": "overtaking",
+  "split": "development",
+  "recoverability_class": "declared_recoverable",
+  "duration_s": 150.0,
+  "ownship": {"north_m": 0.0, "east_m": 0.0, "heading_rad": 0.0, "surge_mps": 5.0, "thrust_fraction": 0.75},
+  "traffic": [
+    {"vessel_id": "contact-slow", "north_m": 90.0, "east_m": 8.0, "heading_rad": 0.0, "surge_mps": 2.0, "hull": {"length_m": 14.0, "beam_m": 4.0, "draft_m": 1.1}}
+  ],
+  "environment": {"current_ne_mps": [0.2, 0.0], "wind_force_ne_n": [100.0, 0.0]},
+  "water_boundary_ne_m": [[-300.0, -250.0], [1000.0, -250.0], [1000.0, 250.0], [-300.0, 250.0]],
+  "nominal_depth_m": 8.0,
+  "chart_uncertainty_m": 0.5,
+  "waypoints_ne_m": [[0.0, 0.0], [650.0, 0.0]],
+  "faults": []
+}
