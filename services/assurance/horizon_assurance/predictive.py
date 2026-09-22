@@ -20,6 +20,7 @@ class Assessment:
     constraints: tuple[dict[str, Any], ...]
     minimum_margin_m: float
     handoff_sample: dict[str, float] | None = None
+    complete: bool = True
 
     @property
     def safe(self) -> bool:
@@ -307,6 +308,7 @@ class BoundedPredictiveChecker:
         time_offset_s: float = 0.0,
         capture_time_s: float | None = None,
         host_deadline_ns: int | None = None,
+        stop_on_definitive_unsafe: bool = False,
     ) -> Assessment:
         from horizon_sim.geometry import convex_hull, hull_polygon, signed_boundary_margin, signed_polygon_clearance
         from horizon_sim.model import Hull, VesselState
@@ -639,6 +641,90 @@ class BoundedPredictiveChecker:
                             - contact_radius
                             - collision_required
                         )
+                        if stop_on_definitive_unsafe and margin < 0.0:
+                            sample = rollout[sample_index]
+                            contact_heading = contact.get("heading_rad")
+                            if contact_heading is None:
+                                contact_heading = (
+                                    math.atan2(float(velocity[1]), float(velocity[0]))
+                                    if any(velocity)
+                                    else 0.0
+                                )
+                            contact_end_state = VesselState(
+                                north_m=contact_end[0],
+                                east_m=contact_end[1],
+                                heading_rad=float(contact_heading),
+                                surge_mps=math.hypot(
+                                    float(velocity[0]), float(velocity[1])
+                                ),
+                            )
+                            contact_hull = Hull(
+                                float(contact["hull"]["length_m"]),
+                                float(contact["hull"]["beam_m"]),
+                            )
+                            contact_start_state = VesselState(
+                                north_m=contact_start[0],
+                                east_m=contact_start[1],
+                                heading_rad=float(contact_heading),
+                                surge_mps=math.hypot(
+                                    float(velocity[0]), float(velocity[1])
+                                ),
+                            )
+                            own_endpoint_polygons = (
+                                hull_polygon(
+                                    _state_from_sample(rollout[previous_fast_index]),
+                                    own_hull,
+                                ),
+                                hull_polygon(_state_from_sample(sample), own_hull),
+                            )
+                            contact_endpoint_polygons = (
+                                hull_polygon(contact_start_state, contact_hull),
+                                hull_polygon(contact_end_state, contact_hull),
+                            )
+                            sample_clearance = min(
+                                signed_polygon_clearance(own_polygon, contact_polygon)
+                                for own_polygon in own_endpoint_polygons
+                                for contact_polygon in contact_endpoint_polygons
+                            )
+                            sample_margin = (
+                                sample_clearance
+                                - own_radius
+                                - current_rate * elapsed
+                                - contact_radius
+                                - collision_required
+                            )
+                            if sample_margin < 0.0:
+                                constraint_id = f"collision:{contact_id}"
+                                record = collision_evidence[constraint_id]
+                                record["assumption_id"] = "+".join(
+                                    item
+                                    for item in (
+                                        collision_assumption,
+                                        own_assumption,
+                                        contact_assumption,
+                                    )
+                                    if item
+                                )
+                                record["minimum_margin"] = sample_margin
+                                minimum_margin = min(minimum_margin, sample_margin)
+                                provisional_reasons = tuple(
+                                    dict.fromkeys((*reasons, "COLLISION_MARGIN_VIOLATION"))
+                                )
+                                provisional_records = tuple(
+                                    (*evidence.values(), *collision_evidence.values())
+                                )
+                                for provisional_record in provisional_records:
+                                    if not math.isfinite(
+                                        float(provisional_record["minimum_margin"])
+                                    ):
+                                        provisional_record["minimum_margin"] = UNKNOWN_MARGIN
+                                return Assessment(
+                                    "unsafe",
+                                    provisional_reasons,
+                                    provisional_records,
+                                    minimum_margin,
+                                    complete=False,
+                                )
                     fast_margin = min(fast_margin, margin)
                     fast_assumption = "+".join(
                         item
@@ -984,28 +1070,32 @@ class BoundedPredictiveChecker:
             for key, item in requested_options.items()
             if "independent-recovery-controller" in key.lower()
         ]
-        best_any: tuple[dict[str, float], dict[str, Any], Assessment] | None = None
+        evaluated: list[tuple[dict[str, float], dict[str, Any], Assessment]] = []
+
+        def deadline_selection() -> RecoverySelection:
+            fallback = {
+                "heading_rad": float(state["heading_rad"]),
+                "speed_mps": min(
+                    1.0,
+                    max(0.0, float(state["velocity_body_mps"][0])),
+                ),
+            }
+            return RecoverySelection(
+                fallback,
+                None,
+                Assessment(
+                    "unknown",
+                    ("PREDICTION_DEADLINE_EXHAUSTED",),
+                    (),
+                    UNKNOWN_MARGIN,
+                ),
+            )
+
         for turn in self.config.recovery_turns_rad:
             direction = "straight" if turn == 0.0 else ("starboard" if turn > 0.0 else "port")
             for speed in self.config.recovery_speeds_mps:
                 if host_deadline_ns is not None and time.monotonic_ns() >= host_deadline_ns:
-                    fallback = {
-                        "heading_rad": float(state["heading_rad"]),
-                        "speed_mps": min(
-                            1.0,
-                            max(0.0, float(state["velocity_body_mps"][0])),
-                        ),
-                    }
-                    return RecoverySelection(
-                        fallback,
-                        None,
-                        Assessment(
-                            "unknown",
-                            ("PREDICTION_DEADLINE_EXHAUSTED",),
-                            (),
-                            UNKNOWN_MARGIN,
-                        ),
-                    )
+                    return deadline_selection()
                 recovery_id = f"finite-{direction}-{round(abs(math.degrees(turn)))}-{speed:g}mps-v1"
                 compatible = [
                     item for key, item in requested_options.items()
@@ -1039,17 +1129,16 @@ class BoundedPredictiveChecker:
                     actuator=actuator,
                     time_offset_s=time_offset_s,
                     host_deadline_ns=host_deadline_ns,
+                    stop_on_definitive_unsafe=True,
                 )
                 item = (command, option, assessment)
-                if best_any is None or assessment.minimum_margin_m > best_any[2].minimum_margin_m:
-                    best_any = item
+                evaluated.append(item)
                 # The library is ordered by the configured recovery preference.
                 # Return the first complete safe continuation to keep execution
                 # bounded; this finite search is intentionally not optimality.
                 if assessment.safe:
                     return RecoverySelection(*item)
-        selected = best_any
-        if selected is None:
+        if not evaluated:
             return RecoverySelection(
                 None,
                 None,
@@ -1060,4 +1149,32 @@ class BoundedPredictiveChecker:
                     UNKNOWN_MARGIN,
                 ),
             )
+
+        # A sampled-pose violation is sufficient to reject a candidate while
+        # searching for the first safe continuation, but its sampled margin is
+        # only an upper bound on the full swept minimum. If the library has no
+        # safe candidate, complete every provisional assessment before ranking
+        # minimum-risk output so selection and evidence remain exact.
+        for index, (command, option, assessment) in enumerate(evaluated):
+            if assessment.complete:
+                continue
+            if host_deadline_ns is not None and time.monotonic_ns() >= host_deadline_ns:
+                return deadline_selection()
+            evaluated[index] = (
+                command,
+                option,
+                self.assess(
+                    governor_input,
+                    command,
+                    horizon_s=self.config.recovery_horizon_s,
+                    ownship=ownship,
+                    actuator=actuator,
+                    time_offset_s=time_offset_s,
+                    host_deadline_ns=host_deadline_ns,
+                ),
+            )
+        selected = evaluated[0]
+        for item in evaluated[1:]:
+            if item[2].minimum_margin_m > selected[2].minimum_margin_m:
+                selected = item
         return RecoverySelection(*selected)
