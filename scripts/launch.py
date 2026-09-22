@@ -844,6 +844,8 @@ def main() -> int:
             "--host", host, "--port", str(ports["collector"]),
             "--simulator-url", f"http://{host}:{ports['simulator']}",
             "--branch", "protected",
+            "--aisstream-config", str(ROOT / "configs/maritime/aisstream-singapore-demo.json"),
+            "--maximum-live-contacts", "50",
         ],
         "fusion": [
             str(ROOT / ".venv/bin/python"), "-m", "horizon_fusion.http_api",
@@ -916,6 +918,7 @@ def main() -> int:
         str(ROOT / "services/fusion"),
         str(ROOT / "services/assurance"),
         str(ROOT / "services/gate"),
+        str(ROOT / "adapters/maritime"),
     ]
     if perception is not None:
         python_paths.extend(

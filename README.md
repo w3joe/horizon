@@ -22,6 +22,14 @@ The stable screenshot states are:
 
 ![Singapore Strait traffic overview](docs/demo/screenshots/singapore-traffic-overview.png)
 
+The **Singapore operations** view combines the Singapore and live traffic views.
+Its source selector offers `Auto`, `Live`, `Recorded`, and `Synthetic`: Auto uses
+the backend AISStream shadow mirror when it is healthy and falls back to the
+repeatable recorded fixture. Live traffic is capped at 50 normalized contacts;
+credentials, raw provider frames, ship names, and MMSI identifiers never cross
+the browser boundary. Start Horizon with `AISSTREAM_API_KEY` in the process
+environment to enable the live source.
+
 *Healthy recorded-mirror overview with the same traffic instant aligned across the 2D map and 3D scene.*
 
 ## Run locally
@@ -42,7 +50,7 @@ create metric contacts or free-space authority.
 ./scripts/launch_cpu.sh
 ```
 
-Open `http://127.0.0.1:5173`. Select **Singapore AIS** for the offline traffic-mirror walkthrough, **Guided demo** for the recorded protected/counterfactual run, or **Live console** for the seven-service stack.
+Open `http://127.0.0.1:5173`. Select **Singapore operations** for live, recorded, and synthetic traffic modes, or **Guided demo** for the recorded protected/counterfactual run. The full service stack continues behind both views.
 
 Run the 296-frame development camera source only when its external data and
 pinned checkpoint are available:
@@ -55,7 +63,7 @@ pinned checkpoint are available:
 See the [live recorded-camera boundary](docs/perception/live-recorded-camera.md)
 for validation, diagnostics, exhaustion, and shutdown behavior.
 
-The console opens in the guided recorded demo when a verified replay is present and keeps the live seven-service console as a separate mode. The recording compares protected and evaluation-only counterfactual branches from one exact paused-reset state, with evidence-linked intervention and post-run outcome panels. See the [Singapore AIS console](docs/demo/singapore-ais-console.md), [guided demo](docs/demo/guided-demo.md), and [backend replay provenance](docs/demo/backend-replay.md).
+The console opens in the guided recorded demo when a verified replay is present and exposes the live traffic path inside Singapore operations. The recording compares protected and evaluation-only counterfactual branches from one exact paused-reset state, with evidence-linked intervention and post-run outcome panels. See the [Singapore AIS console](docs/demo/singapore-ais-console.md), [guided demo](docs/demo/guided-demo.md), and [backend replay provenance](docs/demo/backend-replay.md).
 
 Generate the finite 45-second S22 recording from a clean commit without using paid compute:
 

@@ -25,7 +25,7 @@ PUBLIC_GET_ROUTES = {
     "simulator": frozenset(
         {"/health", "/v1/public/snapshot", "/v1/public/stream", "/v1/reference"}
     ),
-    "collector": frozenset({"/health", "/v1/diagnostics", "/v1/batch"}),
+    "collector": frozenset({"/health", "/v1/diagnostics", "/v1/batch", "/v1/traffic/snapshot"}),
     "fusion": frozenset(
         {"/health", "/v1/diagnostics", "/v1/evidence", "/v1/governor-input"}
     ),

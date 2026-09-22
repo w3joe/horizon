@@ -22,7 +22,7 @@ function HorizonMark() {
 }
 
 export function App() {
-  const [experience, setExperience] = useState<"demo" | "singapore" | "live">(() => {
+  const [experience, setExperience] = useState<"demo" | "singapore">(() => {
     if (new URLSearchParams(window.location.search).get("view") === "singapore") return "singapore";
     return "demo";
   });
@@ -31,10 +31,9 @@ export function App() {
     <>
       <nav className="experience-switcher" aria-label="Console experience">
         <button type="button" aria-pressed={experience === "demo"} onClick={() => setExperience("demo")}>Guided demo</button>
-        <button type="button" aria-pressed={experience === "singapore"} onClick={() => setExperience("singapore")}>Singapore AIS</button>
-        <button type="button" aria-pressed={experience === "live"} onClick={() => setExperience("live")}>Live console</button>
+        <button type="button" aria-pressed={experience === "singapore"} onClick={() => setExperience("singapore")}>Singapore operations</button>
       </nav>
-      {experience === "demo" ? <DemoExperience /> : experience === "singapore" ? <SingaporeTrafficConsole /> : <LiveConsole />}
+      {experience === "demo" ? <DemoExperience /> : <SingaporeTrafficConsole />}
     </>
   );
 }

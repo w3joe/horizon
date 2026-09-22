@@ -1,19 +1,117 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import hashlib
+import hmac
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import re
+import secrets
 import threading
 import time
+from pathlib import Path
 from typing import Any
 from socketserver import TCPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
+from .aisstream_poller import AISStreamClient
 from .store import CollectorStore
+from aisstream import AISStreamConfig
+
+
+class LiveTrafficMirror:
+    """Bounded, read-only AIS mirror with a secret-free browser projection."""
+
+    def __init__(self, config_path: Path, *, maximum_contacts: int = 50):
+        self.maximum_contacts = maximum_contacts
+        self.lock = threading.RLock()
+        self.observations: dict[str, dict[str, Any]] = {}
+        self.stop_event: asyncio.Event | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.thread: threading.Thread | None = None
+        self.identity_salt = secrets.token_bytes(32)
+        self.client = AISStreamClient(
+            AISStreamConfig.load(config_path),
+            run_id="singapore-live-shadow",
+            observation_sink=self._accept,
+        )
+
+    def _accept(self, observation: dict[str, Any]) -> None:
+        payload = observation["payload"]
+        key = str(payload["mmsi"])
+        with self.lock:
+            self.observations[key] = observation
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, name="collector-aisstream", daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        async def runner() -> None:
+            self.loop = asyncio.get_running_loop()
+            self.stop_event = asyncio.Event()
+            await self.client.run_forever(self.stop_event)
+        asyncio.run(runner())
+
+    def stop(self) -> None:
+        if self.loop is not None and self.stop_event is not None:
+            self.loop.call_soon_threadsafe(self.stop_event.set)
+        if self.thread:
+            self.thread.join(timeout=3.0)
+
+    def snapshot(self) -> dict[str, Any]:
+        now_ns = time.monotonic_ns()
+        health = self.client.health(now_ns=now_ns)
+        with self.lock:
+            values = list(self.observations.values())
+        contacts = []
+        for value in values:
+            payload = value["payload"]
+            received_ns = int(value["time"]["received_monotonic_ns"])
+            age_s = max(0.0, (now_ns - received_ns) / 1e9)
+            if age_s > self.client.config.position_ttl_s:
+                continue
+            north_m, east_m = payload["position_ne_m"]
+            hull = payload.get("hull") or {}
+            public_id = hmac.new(
+                self.identity_salt,
+                str(payload["mmsi"]).encode(),
+                hashlib.sha256,
+            ).hexdigest()[:10]
+            contacts.append({
+                "id": f"live-{public_id}",
+                "label": f"AIS CONTACT {public_id[:4].upper()}",
+                "latitude_deg": payload["latitude_deg"],
+                "longitude_deg": payload["longitude_deg"],
+                "north_m": north_m,
+                "east_m": east_m,
+                "heading_rad": payload.get("true_heading_rad") or payload.get("cog_rad") or 0.0,
+                "speed_mps": payload.get("sog_mps") or 0.0,
+                "length_m": hull.get("length_m", 30.0),
+                "beam_m": hull.get("beam_m", 8.0),
+                "age_s": age_s,
+                "uncertainty_m": payload.get("position_sigma_m", 100.0),
+                "conflict": payload.get("conflict_flags", []),
+                "range_from_origin_m": (north_m * north_m + east_m * east_m) ** 0.5,
+            })
+        contacts.sort(key=lambda item: (bool(item["conflict"]) is False, item["range_from_origin_m"], item["id"]))
+        contacts = contacts[: self.maximum_contacts]
+        return {
+            "schema_version": "horizon.live-traffic.v1",
+            "source": "aisstream_live_shadow",
+            "source_state": health["status"],
+            "authority": "read_only_unscored",
+            "reason_codes": health["reason_codes"],
+            "last_frame_age_s": health["last_frame_age_s"],
+            "contact_count": len(contacts),
+            "maximum_contacts": self.maximum_contacts,
+            "contacts": contacts,
+            "boundary": "normalized_display_fields_only",
+        }
 
 
 def _get_json(url: str, timeout_s: float) -> dict[str, Any]:
@@ -100,6 +198,22 @@ class Handler(BaseHTTPRequestHandler):
             value["upstream_error"] = self.server.poller.last_error if self.server.poller else None
             self._json(HTTPStatus.OK, value)
             return
+        if path == "/v1/traffic/snapshot":
+            if self.server.traffic is None:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {
+                    "schema_version": "horizon.live-traffic.v1",
+                    "source": "aisstream_live_shadow",
+                    "source_state": "unavailable",
+                    "authority": "read_only_unscored",
+                    "reason_codes": ["live_source_not_configured"],
+                    "contacts": [],
+                    "contact_count": 0,
+                    "maximum_contacts": 50,
+                    "boundary": "normalized_display_fields_only",
+                })
+            else:
+                self._json(HTTPStatus.OK, self.server.traffic.snapshot())
+            return
         if path == "/v1/batch":
             try:
                 value = self.server.store.batch(
@@ -148,9 +262,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class CollectorServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], store: CollectorStore, poller: SimulatorPoller | None = None):
+    def __init__(self, address: tuple[str, int], store: CollectorStore, poller: SimulatorPoller | None = None, traffic: LiveTrafficMirror | None = None):
         self.store = store
         self.poller = poller
+        self.traffic = traffic
         super().__init__(address, Handler)
 
     def server_bind(self) -> None:
@@ -166,16 +281,25 @@ def main() -> None:
     parser.add_argument("--simulator-url", default="http://127.0.0.1:8100")
     parser.add_argument("--branch", default="protected")
     parser.add_argument("--maximum-records", type=int, default=2048)
+    parser.add_argument("--aisstream-config", type=Path)
+    parser.add_argument("--maximum-live-contacts", type=int, default=50)
     args = parser.parse_args()
     store = CollectorStore(maximum_records=args.maximum_records)
     poller = SimulatorPoller(store, args.simulator_url, args.branch)
-    server = CollectorServer((args.host, args.port), store, poller)
+    traffic = None
+    if args.aisstream_config is not None:
+        traffic = LiveTrafficMirror(args.aisstream_config, maximum_contacts=args.maximum_live_contacts)
+    server = CollectorServer((args.host, args.port), store, poller, traffic)
     poller.start()
+    if traffic is not None:
+        traffic.start()
     try:
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         pass
     finally:
+        if traffic is not None:
+            traffic.stop()
         poller.stop()
         server.server_close()
 

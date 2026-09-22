@@ -27,6 +27,10 @@
 .singapore-clock small { color: var(--sg-muted); font-size: 8px; }
 
 .singapore-state-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 0 clamp(24px, 4vw, 64px); border-bottom: 1px solid var(--sg-line); background: rgba(3, 10, 15, .75); }
+.singapore-source-switch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; padding: 10px clamp(24px, 4vw, 64px); border-bottom: 1px solid var(--sg-line); background: #061017; }
+.singapore-source-switch button { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 38px; padding: 0 12px; border: 1px solid var(--sg-line); color: var(--sg-muted); background: var(--sg-panel); text-transform: uppercase; }
+.singapore-source-switch button strong { font: 700 9px ui-monospace, SFMono-Regular, Menlo, monospace; }.singapore-source-switch button small { font-size: 8px; }
+.singapore-source-switch button[aria-pressed="true"] { color: var(--sg-cyan); border-color: rgba(76,225,222,.45); background: rgba(76,225,222,.07); }
 .singapore-state-switch button { min-height: 64px; display: grid; grid-template-columns: 30px auto 1fr; align-items: center; gap: 10px; padding: 0 18px; border: 0; border-right: 1px solid var(--sg-line); color: #6f878d; background: transparent; text-align: left; }
 .singapore-state-switch button:first-child { border-left: 1px solid var(--sg-line); }
 .singapore-state-switch button > span { font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -96,7 +100,7 @@
 
 @media (max-width: 680px) {
   .singapore-header { align-items: flex-start; flex-direction: column; }.singapore-clock { justify-items: start; padding-right: 0; }
-  .singapore-state-switch { grid-template-columns: 1fr; }.singapore-state-switch button { border-left: 1px solid var(--sg-line); }
+  .singapore-state-switch { grid-template-columns: 1fr; }.singapore-state-switch button { border-left: 1px solid var(--sg-line); }.singapore-source-switch { grid-template-columns: 1fr 1fr; }
   .source-state-strip { grid-template-columns: 1fr; }.source-state-strip ol { grid-column: 1; grid-row: auto; }.source-boundary { padding: 12px 0 0; border-top: 1px solid var(--sg-line); border-left: 0; }
   .singapore-map, .singapore-scene { height: 360px; }.branch-cards { grid-template-columns: 1fr; }.map-attribution span { display: none; }.singapore-footer { align-items: flex-start; flex-direction: column; }
 }

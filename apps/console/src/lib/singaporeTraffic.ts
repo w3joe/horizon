@@ -25,6 +25,7 @@ export interface SingaporeContact {
   conflict: string[];
   cpa_m: number;
   tcpa_s: number;
+  range_from_origin_m?: number;
   role: "protected_simulation" | "shadow_only";
 }
 

@@ -16,7 +16,7 @@ def load_traffic() -> dict:
     return json.loads(TRAFFIC_FIXTURE.read_text(encoding="utf-8"))
 
 
-def test_offline_fixture_and_geography_are_self_contained() -> None:
+def test_recorded_fallback_and_geography_are_self_contained() -> None:
     traffic = load_traffic()
     geography = json.loads(GEOGRAPHY_FIXTURE.read_text(encoding="utf-8"))
 
@@ -34,7 +34,7 @@ def test_offline_fixture_and_geography_are_self_contained() -> None:
             "styles/singapore.css",
         )
     )
-    assert "fetch(" not in implementation
+    assert 'fetch("/api/collector/v1/traffic/snapshot"' in implementation
     assert "WebSocket" not in implementation
     assert "tile.openstreetmap" not in implementation
 
@@ -71,6 +71,7 @@ def test_console_source_contains_no_provider_connection_or_secret_shape() -> Non
         "AISSTREAM_API_KEY",
         '"APIKey"',
         '"MetaData"',
+        '"mmsi"',
     )
     for token in forbidden:
         assert token not in source

@@ -22,6 +22,14 @@ from console_proxy import (  # noqa: E402
 )
 
 
+def test_live_traffic_proxy_route_is_narrowly_allowlisted() -> None:
+    assert resolve_public_route("/api/collector/v1/traffic/snapshot") == (
+        "collector",
+        "/v1/traffic/snapshot",
+    )
+    assert resolve_public_route("/api/collector/v1/traffic/raw") is None
+
+
 def _demo_fixture(root: Path, run_id: str = "unsafe-route-v1") -> tuple[Path, dict, dict]:
     directory = root / run_id
     directory.mkdir(parents=True)

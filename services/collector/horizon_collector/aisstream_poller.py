@@ -151,9 +151,11 @@ class AISStreamClient:
                 )
                 self.diagnostics.frames_received += 1
                 self.diagnostics.last_frame_monotonic_ns = received_ns
+                if isinstance(value, str):
+                    value = value.encode("utf-8", "strict")
                 if not isinstance(value, bytes):
                     self.diagnostics.rejected += 1
-                    self.diagnostics.last_error_category = "text_frame_protocol_drift"
+                    self.diagnostics.last_error_category = "invalid_websocket_frame"
                     continue
                 self._enqueue(value, received_ns, receiver_utc)
                 worker_wake.set()
@@ -342,6 +344,8 @@ class AISStreamClient:
 
     async def connect_once(self) -> None:
         """Open the real backend WSS transport; never called by tests or default launch."""
+        # Fail before opening a socket when the deployment did not inject a key.
+        self.subscription_message()
         try:
             from websockets.asyncio.client import connect
         except ImportError as exc:  # pragma: no cover - depends on optional installation

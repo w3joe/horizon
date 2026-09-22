@@ -20,6 +20,7 @@ from aisstream import (
     wgs84_to_ned,
 )
 from horizon_collector.aisstream_poller import AISStreamClient
+from horizon_collector.http_api import LiveTrafficMirror
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -364,3 +365,29 @@ def test_reconnect_loop_uses_bounded_retry_and_stops_cleanly(config: AISStreamCo
     asyncio.run(client.run_forever(stop, session=session))
     assert calls == 2
     assert client.diagnostics.reconnect_count == 1
+
+
+def test_live_traffic_projection_is_bounded_hashed_and_secret_free(config: AISStreamConfig) -> None:
+    mirror = LiveTrafficMirror(CONFIG, maximum_contacts=1)
+    now = mirror.client.monotonic_ns()
+    entry = AISTrackCache(config).update(
+        normalize_frame(parse_frame(provider_frame("PositionReport", dynamic_body())), config),
+        received_monotonic_ns=now,
+        receiver_utc="2026-09-22T12:00:00Z",
+        connection_epoch=1,
+        sequence=1,
+    )
+    assert entry is not None
+    from aisstream import observation_from_track
+    mirror._accept(observation_from_track(entry, run_id="live", branch_id="protected", event_time_s=0.0, valid_until_monotonic_ns=now + 30_000_000_000))
+    mirror.client.diagnostics.confirmation_state = "confirmed"
+    mirror.client.diagnostics.connection_state = "connected"
+    mirror.client.diagnostics.last_frame_monotonic_ns = now
+    mirror.client.diagnostics.last_valid_position_monotonic_ns = now
+    snapshot = mirror.snapshot()
+    encoded = json.dumps(snapshot)
+    assert snapshot["contact_count"] == 1
+    assert snapshot["contacts"][0]["id"].startswith("live-")
+    assert "000000001" not in encoded
+    assert "APIKey" not in encoded
+    assert "source_frame_sha256" not in encoded
