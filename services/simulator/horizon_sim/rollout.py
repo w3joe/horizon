@@ -113,6 +113,68 @@ def rollout_values_from_estimate(
     return output
 
 
+def rollout_sparse_values_from_estimate(
+    estimated_ownship: dict[str, Any],
+    command: dict[str, Any],
+    *,
+    actuator_capability: dict[str, Any],
+    horizon_s: float,
+    sample_stride_steps: int,
+    environment: Environment | None = None,
+    parameters: PlantParameters | None = None,
+) -> list[RolloutValueSample]:
+    """Integrate every exact step while retaining a sparse sample sequence.
+
+    The first and final states are always retained. Intermediate states are
+    retained at positive multiples of ``sample_stride_steps``. This preserves
+    the authoritative scalar integration path while bounding allocations for
+    coarse, conservative predictive probes.
+    """
+    if type(sample_stride_steps) is not int or sample_stride_steps < 1:
+        raise ValueError("sample_stride_steps must be a positive integer")
+    state, integrate, steps, fixed_step_s = _prepare_rollout(
+        estimated_ownship,
+        command,
+        actuator_capability,
+        horizon_s,
+        environment,
+        parameters,
+    )
+    output: list[RolloutValueSample] = [
+        (
+            0.0,
+            state[0],
+            state[1],
+            state[2],
+            state[3],
+            state[4],
+            state[5],
+            state[6],
+            state[7],
+        )
+    ]
+    next_sample_index = sample_stride_steps
+    for index in range(1, steps + 1):
+        state = integrate(*state)
+        if index == next_sample_index or index == steps:
+            output.append(
+                (
+                    index * fixed_step_s,
+                    state[0],
+                    state[1],
+                    state[2],
+                    state[3],
+                    state[4],
+                    state[5],
+                    state[6],
+                    state[7],
+                )
+            )
+        if index == next_sample_index:
+            next_sample_index += sample_stride_steps
+    return output
+
+
 def rollout_from_estimate(
     estimated_ownship: dict[str, Any],
     command: dict[str, Any],

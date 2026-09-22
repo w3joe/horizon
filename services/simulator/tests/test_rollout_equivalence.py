@@ -7,6 +7,7 @@ import math
 import random
 
 import horizon_sim.rollout as rollout_module
+import pytest
 from horizon_sim.model import (
     Environment,
     PlantParameters,
@@ -372,3 +373,119 @@ def test_compact_rollout_positions_are_stable_and_prepares_once(monkeypatch) -> 
     assert first[rollout_module.ROLLOUT_YAW_RATE_RPS] == -0.01
     assert first[rollout_module.ROLLOUT_RUDDER_RAD] == 0.0
     assert first[rollout_module.ROLLOUT_THRUST_FRACTION] == 0.5
+
+
+def test_sparse_rollout_is_bit_exact_at_stride_and_nondivisible_final_step() -> None:
+    estimated = {
+        "position_ne_m": [12.0, -8.0],
+        "heading_rad": 2.8,
+        "velocity_body_mps": [5.4, -0.2],
+        "yaw_rate_rps": 0.08,
+    }
+    command = {"heading_rad": -2.7, "speed_mps": 1.3}
+    actuator = {"rudder_rad": 0.17, "thrust_fraction": 0.7}
+    environment = Environment(0.31, -0.22, 430.0, -180.0, -90.0, 70.0)
+    parameters = replace(PlantParameters(), fixed_step_s=0.02)
+    full = rollout_module.rollout_values_from_estimate(
+        estimated,
+        command,
+        actuator_capability=actuator,
+        horizon_s=0.16,
+        environment=environment,
+        parameters=parameters,
+    )
+
+    sparse = rollout_module.rollout_sparse_values_from_estimate(
+        estimated,
+        command,
+        actuator_capability=actuator,
+        horizon_s=0.16,
+        sample_stride_steps=3,
+        environment=environment,
+        parameters=parameters,
+    )
+
+    assert sparse == [full[index] for index in (0, 3, 6, 8)]
+
+
+def test_sparse_rollout_stride_one_and_stride_past_horizon() -> None:
+    estimated = {
+        "position_ne_m": [0.0, 0.0],
+        "heading_rad": 0.0,
+        "velocity_body_mps": [4.0, 0.0],
+        "yaw_rate_rps": 0.0,
+    }
+    command = {"heading_rad": 0.4, "speed_mps": 2.0}
+    actuator = {"rudder_rad": 0.0, "thrust_fraction": 0.5}
+    arguments = {
+        "actuator_capability": actuator,
+        "horizon_s": 0.2,
+    }
+    full = rollout_module.rollout_values_from_estimate(estimated, command, **arguments)
+
+    assert rollout_module.rollout_sparse_values_from_estimate(
+        estimated,
+        command,
+        sample_stride_steps=1,
+        **arguments,
+    ) == full
+    assert rollout_module.rollout_sparse_values_from_estimate(
+        estimated,
+        command,
+        sample_stride_steps=100,
+        **arguments,
+    ) == [full[0], full[-1]]
+
+
+def test_sparse_rollout_integrates_every_step_without_retaining_every_step(monkeypatch) -> None:
+    step_calls = 0
+    actual_prepare = rollout_module.prepare_value_integrator
+
+    def counted_prepare(*args, **kwargs):
+        actual_step = actual_prepare(*args, **kwargs)
+
+        def counted_step(*values):
+            nonlocal step_calls
+            step_calls += 1
+            return actual_step(*values)
+
+        return counted_step
+
+    monkeypatch.setattr(rollout_module, "prepare_value_integrator", counted_prepare)
+    result = rollout_module.rollout_sparse_values_from_estimate(
+        {
+            "position_ne_m": [0.0, 0.0],
+            "heading_rad": 0.0,
+            "velocity_body_mps": [4.0, 0.0],
+            "yaw_rate_rps": 0.0,
+        },
+        {"heading_rad": 0.4, "speed_mps": 2.0},
+        actuator_capability={"rudder_rad": 0.0, "thrust_fraction": 0.5},
+        horizon_s=0.2,
+        sample_stride_steps=4,
+    )
+
+    assert step_calls == 10
+    assert [sample[rollout_module.ROLLOUT_TIME_S] for sample in result] == [
+        0.0,
+        0.08,
+        0.16,
+        0.2,
+    ]
+
+
+@pytest.mark.parametrize("stride", [0, -1, 1.5, True])
+def test_sparse_rollout_rejects_invalid_stride(stride) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        rollout_module.rollout_sparse_values_from_estimate(
+            {
+                "position_ne_m": [0.0, 0.0],
+                "heading_rad": 0.0,
+                "velocity_body_mps": [4.0, 0.0],
+                "yaw_rate_rps": 0.0,
+            },
+            {"heading_rad": 0.0, "speed_mps": 2.0},
+            actuator_capability={"rudder_rad": 0.0, "thrust_fraction": 0.5},
+            horizon_s=0.2,
+            sample_stride_steps=stride,
+        )
