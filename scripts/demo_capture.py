@@ -448,7 +448,15 @@ def capture_replay(
                 )
                 return payload if status == 200 else None
 
-            initial_evidence = wait_for(latest_evidence, timeout_s=15.0)
+            try:
+                initial_evidence = wait_for(latest_evidence, timeout_s=15.0)
+            except AssertionError as exc:
+                if marine_config is not None:
+                    raise RuntimeError(
+                        "selected marine configuration did not produce accepted assurance "
+                        "evidence; configured marine modes remain assurance-unqualified"
+                    ) from exc
+                raise
             initial_decision = initial_evidence.get("decision", {})
             if initial_decision.get("candidate_id") != candidate_id:
                 raise RuntimeError("assurance evidence candidate does not match capture selection")
