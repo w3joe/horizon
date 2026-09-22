@@ -23,6 +23,14 @@ from .core import ActuatorGate, HTTPPlantClient
 
 
 MAX_BODY_BYTES = 2_000_000
+RECOVERY_POLL_PERIOD_NS = 50_000_000
+
+
+def _remaining_recovery_poll_wait_s(started_ns: int, completed_ns: int) -> float:
+    """Keep recovery attempts on a bounded 20 Hz start-to-start cadence."""
+
+    elapsed_ns = max(0, completed_ns - started_ns)
+    return max(0, RECOVERY_POLL_PERIOD_NS - elapsed_ns) / 1e9
 
 
 def _write_secret(path: str, value: str) -> None:
@@ -146,7 +154,9 @@ class GateRuntime:
                     last_reason_codes=[type(exc).__name__],
                     last_elapsed_ns=time.monotonic_ns() - started,
                 )
-            self.stop_event.wait(0.05)
+            self.stop_event.wait(
+                _remaining_recovery_poll_wait_s(started, time.monotonic_ns())
+            )
 
     def reset(self, operator_token: str) -> bool:
         try:

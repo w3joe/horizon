@@ -23,7 +23,13 @@ from horizon_gate.core import (
     StoredRecovery,
     _NoDelayHTTPConnection,
 )
-from horizon_gate.http_api import GateHTTPServer, GateHandler, GateRuntime
+from horizon_gate.http_api import (
+    RECOVERY_POLL_PERIOD_NS,
+    GateHTTPServer,
+    GateHandler,
+    GateRuntime,
+    _remaining_recovery_poll_wait_s,
+)
 from horizon_sim.clock import ManualMonotonicClock
 
 
@@ -318,6 +324,49 @@ def test_gate_poller_refreshes_recovery_without_any_decision_ai_process(
         fusion.shutdown()
         fusion.server_close()
         fusion_thread.join(timeout=1.0)
+
+
+@pytest.mark.parametrize(
+    ("elapsed_ns", "expected_wait_s"),
+    [
+        (0, 0.05),
+        (12_000_000, 0.038),
+        (38_000_000, 0.012),
+        (RECOVERY_POLL_PERIOD_NS, 0.0),
+        (71_000_000, 0.0),
+    ],
+)
+def test_recovery_poll_wait_uses_start_to_start_cadence(
+    elapsed_ns, expected_wait_s
+) -> None:
+    started_ns = 7_000_000_000
+    assert _remaining_recovery_poll_wait_s(
+        started_ns, started_ns + elapsed_ns
+    ) == pytest.approx(expected_wait_s)
+
+
+def test_start_to_start_cadence_refreshes_before_prior_certificate_expiry() -> None:
+    """Validation work consumes the period instead of opening a certificate gap."""
+
+    validation_ns = 34_000_000
+    certificate_remaining_at_completion_ns = 56_000_000
+    first_started_ns = 0
+    first_completed_ns = first_started_ns + validation_ns
+    first_certificate_expiry_ns = (
+        first_completed_ns + certificate_remaining_at_completion_ns
+    )
+
+    next_started_ns = first_completed_ns + round(
+        _remaining_recovery_poll_wait_s(first_started_ns, first_completed_ns) * 1e9
+    )
+    next_completed_ns = next_started_ns + validation_ns
+
+    assert next_started_ns == RECOVERY_POLL_PERIOD_NS
+    assert next_completed_ns < first_certificate_expiry_ns
+    # A fixed post-completion wait would leave the prior certificate expired
+    # before the replacement validation completes.
+    fixed_wait_completion_ns = first_completed_ns + RECOVERY_POLL_PERIOD_NS + validation_ns
+    assert fixed_wait_completion_ns > first_certificate_expiry_ns
 
 
 def test_recovery_refresh_http_route_rejects_decision_capability(
