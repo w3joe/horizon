@@ -7,6 +7,7 @@ import hmac
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import re
 import secrets
 import threading
@@ -287,7 +288,7 @@ def main() -> None:
     store = CollectorStore(maximum_records=args.maximum_records)
     poller = SimulatorPoller(store, args.simulator_url, args.branch)
     traffic = None
-    if args.aisstream_config is not None:
+    if args.aisstream_config is not None and os.environ.get("AISSTREAM_API_KEY"):
         traffic = LiveTrafficMirror(args.aisstream_config, maximum_contacts=args.maximum_live_contacts)
     server = CollectorServer((args.host, args.port), store, poller, traffic)
     poller.start()
