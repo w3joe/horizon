@@ -265,6 +265,67 @@ def test_failed_box_proof_falls_back_without_changing_safe_result(
     assert box_collision["minimum_margin"] <= convex_collision["minimum_margin"]
 
 
+def test_partial_contact_certificates_skip_only_proven_safe_chunks(
+    reference, governor_input, monkeypatch
+) -> None:
+    from horizon_assurance import predictive
+    from horizon_sim import geometry
+
+    message = copy.deepcopy(governor_input)
+    message["snapshot"]["contacts"][0]["position_ne_m"] = [180.0, -80.0]
+
+    original_box_clearance = predictive._axis_aligned_sweep_clearance
+    original_clearance = geometry.signed_polygon_clearance
+    detailed_calls = 0
+    forced_chunk_ends = (10.0, 20.0, 30.0)
+
+    def partial_box_clearance(centers, contact_start, contact_end):
+        if any(
+            math.isclose(centers[-1]["time_s"], target, abs_tol=1e-12)
+            for target in forced_chunk_ends
+        ):
+            return -1.0e9
+        return original_box_clearance(centers, contact_start, contact_end)
+
+    def partial_clearance(first, second):
+        nonlocal detailed_calls
+        if len(second) == 2:
+            return -1.0e9
+        detailed_calls += 1
+        return original_clearance(first, second)
+
+    monkeypatch.setattr(
+        predictive, "_axis_aligned_sweep_clearance", partial_box_clearance
+    )
+    monkeypatch.setattr(geometry, "signed_polygon_clearance", partial_clearance)
+    partial = BoundedPredictiveChecker(reference).recovery_from_current(message)
+
+    # Index zero has no preceding chunk certificate; the other detailed calls
+    # are exactly the three deliberately unresolved chunks.
+    assert detailed_calls == 1 + len(forced_chunk_ends)
+
+    forced_detailed_calls = 0
+
+    def forced_clearance(first, second):
+        nonlocal forced_detailed_calls
+        if len(second) == 2:
+            return -1.0e9
+        forced_detailed_calls += 1
+        return original_clearance(first, second)
+
+    monkeypatch.setattr(
+        predictive, "_axis_aligned_sweep_clearance", lambda *_: -1.0e9
+    )
+    monkeypatch.setattr(geometry, "signed_polygon_clearance", forced_clearance)
+    forced = BoundedPredictiveChecker(reference).recovery_from_current(message)
+
+    assert forced_detailed_calls == 31
+    assert partial.command == forced.command
+    assert partial.option == forced.option
+    assert partial.assessment.status == forced.assessment.status
+    assert partial.assessment.reason_codes == forced.assessment.reason_codes
+
+
 def test_a3_collision_envelope_never_returns_unqualified_pass(reference, governor_input) -> None:
     message = copy.deepcopy(governor_input)
     message["snapshot"]["contacts"][0]["position_ne_m"] = [18.0, 0.0]

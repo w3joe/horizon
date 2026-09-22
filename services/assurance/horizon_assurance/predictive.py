@@ -538,6 +538,7 @@ class BoundedPredictiveChecker:
         # conservative than the full rectangular-hull calculation.  A
         # negative or incomplete proof falls through to the detailed check.
         certified_contact_ids: set[str] = set()
+        contact_chunk_certificates: dict[tuple[str, int], tuple[float, str]] = {}
         if len(sample_indexes) > 1:
             for contact in snapshot["contacts"]:
                 contact_id = str(contact["contact_id"])
@@ -650,16 +651,20 @@ class BoundedPredictiveChecker:
                     )
                     if not math.isfinite(margin) or margin < 0.0:
                         complete = False
-                        break
+                    else:
+                        contact_chunk_certificates[(contact_id, sample_index)] = (
+                            margin,
+                            fast_assumption,
+                        )
+                        constraint_id = f"collision:{contact_id}"
+                        record = collision_evidence[constraint_id]
+                        record["assumption_id"] = fast_assumption
+                        record["minimum_margin"] = min(
+                            float(record["minimum_margin"]), margin
+                        )
+                        minimum_margin = min(minimum_margin, margin)
                     previous_fast_index = sample_index
                 if complete and math.isfinite(fast_margin):
-                    constraint_id = f"collision:{contact_id}"
-                    record = collision_evidence[constraint_id]
-                    record["assumption_id"] = fast_assumption
-                    record["minimum_margin"] = min(
-                        float(record["minimum_margin"]), fast_margin
-                    )
-                    minimum_margin = min(minimum_margin, fast_margin)
                     certified_contact_ids.add(contact_id)
             active_contact_ids.difference_update(certified_contact_ids)
 
@@ -671,6 +676,19 @@ class BoundedPredictiveChecker:
                 reasons.append("PREDICTION_DEADLINE_EXHAUSTED")
                 deadline_exhausted = True
                 break
+            unresolved_contact_in_chunk = any(
+                str(contact["contact_id"]) in active_contact_ids
+                and (str(contact["contact_id"]), sample_index)
+                not in contact_chunk_certificates
+                for contact in snapshot["contacts"]
+            )
+            if not (
+                active_boundary_ids
+                or active_depth_ids
+                or unresolved_contact_in_chunk
+            ):
+                previous_index = sample_index
+                continue
             sample = rollout[sample_index]
             elapsed = time_offset_s + sample["time_s"]
             own_radius, own_assumption = _bounded_radius(
@@ -756,6 +774,8 @@ class BoundedPredictiveChecker:
                     break
                 contact_id = str(contact["contact_id"])
                 if contact_id not in active_contact_ids:
+                    continue
+                if (contact_id, sample_index) in contact_chunk_certificates:
                     continue
                 velocity = contact["velocity_ne_mps"]
                 contact_position = contact["position_ne_m"]
