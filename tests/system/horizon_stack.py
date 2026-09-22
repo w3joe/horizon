@@ -76,6 +76,40 @@ def wait_for(
     raise AssertionError(f"condition was not met within {timeout_s:.1f}s; last={last!r}")
 
 
+def is_fully_joined_evidence(payload: dict[str, Any]) -> bool:
+    """Return whether evidence describes one accepted, exactly actuated chain."""
+    governor = payload.get("governor_input")
+    decision = payload.get("decision")
+    receipt = payload.get("receipt")
+    if not all(isinstance(item, dict) for item in (governor, decision, receipt)):
+        return False
+    snapshot = governor.get("snapshot")
+    proposal = governor.get("proposal")
+    if not isinstance(snapshot, dict) or not isinstance(proposal, dict):
+        return False
+
+    return (
+        governor.get("run_id")
+        == proposal.get("run_id")
+        == decision.get("run_id")
+        == receipt.get("run_id")
+        and governor.get("branch_id")
+        == proposal.get("branch_id")
+        == decision.get("branch_id")
+        == receipt.get("branch_id")
+        and governor.get("episode_id") == decision.get("episode_id")
+        and governor.get("tick_index") == decision.get("tick_index")
+        and proposal.get("origin_snapshot_id") == snapshot.get("snapshot_id")
+        and decision.get("input_snapshot_id") == snapshot.get("snapshot_id")
+        and decision.get("proposal_id") == proposal.get("command_id")
+        and receipt.get("decision_id") == decision.get("decision_id")
+        and decision.get("valid") is True
+        and decision.get("deadline_met") is True
+        and receipt.get("accepted") is True
+        and receipt.get("actual_command") == decision.get("issued_command")
+    )
+
+
 @dataclass
 class ManagedProcess:
     name: str
@@ -270,11 +304,7 @@ class HorizonStack:
             status, payload, _ = request_json(
                 self.url("assurance", "/v1/evidence/latest"), timeout_s=0.7
             )
-            if (
-                status == 200
-                and payload.get("decision", {}).get("deadline_met") is True
-                and payload.get("receipt", {}).get("accepted") is True
-            ):
+            if status == 200 and is_fully_joined_evidence(payload):
                 return payload
             return None
 
@@ -462,9 +492,11 @@ class HorizonStack:
             )
         self._start_process("assurance", assurance)
         if self.synchronize_startup:
+            # Paused observations have short host-time validity. Resume only
+            # after every service is healthy, then require a fresh joined pass.
+            self.resume_simulation()
             if self.assurance_loop:
                 self.startup_evidence = self._wait_assurance_evidence()
-            self.resume_simulation()
         return self
 
     def stop_process(self, name: str) -> None:
