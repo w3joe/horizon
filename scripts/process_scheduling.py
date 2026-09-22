@@ -14,7 +14,6 @@ from typing import Callable, Sequence
 
 
 ISOLATION_MODES = ("off", "best-effort", "required")
-OTHER_SERVICE_NICE_ADJUSTMENT = 5
 
 
 class SchedulingIsolationError(RuntimeError):
@@ -29,7 +28,6 @@ class ProcessSchedulingPlan:
     gate_cpu: int | None = None
     service_cpus: tuple[int, ...] = ()
     taskset_path: str | None = None
-    nice_path: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -50,14 +48,10 @@ class ProcessSchedulingPlan:
                 str(self.gate_cpu),
                 *original,
             ]
-        assert self.nice_path is not None
         return [
             self.taskset_path,
             "--cpu-list",
             ",".join(str(cpu) for cpu in self.service_cpus),
-            self.nice_path,
-            "-n",
-            str(OTHER_SERVICE_NICE_ADJUSTMENT),
             *original,
         ]
 
@@ -66,12 +60,10 @@ class ProcessSchedulingPlan:
             "requested_mode": self.requested_mode,
             "status": self.status,
             "reason": self.reason,
-            "mechanism": "linux-taskset-and-nice" if self.enabled else None,
+            "mechanism": "linux-taskset-affinity" if self.enabled else None,
             "gate_process_cpu": self.gate_cpu,
             "other_service_cpus": list(self.service_cpus),
-            "other_service_nice_adjustment": (
-                OTHER_SERVICE_NICE_ADJUSTMENT if self.enabled else None
-            ),
+            "service_priority_policy": "inherited_default",
             "hard_realtime": False,
             "operating_system_cpu_exclusive": False,
         }
@@ -83,7 +75,6 @@ class ProcessSchedulingPlan:
             return {"status": "not_applied", "reason": self.reason}
         try:
             observed_cpus = tuple(sorted(os.sched_getaffinity(pid)))
-            observed_nice = os.getpriority(os.PRIO_PROCESS, pid)
         except (AttributeError, OSError) as exc:
             raise SchedulingIsolationError(
                 f"could not verify scheduling for {service}: {type(exc).__name__}"
@@ -99,8 +90,7 @@ class ProcessSchedulingPlan:
         return {
             "status": "verified",
             "cpu_affinity": list(observed_cpus),
-            "nice": observed_nice,
-            "relative_priority": "gate" if service == "gate" else "lower_than_gate_requested",
+            "priority_policy": "inherited_default",
         }
 
 
@@ -139,10 +129,12 @@ def build_process_scheduling_plan(
     if len(ordered) < 2:
         return _unavailable(mode, "insufficient_cpus", "at_least_two_allowed_cpus_required")
     taskset_path = find_executable("taskset")
-    nice_path = find_executable("nice")
-    if taskset_path is None or nice_path is None:
-        missing = "taskset" if taskset_path is None else "nice"
-        return _unavailable(mode, "missing_tool", f"required_executable_missing:{missing}")
+    if taskset_path is None:
+        return _unavailable(
+            mode,
+            "missing_tool",
+            "required_executable_missing:taskset",
+        )
     gate_cpu = ordered[-1]
     return ProcessSchedulingPlan(
         requested_mode=mode,
@@ -151,5 +143,4 @@ def build_process_scheduling_plan(
         gate_cpu=gate_cpu,
         service_cpus=ordered[:-1],
         taskset_path=taskset_path,
-        nice_path=nice_path,
     )

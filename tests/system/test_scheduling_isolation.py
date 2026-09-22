@@ -12,7 +12,7 @@ from .horizon_stack import HorizonStack
     sys.platform != "linux" or os.environ.get("HORIZON_GATE_CPU_ISOLATION") != "required",
     reason="CI exercises required Linux gate CPU isolation",
 )
-def test_gate_process_has_separate_cpu_and_higher_relative_priority(tmp_path) -> None:
+def test_gate_process_has_separate_cpu_without_priority_change(tmp_path) -> None:
     stack = HorizonStack(tmp_path, scenario="normal_transit.json", assurance_loop=False)
     try:
         stack.start()
@@ -21,14 +21,12 @@ def test_gate_process_has_separate_cpu_and_higher_relative_priority(tmp_path) ->
         assert gate["status"] == "verified"
         assert gate["cpu_affinity"] == [stack.scheduling.gate_cpu]
 
-        other_nice = []
         for name, observed in stack.process_scheduling.items():
             if name == "gate":
                 continue
             assert observed["status"] == "verified"
             assert observed["cpu_affinity"] == list(stack.scheduling.service_cpus)
-            other_nice.append(int(observed["nice"]))
-        assert other_nice
-        assert all(value > int(gate["nice"]) for value in other_nice)
+            assert observed["priority_policy"] == "inherited_default"
+        assert gate["priority_policy"] == "inherited_default"
     finally:
         stack.close()

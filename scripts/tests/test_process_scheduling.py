@@ -31,20 +31,27 @@ def test_disabled_plan_does_not_inspect_or_wrap_host() -> None:
         "mechanism": None,
         "gate_process_cpu": None,
         "other_service_cpus": [],
-        "other_service_nice_adjustment": None,
+        "service_priority_policy": "inherited_default",
         "hard_realtime": False,
         "operating_system_cpu_exclusive": False,
     }
 
 
-def test_linux_plan_reserves_one_process_cpu_and_lowers_other_services() -> None:
+def test_linux_plan_partitions_gate_from_other_services_without_priority_change() -> None:
+    requested_tools = []
+
+    def find_tool(name):
+        requested_tools.append(name)
+        return _tools(name)
+
     plan = scheduling.build_process_scheduling_plan(
         "required",
         platform="linux",
         allowed_cpus={7, 3, 5},
-        find_executable=_tools,
+        find_executable=find_tool,
     )
 
+    assert requested_tools == ["taskset"]
     assert plan.gate_cpu == 7
     assert plan.service_cpus == (3, 5)
     assert plan.command("gate", ["python", "gate.py"]) == [
@@ -58,9 +65,6 @@ def test_linux_plan_reserves_one_process_cpu_and_lowers_other_services() -> None
         "/usr/bin/taskset",
         "--cpu-list",
         "3,5",
-        "/usr/bin/nice",
-        "-n",
-        "5",
         "python",
         "fusion.py",
     ]
@@ -116,13 +120,10 @@ def test_observed_affinity_must_match_declared_partition(monkeypatch) -> None:
         find_executable=_tools,
     )
     monkeypatch.setattr(scheduling.os, "sched_getaffinity", lambda pid: {4}, raising=False)
-    monkeypatch.setattr(scheduling.os, "getpriority", lambda which, pid: 0)
-
     assert plan.observe_process("gate", 42) == {
         "status": "verified",
         "cpu_affinity": [4],
-        "nice": 0,
-        "relative_priority": "gate",
+        "priority_policy": "inherited_default",
     }
     with pytest.raises(scheduling.SchedulingIsolationError, match="affinity mismatch"):
         plan.observe_process("fusion", 43)

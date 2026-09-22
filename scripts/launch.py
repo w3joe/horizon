@@ -610,7 +610,7 @@ def main() -> int:
         default=os.environ.get("HORIZON_GATE_CPU_ISOLATION", "off"),
         help=(
             "Linux child-process affinity policy: reserve one allowed CPU for the gate, "
-            "confine and lower the priority of other services; this is not hard real time"
+            "and confine other services to the remaining CPUs; this is not hard real time"
         ),
     )
     args = parser.parse_args()
