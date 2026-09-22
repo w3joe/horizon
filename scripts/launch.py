@@ -534,6 +534,89 @@ def verify_operator_reset(host: str, ports: dict[str, int]) -> dict[str, object]
     }
 
 
+def _joined_actuated_chain(
+    response_snapshot: dict[str, object],
+    gate_telemetry: dict[str, object],
+    assurance_telemetry: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]] | None:
+    """Find one fully joined accepted receipt observed after its input tick."""
+
+    gate_receipts = gate_telemetry.get("receipts", [])
+    events = assurance_telemetry.get("control_events", [])
+    if not isinstance(gate_receipts, list) or not isinstance(events, list):
+        return None
+    try:
+        response_tick = int(response_snapshot.get("tick_index", -1))
+    except (TypeError, ValueError):
+        return None
+
+    for gate_receipt in reversed(gate_receipts):
+        if (
+            not isinstance(gate_receipt, dict)
+            or gate_receipt.get("accepted") is not True
+            or gate_receipt.get("authority") == "gate_watchdog"
+            or not isinstance(gate_receipt.get("receipt_id"), str)
+            or not isinstance(gate_receipt.get("command_id"), str)
+            or not isinstance(gate_receipt.get("actuated_monotonic_ns"), int)
+            or not isinstance(gate_receipt.get("actual_command"), dict)
+        ):
+            continue
+        matching_event = next(
+            (
+                item
+                for item in reversed(events)
+                if isinstance(item, dict)
+                and item.get("event_type") == "decision_receipt"
+                and item.get("receipt") == gate_receipt
+            ),
+            None,
+        )
+        if matching_event is None:
+            continue
+        accepted_input = matching_event.get("input", matching_event.get("input_summary", {}))
+        decision = matching_event.get("decision", {})
+        event_receipt = matching_event.get("receipt", {})
+        if not all(isinstance(item, dict) for item in (accepted_input, decision, event_receipt)):
+            continue
+        input_snapshot = accepted_input.get("snapshot", {})
+        input_snapshot_id = (
+            input_snapshot.get("snapshot_id")
+            if isinstance(input_snapshot, dict)
+            else None
+        ) or accepted_input.get("snapshot_id")
+        proposal = accepted_input.get("proposal", {})
+        try:
+            input_tick = int(accepted_input.get("tick_index", -1))
+        except (TypeError, ValueError):
+            continue
+        if (
+            not isinstance(proposal, dict)
+            or not (
+                accepted_input.get("run_id")
+                == decision.get("run_id")
+                == event_receipt.get("run_id")
+            )
+            or not (
+                accepted_input.get("branch_id")
+                == decision.get("branch_id")
+                == event_receipt.get("branch_id")
+            )
+            or accepted_input.get("episode_id") != decision.get("episode_id")
+            or accepted_input.get("tick_index") != decision.get("tick_index")
+            or proposal.get("origin_snapshot_id") != input_snapshot_id
+            or decision.get("input_snapshot_id") != input_snapshot_id
+            or decision.get("proposal_id") != proposal.get("command_id")
+            or event_receipt.get("decision_id") != decision.get("decision_id")
+            or decision.get("valid") is not True
+            or decision.get("deadline_met") is not True
+            or event_receipt.get("actual_command") != decision.get("issued_command")
+            or response_tick <= input_tick
+        ):
+            continue
+        return accepted_input, decision, event_receipt
+    return None
+
+
 def verify_public_slice(
     host: str, ports: dict[str, int], *, verify_reset: bool = False
 ) -> dict[str, object]:
@@ -593,69 +676,18 @@ def verify_public_slice(
         except (HTTPError, URLError, TimeoutError, ConnectionError):
             time.sleep(0.02)
             continue
-        active_command_id = response_snapshot.get("active_command_id")
-        gate_receipts = gate_telemetry.get("receipts", [])
-        events = assurance_telemetry.get("control_events", [])
-        if not isinstance(active_command_id, str) or not isinstance(gate_receipts, list):
-            time.sleep(0.02)
-            continue
-        matching_receipt = next(
-            (
-                item
-                for item in reversed(gate_receipts)
-                if isinstance(item, dict)
-                and item.get("command_id") == active_command_id
-                and item.get("accepted") is True
-            ),
-            None,
+        joined = _joined_actuated_chain(
+            response_snapshot, gate_telemetry, assurance_telemetry
         )
-        if matching_receipt is None or not isinstance(events, list):
+        if joined is None:
             time.sleep(0.02)
             continue
-        matching_event = next(
-            (
-                item
-                for item in reversed(events)
-                if isinstance(item, dict)
-                and isinstance(item.get("receipt"), dict)
-                and item["receipt"].get("receipt_id") == matching_receipt.get("receipt_id")
-            ),
-            None,
-        )
-        if matching_event is None:
-            time.sleep(0.02)
-            continue
-        accepted_input = matching_event.get("input", matching_event.get("input_summary", {}))
-        decision = matching_event.get("decision", {})
-        receipt = matching_event.get("receipt", {})
-        if not all(isinstance(item, dict) for item in (accepted_input, decision, receipt)):
-            raise RuntimeError("assurance history did not contain an identity-checkable control chain")
-        input_snapshot = accepted_input.get("snapshot", {})
-        input_snapshot_id = (
-            input_snapshot.get("snapshot_id")
-            if isinstance(input_snapshot, dict)
-            else None
-        ) or accepted_input.get("snapshot_id")
-        proposal = accepted_input.get("proposal", {})
-        if (
-            decision.get("input_snapshot_id") != input_snapshot_id
-            or not isinstance(proposal, dict)
-            or decision.get("proposal_id") != proposal.get("command_id")
-            or receipt.get("decision_id") != decision.get("decision_id")
-            or receipt.get("command_id") != active_command_id
-            or receipt.get("accepted") is not True
-            or receipt.get("actuated_monotonic_ns") is None
-            or not isinstance(receipt.get("actual_command"), dict)
-            or int(response_snapshot.get("tick_index", -1))
-            <= int(accepted_input.get("tick_index", -1))
-        ):
-            time.sleep(0.02)
-            continue
+        accepted_input, decision, receipt = joined
         break
     else:
         diagnostics = collect_smoke_diagnostics(host, ports)
         raise RuntimeError(
-            "no joined receipt matched the subsequent simulator command state; "
+            "no fully joined actuated receipt preceded a later simulator state; "
             f"public_diagnostics={json.dumps(diagnostics, sort_keys=True)}"
         )
     command_id = receipt["command_id"]
@@ -691,8 +723,9 @@ def verify_public_slice(
         "assurance_to_gate": "accepted",
         "decision_id": decision["decision_id"],
         "gate_receipt_id": receipt["receipt_id"],
-        "plant_command_latched": command_id,
-        "plant_command_state_tick": response_snapshot["tick_index"],
+        "plant_command_actuated": command_id,
+        "plant_observed_active_command_id": response_snapshot.get("active_command_id"),
+        "plant_observation_tick": response_snapshot["tick_index"],
         "actuator_observation_before": {
             "tick_index": accepted_input["tick_index"],
             "simulation_time_s": accepted_input["simulation_time_s"],

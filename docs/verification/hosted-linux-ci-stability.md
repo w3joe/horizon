@@ -192,3 +192,16 @@ topology, routing, and nominal joined-chain behavior on the generic runner.
 The launcher defaults remain the A5 crossing scenario. Recovery timing and the
 end-to-end 40 ms integration claim require the reserved-host timing proofs
 above; the nominal hosted launcher smoke does not provide that evidence.
+
+Run `35707914135` produced 40 deadline-met A1 pass decisions and 28 accepted
+autonomy receipts, but public verification polled the simulator after the most
+recent short-lived command had expired to the neutral command. Verification
+now joins an accepted assurance event to the identical gate receipt, requires
+exact input, decision, and command lineage plus an actuation timestamp, and
+requires a later simulator tick and fused actuator observation. It records the
+actuated receipt command and the active command observed at that later tick as
+separate fields. A watchdog receipt or an unjoined history still fails.
+
+This corrects an observation race in the lifecycle smoke. It does not turn the
+generic runner into evidence for command persistence, recovery timing, or the
+end-to-end 40 ms integration claim.

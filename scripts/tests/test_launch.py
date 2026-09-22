@@ -205,6 +205,103 @@ def test_startup_resume_fails_closed_without_recovery_readiness(monkeypatch) -> 
         )
 
 
+def _joined_control_history() -> tuple[dict, dict, dict]:
+    command = {"heading_rad": 0.2, "speed_mps": 3.0}
+    accepted_input = {
+        "run_id": "run",
+        "episode_id": "episode",
+        "branch_id": "protected",
+        "tick_index": 10,
+        "simulation_time_s": 0.2,
+        "monotonic_time_ns": 100,
+        "snapshot_id": "snapshot-10",
+        "ownship": {"velocity_body_mps": [3.0, 0.0, 0.0]},
+        "actuator": {"rudder_rad": 0.0, "thrust_fraction": 0.5},
+        "proposal": {
+            "command_id": "proposal-10",
+            "origin_snapshot_id": "snapshot-10",
+        },
+    }
+    decision = {
+        "run_id": "run",
+        "episode_id": "episode",
+        "branch_id": "protected",
+        "tick_index": 10,
+        "input_snapshot_id": "snapshot-10",
+        "proposal_id": "proposal-10",
+        "decision_id": "decision-10",
+        "valid": True,
+        "deadline_met": True,
+        "issued_command": command,
+    }
+    receipt = {
+        "receipt_id": "receipt-10",
+        "run_id": "run",
+        "branch_id": "protected",
+        "decision_id": "decision-10",
+        "command_id": "gate-command-10",
+        "authority": "autonomy",
+        "accepted": True,
+        "actuated_monotonic_ns": 120,
+        "actual_command": command,
+    }
+    return accepted_input, decision, receipt
+
+
+def test_joined_actuated_chain_survives_transient_command_expiry() -> None:
+    accepted_input, decision, receipt = _joined_control_history()
+    response_snapshot = {
+        "tick_index": 11,
+        "active_command_id": "plant-expiry-neutral",
+    }
+    gate_telemetry = {"receipts": [receipt]}
+    assurance_telemetry = {
+        "control_events": [
+            {
+                "event_type": "decision_receipt",
+                "input_summary": accepted_input,
+                "decision": decision,
+                "receipt": receipt,
+            }
+        ]
+    }
+
+    joined = launch._joined_actuated_chain(
+        response_snapshot, gate_telemetry, assurance_telemetry
+    )
+
+    assert joined == (accepted_input, decision, receipt)
+    assert response_snapshot["active_command_id"] != receipt["command_id"]
+
+
+def test_joined_actuated_chain_rejects_unjoined_and_watchdog_receipts() -> None:
+    accepted_input, decision, receipt = _joined_control_history()
+    response_snapshot = {"tick_index": 11, "active_command_id": "plant-expiry-neutral"}
+    event = {
+        "event_type": "decision_receipt",
+        "input_summary": accepted_input,
+        "decision": decision,
+        "receipt": receipt,
+    }
+
+    assert launch._joined_actuated_chain(
+        response_snapshot,
+        {"receipts": [{**receipt, "receipt_id": "different-receipt"}]},
+        {"control_events": [event]},
+    ) is None
+    watchdog_receipt = {
+        **receipt,
+        "receipt_id": "watchdog-receipt",
+        "authority": "gate_watchdog",
+    }
+    watchdog_event = {**event, "receipt": watchdog_receipt}
+    assert launch._joined_actuated_chain(
+        response_snapshot,
+        {"receipts": [watchdog_receipt]},
+        {"control_events": [watchdog_event]},
+    ) is None
+
+
 def test_component_exit_is_recorded_without_stopping_survivor(
     tmp_path: Path, monkeypatch
 ) -> None:
