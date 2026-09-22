@@ -19,6 +19,8 @@ from typing import IO
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from perception_runtime import PerceptionLaunchConfig, load_perception_config
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -57,6 +59,61 @@ def assert_port_free(host: str, port: int) -> None:
         probe.settimeout(0.2)
         if probe.connect_ex((host, port)) == 0:
             raise RuntimeError(f"port already in use: {host}:{port}")
+
+
+def allocate_loopback_port(host: str) -> int:
+    """Allocate an ephemeral loopback port for an opt-in component."""
+    with socket.socket() as probe:
+        probe.bind((host, 0))
+        return int(probe.getsockname()[1])
+
+
+def launch_order(*, perception_enabled: bool) -> tuple[str, ...]:
+    baseline = (
+        "simulator",
+        "decision_ai",
+        "collector",
+        "fusion",
+        "gate",
+        "assurance",
+        "console",
+    )
+    if not perception_enabled:
+        return baseline
+    return (*baseline[:3], "perception", *baseline[3:])
+
+
+def perception_command(
+    config: PerceptionLaunchConfig | None,
+    *,
+    host: str,
+    port: int | None,
+    collector_port: int,
+    run_id: str,
+    external_data_root: Path,
+) -> list[str] | None:
+    if config is None:
+        return None
+    if port is None:
+        raise ValueError("perception port is required when perception is enabled")
+    return [
+        str(ROOT / ".venv/bin/python"),
+        str(ROOT / "scripts/perception_runtime.py"),
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--config",
+        str(config.config_path),
+        "--repository-root",
+        str(ROOT),
+        "--data-root",
+        str(external_data_root),
+        "--collector-url",
+        f"http://{host}:{collector_port}",
+        "--run-id",
+        run_id,
+    ]
 
 
 def wait_healthy(item: ManagedProcess, timeout_s: float = 15.0) -> None:
@@ -529,6 +586,13 @@ def main() -> int:
     parser.add_argument("--smoke-seconds", type=float, default=0.0)
     parser.add_argument("--scenario", default="scenarios/crossing_recoverable.json")
     parser.add_argument("--marine-config", help="Optional versioned marine plant configuration; assurance remains unqualified")
+    parser.add_argument(
+        "--perception-config",
+        help=(
+            "opt in to bounded recorded-camera WaSR-T processing using the "
+            "declared development source and no metric camera authority"
+        ),
+    )
     parser.add_argument("--run-id")
     parser.add_argument(
         "--verify-reset",
@@ -539,12 +603,27 @@ def main() -> int:
     if args.smoke_seconds < 0:
         parser.error("--smoke-seconds must be non-negative")
 
-    ports = json.loads((ROOT / "infra/ports.json").read_text())["ports"]
+    ports = dict(json.loads((ROOT / "infra/ports.json").read_text())["ports"])
     process_specs = json.loads((ROOT / "infra/processes.json").read_text())["services"]
     host = "127.0.0.1"
     run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + secrets.token_hex(3)
     if "/" in run_id or run_id in {".", ".."}:
         parser.error("run ID must be a single path-safe segment")
+    external_data_root = data_root()
+    perception: PerceptionLaunchConfig | None = None
+    if args.perception_config:
+        config_path = Path(args.perception_config).expanduser()
+        if not config_path.is_absolute():
+            config_path = ROOT / config_path
+        try:
+            perception = load_perception_config(
+                config_path,
+                repository_root=ROOT,
+                external_data_root=external_data_root,
+            )
+        except ValueError as exc:
+            parser.error(f"invalid --perception-config: {exc}")
+        ports["perception"] = allocate_loopback_port(host)
     run_dir = runs_root() / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     logs_dir = run_dir / "logs"
@@ -620,22 +699,38 @@ def main() -> int:
             "--gate-operator-token-file", str(secrets_dir / "gate-operator.token"),
         ],
     }
+    perception_process = perception_command(
+        perception,
+        host=host,
+        port=ports.get("perception"),
+        collector_port=ports["collector"],
+        run_id=run_id,
+        external_data_root=external_data_root,
+    )
+    if perception_process is not None:
+        commands["perception"] = perception_process
     scenario = json.loads((ROOT / args.scenario).read_text())
     for fault in scenario.get("faults", []):
         commands["console"].extend(["--fault-id", str(fault["fault_id"])])
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(
-        [
-            str(ROOT),
-            str(ROOT / "packages/contracts/python"),
-            str(ROOT / "packages/marine-environment"),
-            str(ROOT / "services/simulator"),
-            str(ROOT / "services/collector"),
-            str(ROOT / "services/fusion"),
-            str(ROOT / "services/assurance"),
-            str(ROOT / "services/gate"),
-        ]
-    )
+    python_paths = [
+        str(ROOT),
+        str(ROOT / "packages/contracts/python"),
+        str(ROOT / "packages/marine-environment"),
+        str(ROOT / "services/simulator"),
+        str(ROOT / "services/collector"),
+        str(ROOT / "services/fusion"),
+        str(ROOT / "services/assurance"),
+        str(ROOT / "services/gate"),
+    ]
+    if perception is not None:
+        python_paths.extend(
+            [
+                str(ROOT / "services/perception"),
+                str(ROOT / "services/neural-health"),
+            ]
+        )
+    env["PYTHONPATH"] = os.pathsep.join(python_paths)
     managed: list[ManagedProcess] = []
     unavailable = {
         name: spec["status"]
@@ -652,6 +747,12 @@ def main() -> int:
         "runtime_status": "starting",
         "processes": {},
     }
+    if perception is not None:
+        status["perception"] = {
+            **perception.public_identity(),
+            "diagnostics_url": f"http://{host}:{ports['perception']}/v1/diagnostics",
+            "readiness": "pending",
+        }
     (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
 
     def handle_signal(_signum: int, _frame: object) -> None:
@@ -660,15 +761,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
     try:
-        for name in (
-            "simulator",
-            "decision_ai",
-            "collector",
-            "fusion",
-            "gate",
-            "assurance",
-            "console",
-        ):
+        for name in launch_order(perception_enabled=perception is not None):
             port = ports[name]
             assert_port_free(host, port)
             log_handle = (logs_dir / f"{name}.log").open("wb")
@@ -678,8 +771,22 @@ def main() -> int:
             )
             item = ManagedProcess(name, process, log_handle, f"http://{host}:{port}/health")
             managed.append(item)
-            wait_healthy(item)
+            wait_healthy(item, timeout_s=60.0 if name == "perception" else 15.0)
             status["processes"][name] = {"pid": process.pid, "port": port, "health": "ready"}
+            if name == "perception":
+                with urlopen(
+                    f"http://{host}:{port}/v1/diagnostics", timeout=1.0
+                ) as response:
+                    diagnostics = json.load(response)
+                if not isinstance(diagnostics, dict):
+                    raise RuntimeError("perception diagnostics response is not an object")
+                status["perception"] = {
+                    **perception.public_identity(),
+                    "diagnostics_url": f"http://{host}:{port}/v1/diagnostics",
+                    "readiness": "ready" if diagnostics.get("ready") is True else diagnostics.get("phase"),
+                    "observed_sources": diagnostics.get("observed_sources", []),
+                    "fresh_sources": diagnostics.get("fresh_sources", []),
+                }
             (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
 
         status["smoke_checks"] = verify_public_slice(

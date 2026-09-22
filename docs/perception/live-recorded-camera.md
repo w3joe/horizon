@@ -63,6 +63,49 @@ alone do not establish vessel-frame contacts or safe water.
 
 ## Finite operation
 
+### Coordinated local launch
+
+The default launcher still starts the original seven services and does not load
+a neural model. Recorded-camera processing is an explicit opt-in:
+
+```bash
+./scripts/launch_cpu.sh \
+  --perception-config configs/perception/recorded-camera-live.json
+```
+
+Before creating the run directory or starting any process, the launcher checks
+the config schema and mode, the frozen development split digest and membership,
+the source sequence path, the calibration digest, the left-frame count, the
+bounded cadence/TTL/queue, drop-oldest backpressure, zero publication retries,
+and the absence of metric-contact authority. Missing external data or any
+invalid field stops startup.
+
+The optional supervisor starts after collector and before fusion. It binds an
+ephemeral loopback port, recorded under `ports.perception` in `run.json`, so the
+stable seven-service port map is unchanged. It becomes ready only after
+collector reports fresh observations from both `camera-recorded-wasrt` and
+`neural-health-recorded-wasrt`. The loopback endpoints are:
+
+- `GET /health` for current readiness and source-exhaustion state. It returns
+  503 after finite source exhaustion because no fresh camera input remains.
+- `GET /v1/diagnostics` for allowlisted source identity, bounded processing
+  counts, queue/expiry loss, and the explicit authority limits.
+
+Diagnostics contain no external filesystem paths, images, activations, labels,
+tokens, metric contacts, or free-space claims. `run.json` records the config
+digest, source partition and sequence, frame count, diagnostic URL, and sources
+observed at readiness. SIGINT/SIGTERM stops the supervisor and its perception
+child; the central launcher retains its existing five-second bounded shutdown
+and forced-kill fallback.
+
+This configuration selects local MPS float32 H0 processing. It is a finite
+296-frame recorded source, not a sustained sensor daemon. When the sequence is
+exhausted, diagnostics report completion and fresh health naturally expires;
+records are never replayed or renewed. The optional process does not establish
+20 Hz end-to-end operation.
+
+### Standalone component
+
 Run the service as a supervised process, using external source, weight, data,
 and calibration paths:
 
