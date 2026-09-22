@@ -537,7 +537,18 @@ def test_s17_injected_collector_link_loss_fails_closed_and_recovers(tmp_path) ->
 
         payload = wait_for(unavailable, timeout_s=3.0)
         assert payload["error"] == "NOT_READY"
-        _, diagnostics, _ = request_json(stack.url("fusion", "/v1/diagnostics"))
+        def upstream_error_recorded():
+            status, diagnostics, _ = request_json(
+                stack.url("fusion", "/v1/diagnostics")
+            )
+            return (
+                diagnostics
+                if status == 200
+                and diagnostics["not_ready_reasons"][:1] == ["UPSTREAM_ERROR"]
+                else None
+            )
+
+        diagnostics = wait_for(upstream_error_recorded, timeout_s=3.0)
         assert diagnostics["not_ready_reasons"][:1] == ["UPSTREAM_ERROR"]
 
         stack.link.inject("forward")
