@@ -14,7 +14,7 @@ from typing import Callable, Sequence
 
 
 ISOLATION_MODES = ("off", "best-effort", "required")
-TRUSTED_RECOVERY_LANE_SERVICES = frozenset({"gate", "fusion"})
+ASSURANCE_CONTROL_LANE_SERVICES = frozenset({"gate", "assurance"})
 
 
 class SchedulingIsolationError(RuntimeError):
@@ -26,7 +26,7 @@ class ProcessSchedulingPlan:
     requested_mode: str
     status: str
     reason: str
-    recovery_lane_cpu: int | None = None
+    control_lane_cpu: int | None = None
     support_lane_cpus: tuple[int, ...] = ()
     taskset_path: str | None = None
 
@@ -40,13 +40,13 @@ class ProcessSchedulingPlan:
         original = list(command)
         if not self.enabled:
             return original
-        assert self.recovery_lane_cpu is not None
+        assert self.control_lane_cpu is not None
         assert self.taskset_path is not None
-        if service in TRUSTED_RECOVERY_LANE_SERVICES:
+        if service in ASSURANCE_CONTROL_LANE_SERVICES:
             return [
                 self.taskset_path,
                 "--cpu-list",
-                str(self.recovery_lane_cpu),
+                str(self.control_lane_cpu),
                 *original,
             ]
         return [
@@ -62,9 +62,9 @@ class ProcessSchedulingPlan:
             "status": self.status,
             "reason": self.reason,
             "mechanism": "linux-taskset-two-lane-affinity" if self.enabled else None,
-            "topology": "trusted_recovery_lane" if self.enabled else None,
-            "recovery_lane_services": sorted(TRUSTED_RECOVERY_LANE_SERVICES),
-            "recovery_lane_cpu": self.recovery_lane_cpu,
+            "topology": "assurance_control_lane" if self.enabled else None,
+            "control_lane_services": sorted(ASSURANCE_CONTROL_LANE_SERVICES),
+            "control_lane_cpu": self.control_lane_cpu,
             "support_lane_services": "all_other_horizon_services",
             "support_lane_cpus": list(self.support_lane_cpus),
             "service_priority_policy": "inherited_default",
@@ -84,13 +84,13 @@ class ProcessSchedulingPlan:
                 f"could not verify scheduling for {service}: {type(exc).__name__}"
             ) from exc
         lane = (
-            "trusted_recovery"
-            if service in TRUSTED_RECOVERY_LANE_SERVICES
+            "assurance_control"
+            if service in ASSURANCE_CONTROL_LANE_SERVICES
             else "support"
         )
         expected_cpus = (
-            (self.recovery_lane_cpu,)
-            if lane == "trusted_recovery"
+            (self.control_lane_cpu,)
+            if lane == "assurance_control"
             else self.support_lane_cpus
         )
         if observed_cpus != expected_cpus:
@@ -147,12 +147,12 @@ def build_process_scheduling_plan(
             "missing_tool",
             "required_executable_missing:taskset",
         )
-    recovery_lane_cpu = ordered[-1]
+    control_lane_cpu = ordered[-1]
     return ProcessSchedulingPlan(
         requested_mode=mode,
         status="enabled",
-        reason="trusted_recovery_lane_affinity_applied",
-        recovery_lane_cpu=recovery_lane_cpu,
+        reason="assurance_control_lane_affinity_applied",
+        control_lane_cpu=control_lane_cpu,
         support_lane_cpus=ordered[:-1],
         taskset_path=taskset_path,
     )

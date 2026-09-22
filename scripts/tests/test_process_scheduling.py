@@ -30,8 +30,8 @@ def test_disabled_plan_does_not_inspect_or_wrap_host() -> None:
         "reason": "not_requested",
         "mechanism": None,
         "topology": None,
-        "recovery_lane_services": ["fusion", "gate"],
-        "recovery_lane_cpu": None,
+        "control_lane_services": ["assurance", "gate"],
+        "control_lane_cpu": None,
         "support_lane_services": "all_other_horizon_services",
         "support_lane_cpus": [],
         "service_priority_policy": "inherited_default",
@@ -40,7 +40,7 @@ def test_disabled_plan_does_not_inspect_or_wrap_host() -> None:
     }
 
 
-def test_linux_plan_partitions_trusted_recovery_lane_without_priority_change() -> None:
+def test_linux_plan_partitions_assurance_control_lane_without_priority_change() -> None:
     requested_tools = []
 
     def find_tool(name):
@@ -55,7 +55,7 @@ def test_linux_plan_partitions_trusted_recovery_lane_without_priority_change() -
     )
 
     assert requested_tools == ["taskset"]
-    assert plan.recovery_lane_cpu == 7
+    assert plan.control_lane_cpu == 7
     assert plan.support_lane_cpus == (3, 5)
     assert plan.command("gate", ["python", "gate.py"]) == [
         "/usr/bin/taskset",
@@ -67,11 +67,11 @@ def test_linux_plan_partitions_trusted_recovery_lane_without_priority_change() -
     assert plan.command("fusion", ["python", "fusion.py"]) == [
         "/usr/bin/taskset",
         "--cpu-list",
-        "7",
+        "3,5",
         "python",
         "fusion.py",
     ]
-    assert plan.command("assurance", ["python", "assurance.py"])[2] == "3,5"
+    assert plan.command("assurance", ["python", "assurance.py"])[2] == "7"
     assert plan.command("simulator", ["python", "simulator.py"])[2] == "3,5"
     record = plan.public_record()
     assert record["status"] == "enabled"
@@ -127,10 +127,10 @@ def test_observed_affinity_must_match_declared_partition(monkeypatch) -> None:
     monkeypatch.setattr(scheduling.os, "sched_getaffinity", lambda pid: {4}, raising=False)
     assert plan.observe_process("gate", 42) == {
         "status": "verified",
-        "lane": "trusted_recovery",
+        "lane": "assurance_control",
         "cpu_affinity": [4],
         "priority_policy": "inherited_default",
     }
-    assert plan.observe_process("fusion", 43)["lane"] == "trusted_recovery"
+    assert plan.observe_process("assurance", 43)["lane"] == "assurance_control"
     with pytest.raises(scheduling.SchedulingIsolationError, match="affinity mismatch"):
-        plan.observe_process("simulator", 44)
+        plan.observe_process("fusion", 44)
