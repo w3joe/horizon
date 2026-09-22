@@ -12,6 +12,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,9 @@ SCENARIO_VERSION = "1.1.0"
 SCENARIO_SEED = 1
 POLICY = "unsafe_straight"
 MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+CANDIDATE_IDS = ("A1", "A2", "A3", "A4", "A5")
+DEFAULT_CANDIDATE_ID = "A5"
+DEMO_RUN_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
 def _get(stack: HorizonStack, service: str, path: str) -> dict[str, Any]:
@@ -83,6 +87,52 @@ def _git_state() -> tuple[str, bool]:
         ).strip()
     )
     return commit, dirty
+
+
+def resolve_marine_config(value: Path | None) -> Path | None:
+    if value is None:
+        return None
+    resolved = value.expanduser()
+    if not resolved.is_absolute():
+        resolved = ROOT / resolved
+    resolved = resolved.resolve()
+    if not resolved.is_file():
+        raise ValueError(f"marine configuration is not a file: {resolved}")
+    return resolved
+
+
+def marine_config_provenance(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {"mode": "simulator_default"}
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("marine configuration must be a JSON object")
+    try:
+        display_path = path.relative_to(ROOT).as_posix()
+        source = "repository_file"
+    except ValueError:
+        display_path = path.name
+        source = "external_file"
+    return {
+        "mode": "explicit",
+        "source": source,
+        "path": display_path,
+        "sha256": _sha256_bytes(raw),
+        "schema_version": value.get("schema_version"),
+        "model_version": value.get("model_version"),
+        "sea_state_id": value.get("sea_state_id"),
+        "seed": value.get("seed"),
+    }
+
+
+def validate_capture_identity(*, run_id: str, title: str, candidate_id: str) -> None:
+    if DEMO_RUN_ID.fullmatch(run_id) is None:
+        raise ValueError("run ID must match the public demo run allowlist")
+    if not title.strip():
+        raise ValueError("title must not be empty")
+    if candidate_id not in CANDIDATE_IDS:
+        raise ValueError(f"candidate {candidate_id} is not captureable")
 
 
 def _truth_records(
@@ -357,9 +407,22 @@ def _with_command(
     }
 
 
-def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[str, Any], dict[str, Any]]:
+def capture_replay(
+    *,
+    duration_s: float,
+    sample_period_s: float,
+    run_id: str = RUN_ID,
+    title: str = TITLE,
+    candidate_id: str = DEFAULT_CANDIDATE_ID,
+    marine_config: Path | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if duration_s <= 0.0 or sample_period_s <= 0.0:
         raise ValueError("duration and sample period must be positive")
+    validate_capture_identity(
+        run_id=run_id, title=title, candidate_id=candidate_id
+    )
+    marine_config = resolve_marine_config(marine_config)
+    marine_provenance = marine_config_provenance(marine_config)
     scenario_path = ROOT / "scenarios" / SCENARIO_FILE
     scenario = json.loads(scenario_path.read_text())
     if scenario.get("scenario_version") != SCENARIO_VERSION:
@@ -374,6 +437,8 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
             Path(temp),
             scenario=SCENARIO_FILE,
             policy=POLICY,
+            candidate=candidate_id,
+            marine_config=marine_config,
         )
         try:
             stack.start()
@@ -383,7 +448,13 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
                 )
                 return payload if status == 200 else None
 
-            wait_for(latest_evidence, timeout_s=15.0)
+            initial_evidence = wait_for(latest_evidence, timeout_s=15.0)
+            initial_decision = initial_evidence.get("decision", {})
+            if initial_decision.get("candidate_id") != candidate_id:
+                raise RuntimeError("assurance evidence candidate does not match capture selection")
+            candidate_version = initial_decision.get("candidate_version")
+            if not isinstance(candidate_version, str) or not candidate_version:
+                raise RuntimeError("assurance evidence omitted the candidate version")
             operator = "simulator-operator.token"
             _post(stack, "/v1/operator/pause?branch=protected", {}, token_name=operator)
             reset = _post(stack, "/v1/operator/reset?branch=protected", {}, token_name=operator)
@@ -556,7 +627,7 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
 
     replay = {
         "schema_version": REPLAY_SCHEMA,
-        "run_id": RUN_ID,
+        "run_id": run_id,
         "timeline": {
             "start_s": 0.0,
             "end_s": duration_s,
@@ -585,8 +656,8 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
     replay_bytes = _json_bytes(replay)
     manifest = {
         "schema_version": MANIFEST_SCHEMA,
-        "run_id": RUN_ID,
-        "title": TITLE,
+        "run_id": run_id,
+        "title": title,
         "recorded_utc": datetime.now(timezone.utc).isoformat(),
         "source_commit": source_commit,
         "source_dirty": False,
@@ -603,6 +674,11 @@ def capture_replay(*, duration_s: float, sample_period_s: float) -> tuple[dict[s
         "replay_sha256": _sha256_bytes(replay_bytes),
         "replay_bytes": len(replay_bytes),
         "provenance": "real_local_service_run",
+        "assurance": {
+            "candidate_id": candidate_id,
+            "candidate_version": candidate_version,
+        },
+        "marine_environment": marine_provenance,
         "environment": {
             "python": platform.python_version(),
             "platform": platform.platform(),
@@ -647,24 +723,47 @@ def write_artifact(
             shutil.rmtree(stage)
 
 
-def main() -> int:
+def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    default_root = Path(
-        os.environ.get("HORIZON_RUNS_ROOT", str(ROOT.parent / "horizon-runs"))
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--run-id", default=RUN_ID)
+    parser.add_argument("--title", default=TITLE)
+    parser.add_argument(
+        "--candidate", choices=CANDIDATE_IDS, default=DEFAULT_CANDIDATE_ID
     )
-    parser.add_argument("--output", type=Path, default=default_root / "demo" / RUN_ID)
+    parser.add_argument("--marine-config", type=Path)
     parser.add_argument("--duration-s", type=float, default=45.0)
     parser.add_argument("--sample-period-s", type=float, default=0.1)
     parser.add_argument("--replace", action="store_true")
+    return parser
+
+
+def main() -> int:
+    parser = argument_parser()
     args = parser.parse_args()
-    manifest, replay = capture_replay(
-        duration_s=args.duration_s, sample_period_s=args.sample_period_s
+    try:
+        validate_capture_identity(
+            run_id=args.run_id, title=args.title, candidate_id=args.candidate
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    default_root = Path(
+        os.environ.get("HORIZON_RUNS_ROOT", str(ROOT.parent / "horizon-runs"))
     )
-    write_artifact(args.output.resolve(), manifest, replay, replace=args.replace)
+    output = args.output or default_root / "demo" / args.run_id
+    manifest, replay = capture_replay(
+        duration_s=args.duration_s,
+        sample_period_s=args.sample_period_s,
+        run_id=args.run_id,
+        title=args.title,
+        candidate_id=args.candidate,
+        marine_config=args.marine_config,
+    )
+    write_artifact(output.resolve(), manifest, replay, replace=args.replace)
     print(
         json.dumps(
             {
-                "output": str(args.output.resolve()),
+                "output": str(output.resolve()),
                 "run_id": manifest["run_id"],
                 "replay_sha256": manifest["replay_sha256"],
                 "replay_bytes": manifest["replay_bytes"],

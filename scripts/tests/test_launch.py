@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -23,6 +25,30 @@ class FakeProcess:
         if self.exit_after_polls is not None and self.polls >= self.exit_after_polls:
             self.returncode = 7
         return self.returncode
+
+
+def test_candidate_cli_defaults_to_a5_and_validates_explicit_selection() -> None:
+    parser = launch.argument_parser()
+
+    assert parser.parse_args([]).candidate == "A5"
+    for candidate_id in launch.CANDIDATE_IDS:
+        assert parser.parse_args(["--candidate", candidate_id]).candidate == candidate_id
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--candidate", "A4-VQP"])
+
+
+def test_assurance_command_propagates_exact_candidate(tmp_path: Path) -> None:
+    command = launch.assurance_command(
+        host="127.0.0.1",
+        port=8103,
+        simulator_port=8100,
+        fusion_port=8104,
+        gate_port=8102,
+        candidate_id="A2",
+        secrets_dir=tmp_path,
+    )
+
+    assert command[command.index("--candidate") + 1] == "A2"
 
 
 def test_component_exit_is_recorded_without_stopping_survivor(

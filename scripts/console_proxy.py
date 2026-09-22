@@ -38,6 +38,7 @@ DEMO_MANIFEST_SCHEMA = "horizon.demo-manifest.v1"
 DEMO_REPLAY_SCHEMA = "horizon.demo-replay.v1"
 DEMO_CATALOG_SCHEMA = "horizon.demo-catalog.v1"
 MAX_DEMO_REPLAY_BYTES = 10 * 1024 * 1024
+ASSURANCE_CANDIDATE_IDS = ("A1", "A2", "A3", "A4", "A5")
 
 
 def copy_upstream_body(response: Any, destination: Any) -> None:
@@ -235,6 +236,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     operator_lock: ClassVar[threading.RLock] = threading.RLock()
     resume_readiness_timeout_s: ClassVar[float] = 3.0
     resume_readiness_poll_s: ClassVar[float] = 0.025
+    candidate_id: ClassVar[str] = "A5"
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -250,7 +252,14 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path.rstrip("/") == "/health":
-            self._json(HTTPStatus.OK, {"status": "ok", "service": "horizon-console"})
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "status": "ok",
+                    "service": "horizon-console",
+                    "candidate_id": self.candidate_id,
+                },
+            )
             return
         if urlsplit(self.path).path == "/api/operator/capabilities":
             self._json(HTTPStatus.OK, self._operator_status())
@@ -622,6 +631,9 @@ def main() -> None:
     parser.add_argument("--fusion-url", default="http://127.0.0.1:8104")
     parser.add_argument("--assurance-url", default="http://127.0.0.1:8103")
     parser.add_argument("--gate-url", default="http://127.0.0.1:8102")
+    parser.add_argument(
+        "--candidate", choices=ASSURANCE_CANDIDATE_IDS, default="A5"
+    )
     parser.add_argument("--artifact-output", type=Path)
     parser.add_argument("--artifact-source", type=Path)
     parser.add_argument(
@@ -652,6 +664,7 @@ def main() -> None:
     ConsoleHandler.simulator_operator_token_file = args.simulator_operator_token_file
     ConsoleHandler.gate_operator_token_file = args.gate_operator_token_file
     ConsoleHandler.declared_fault_ids = frozenset(args.fault_id)
+    ConsoleHandler.candidate_id = args.candidate
     (
         ConsoleHandler.artifact_manifest,
         ConsoleHandler.artifact_frames,

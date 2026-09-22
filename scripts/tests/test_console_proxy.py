@@ -170,6 +170,27 @@ def test_public_proxy_routes_are_explicitly_allowlisted() -> None:
     assert resolve_public_route("/api/gate/v1/decision") is None
 
 
+def test_console_health_exposes_the_launcher_selected_candidate(monkeypatch) -> None:
+    responses = []
+    handler = object.__new__(ConsoleHandler)
+    handler.path = "/health"
+    monkeypatch.setattr(ConsoleHandler, "candidate_id", "A3")
+    monkeypatch.setattr(
+        ConsoleHandler,
+        "_json",
+        lambda self, status, value: responses.append((status, value)),
+    )
+
+    handler.do_GET()
+
+    assert responses == [
+        (
+            HTTPStatus.OK,
+            {"status": "ok", "service": "horizon-console", "candidate_id": "A3"},
+        )
+    ]
+
+
 def test_compact_artifact_frame_omits_pooled_vectors(tmp_path: Path) -> None:
     record = {
         "frame_id": "00000.jpg",

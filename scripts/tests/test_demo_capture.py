@@ -5,17 +5,57 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 
 from demo_capture import (  # noqa: E402
+    CANDIDATE_IDS,
     MAX_ARTIFACT_BYTES,
+    ROOT,
+    argument_parser,
     extract_public_evidence,
     identify_intervention,
+    marine_config_provenance,
+    resolve_marine_config,
     summarize_outcome,
+    validate_capture_identity,
     write_artifact,
 )
+
+
+def test_capture_cli_defaults_to_a5_and_accepts_explicit_candidate() -> None:
+    parser = argument_parser()
+
+    assert parser.parse_args([]).candidate == "A5"
+    for candidate_id in CANDIDATE_IDS:
+        assert parser.parse_args(["--candidate", candidate_id]).candidate == candidate_id
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--candidate", "A4-VQP"])
+
+
+def test_capture_identity_uses_public_run_allowlist() -> None:
+    validate_capture_identity(run_id="a5-harbor-demo", title="A5 demo", candidate_id="A5")
+
+    with pytest.raises(ValueError, match="run ID"):
+        validate_capture_identity(run_id="../escape", title="A5 demo", candidate_id="A5")
+    with pytest.raises(ValueError, match="title"):
+        validate_capture_identity(run_id="a5-demo", title=" ", candidate_id="A5")
+
+
+def test_marine_config_provenance_pins_repository_file() -> None:
+    path = resolve_marine_config(Path("configs/sea-state/sheltered-harbor-v1.json"))
+
+    assert path == ROOT / "configs/sea-state/sheltered-harbor-v1.json"
+    provenance = marine_config_provenance(path)
+    assert provenance["mode"] == "explicit"
+    assert provenance["source"] == "repository_file"
+    assert provenance["path"] == "configs/sea-state/sheltered-harbor-v1.json"
+    assert provenance["sea_state_id"] == "sheltered-harbor-v1"
+    assert len(provenance["sha256"]) == 64
+    assert marine_config_provenance(None) == {"mode": "simulator_default"}
 
 
 def test_proposal_wrapper_uses_its_authoritative_issue_time() -> None:

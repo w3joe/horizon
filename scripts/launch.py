@@ -27,6 +27,8 @@ from process_scheduling import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+CANDIDATE_IDS = ("A1", "A2", "A3", "A4", "A5")
+DEFAULT_CANDIDATE_ID = "A5"
 
 
 @dataclass
@@ -118,6 +120,42 @@ def perception_command(
         f"http://{host}:{collector_port}",
         "--run-id",
         run_id,
+    ]
+
+
+def assurance_command(
+    *,
+    host: str,
+    port: int,
+    simulator_port: int,
+    fusion_port: int,
+    gate_port: int,
+    candidate_id: str,
+    secrets_dir: Path,
+) -> list[str]:
+    """Build the assurance process command with the selected candidate intact."""
+    if candidate_id not in CANDIDATE_IDS:
+        raise ValueError(f"candidate {candidate_id} is not launchable")
+    return [
+        str(ROOT / ".venv/bin/python"),
+        "-m",
+        "horizon_assurance.http_api",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--reference-url",
+        f"http://{host}:{simulator_port}/v1/reference?branch=protected",
+        "--fusion-url",
+        f"http://{host}:{fusion_port}",
+        "--gate-url",
+        f"http://{host}:{gate_port}",
+        "--candidate",
+        candidate_id,
+        "--gate-decision-token-file",
+        str(secrets_dir / "gate-decision.token"),
+        "--gate-operator-token-file",
+        str(secrets_dir / "gate-operator.token"),
     ]
 
 
@@ -586,11 +624,17 @@ def verify_public_slice(
     return result
 
 
-def main() -> int:
+def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke-seconds", type=float, default=0.0)
     parser.add_argument("--scenario", default="scenarios/crossing_recoverable.json")
     parser.add_argument("--marine-config", help="Optional versioned marine plant configuration; assurance remains unqualified")
+    parser.add_argument(
+        "--candidate",
+        choices=CANDIDATE_IDS,
+        default=DEFAULT_CANDIDATE_ID,
+        help="assurance candidate for the protected control loop (default: A5)",
+    )
     parser.add_argument(
         "--perception-config",
         help=(
@@ -614,6 +658,11 @@ def main() -> int:
             "not hard real time"
         ),
     )
+    return parser
+
+
+def main() -> int:
+    parser = argument_parser()
     args = parser.parse_args()
     if args.smoke_seconds < 0:
         parser.error("--smoke-seconds must be non-negative")
@@ -688,16 +737,15 @@ def main() -> int:
             "--recovery-token-file", str(secrets_dir / "gate-recovery.token"),
             "--operator-token-file", str(secrets_dir / "gate-operator.token"),
         ],
-        "assurance": [
-            str(ROOT / ".venv/bin/python"), "-m", "horizon_assurance.http_api",
-            "--host", host, "--port", str(ports["assurance"]),
-            "--reference-url", f"http://{host}:{ports['simulator']}/v1/reference?branch=protected",
-            "--fusion-url", f"http://{host}:{ports['fusion']}",
-            "--gate-url", f"http://{host}:{ports['gate']}",
-            "--candidate", "A1",
-            "--gate-decision-token-file", str(secrets_dir / "gate-decision.token"),
-            "--gate-operator-token-file", str(secrets_dir / "gate-operator.token"),
-        ],
+        "assurance": assurance_command(
+            host=host,
+            port=ports["assurance"],
+            simulator_port=ports["simulator"],
+            fusion_port=ports["fusion"],
+            gate_port=ports["gate"],
+            candidate_id=args.candidate,
+            secrets_dir=secrets_dir,
+        ),
         "console": [
             str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/console_proxy.py"),
             "--host", host, "--port", str(ports["console"]),
@@ -707,6 +755,7 @@ def main() -> int:
             "--fusion-url", f"http://{host}:{ports['fusion']}",
             "--assurance-url", f"http://{host}:{ports['assurance']}",
             "--gate-url", f"http://{host}:{ports['gate']}",
+            "--candidate", args.candidate,
             "--artifact-output", str(
                 runs_root() / "compute" / "local-wasrt-sequence-085"
             ),
@@ -761,6 +810,7 @@ def main() -> int:
         "run_id": run_id,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "repository_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "candidate_id": args.candidate,
         "ports": ports,
         "unavailable": unavailable,
         "runtime_status": "starting",
@@ -823,7 +873,11 @@ def main() -> int:
         status["runtime_status"] = "ready"
         (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
 
-        print(f"Horizon run {run_id} ready: http://{host}:{ports['console']}", flush=True)
+        print(
+            f"Horizon run {run_id} ready with {args.candidate}: "
+            f"http://{host}:{ports['console']}",
+            flush=True,
+        )
         print(
             "shared assurance-control lane isolation "
             f"{scheduling.status}: {scheduling.reason}; hard real time=false",
