@@ -1,0 +1,38 @@
+{
+  "contract_type": "TrafficSnapshot",
+  "schema_version": "0.1.0",
+  "snapshot_id": "singapore-synthetic-overload-v1",
+  "mode": "synthetic_offline",
+  "capture_sha256": "b386c5a4b4d8292d15e483cc2e3fd5d974225a7659770fa8fbe764315078457c",
+  "selection_utc": "2026-09-22T12:00:00Z",
+  "selection_window_s": 0.0,
+  "local_frame": {
+    "latitude_deg": 1.25,
+    "longitude_deg": 103.85,
+    "height_m": 0.0,
+    "sha256": "4523a5360a25db52ffcd31a5f5a9befe0a16fa56fdbf3bf86c40d6e2a7512a7e"
+  },
+  "compiler_version": "horizon-synthetic-traffic-overload-fixture-v1",
+  "motion_model": {"kind": "constant_course_speed", "horizon_s": 180.0},
+  "rights_status": "approved_public",
+  "source_completeness": "incomplete",
+  "synthetic_generation": {
+    "kind": "parallel_lanes_v1",
+    "candidate_count": 60,
+    "selected_count": 50,
+    "mmsi_start": 100001000,
+    "north_origin_m": 180.0,
+    "east_origin_m": 0.0,
+    "lane_spacing_m": 45.0,
+    "row_spacing_m": 70.0
+  },
+  "counts": {
+    "frames_total": 60,
+    "dynamic_valid": 60,
+    "static_valid": 0,
+    "candidates": 60,
+    "selected": 50,
+    "exclusions": {"bounded_contact_selection": 10}
+  },
+  "vessels": []
+}

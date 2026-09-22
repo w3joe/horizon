@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0",
+  "scenario_id": "singapore-ais-overloaded-v1",
+  "scenario_version": "1.0.0",
+  "family": "singapore_traffic_mirror",
+  "split": "heldout",
+  "recoverability_class": "out_of_domain",
+  "duration_s": 90.0,
+  "ownship": {"north_m": 0.0, "east_m": 0.0, "heading_rad": 0.0, "surge_mps": 3.5, "thrust_fraction": 0.55},
+  "traffic_snapshot": {"path": "fixtures/singapore-overloaded-synthetic-traffic.json", "sha256": "d719ccc773356b46a0384592c3e8f4b1ee37eb78df80ca3651cf60099addc708", "maximum_vessels": 50},
+  "environment": {"current_ne_mps": [0.12, 0.08], "wind_force_ne_n": [180.0, 75.0]},
+  "water_boundary_ne_m": [[-1200.0,-1200.0],[1800.0,-1200.0],[1800.0,1200.0],[-1200.0,1200.0]],
+  "corridor_ne_m": [[-900.0,-900.0],[1500.0,-900.0],[1500.0,900.0],[-900.0,900.0]],
+  "nominal_depth_m": 18.0,
+  "chart_uncertainty_m": 1.0,
+  "waypoints_ne_m": [[0.0,0.0],[500.0,0.0]],
+  "faults": []
+}

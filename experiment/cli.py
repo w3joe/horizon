@@ -20,8 +20,12 @@ from experiment.harness.manifests import (
     load_splits,
     require_implemented,
 )
+from experiment.harness.frozen_plan import (
+    write_a1_a5_heldout_plan,
+    write_r6_singapore_heldout_plan,
+)
 from experiment.harness.runner import load_episode_entrypoint, run_adapter_jobs, run_fixture_jobs
-from experiment.io import load_json, write_json
+from experiment.io import load_json, sha256_json, write_json
 
 EXPERIMENT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CAPABILITIES = EXPERIMENT_ROOT / "configs" / "capabilities.json"
@@ -83,6 +87,14 @@ def _run_adapter(args: argparse.Namespace) -> int:
         args.run_id,
         args.max_simulation_time_s,
         plan.get("timing_profile_id", "idealized-front-zero-v1"),
+        {
+            "study_id": plan.get("study_id"),
+            "study_plan_hash": sha256_json(plan),
+            "protocol_frozen": plan.get("protocol_frozen") is True,
+            "split": plan.get("split"),
+            "timing_profile_id": plan.get("timing_profile_id"),
+            "execution_mode": plan.get("experiment_mode"),
+        },
     )
     summary = summarize_records(records)
     write_json(Path(args.output) / "summary.json", summary)
@@ -161,6 +173,55 @@ def _candidate_acceptance(args: argparse.Namespace) -> int:
     status = "working" if report["all_primary_candidates_working"] else "failed"
     print(json.dumps({"status": status, "artifact_hash": report["artifact_hash"]}, indent=2))
     return 0 if report["all_primary_candidates_working"] else 2
+
+
+def _freeze_a1_a5_heldout(args: argparse.Namespace) -> int:
+    plan = write_a1_a5_heldout_plan(
+        args.calibration_artifact,
+        args.output,
+        study_id=args.study_id,
+    )
+    # Validate the just-written artifact through the ordinary execution gate.
+    splits = load_splits(args.splits)
+    expand_jobs(plan, splits)
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "study_id": plan["study_id"],
+                "episode_keys": sum(item["seed_count"] for item in plan["scenarios"]),
+                "jobs": sum(item["seed_count"] for item in plan["scenarios"])
+                * len(plan["candidate_ids"]),
+                "output": args.output,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _freeze_r6_singapore_heldout(args: argparse.Namespace) -> int:
+    plan = write_r6_singapore_heldout_plan(
+        args.calibration_artifact,
+        args.output,
+        study_id=args.study_id,
+    )
+    splits = load_splits(args.splits)
+    expand_jobs(plan, splits)
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "study_id": plan["study_id"],
+                "episode_keys": sum(item["seed_count"] for item in plan["scenarios"]),
+                "jobs": sum(item["seed_count"] for item in plan["scenarios"])
+                * len(plan["candidate_ids"]),
+                "output": args.output,
+            },
+            indent=2,
+        )
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -268,6 +329,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     candidate_acceptance.add_argument("--output", required=True)
     candidate_acceptance.set_defaults(function=_candidate_acceptance)
+
+    freeze_heldout = subparsers.add_parser(
+        "freeze-a1-a5-heldout",
+        help="generate a hash-pinned R4 heldout plan from a frozen calibration artifact",
+    )
+    freeze_heldout.add_argument("--calibration-artifact", required=True)
+    freeze_heldout.add_argument("--study-id", default="a1-a5-r4-heldout-v1")
+    freeze_heldout.add_argument("--output", required=True)
+    freeze_heldout.add_argument("--splits", default=DEFAULT_SPLITS)
+    freeze_heldout.set_defaults(function=_freeze_a1_a5_heldout)
+
+    freeze_r6 = subparsers.add_parser(
+        "freeze-r6-singapore-heldout",
+        help="generate an offline, hash-pinned R6 Singapore robustness plan",
+    )
+    freeze_r6.add_argument("--calibration-artifact", required=True)
+    freeze_r6.add_argument("--study-id", default="r6-singapore-heldout-v1")
+    freeze_r6.add_argument("--output", required=True)
+    freeze_r6.add_argument("--splits", default=DEFAULT_SPLITS)
+    freeze_r6.set_defaults(function=_freeze_r6_singapore_heldout)
     return parser
 
 

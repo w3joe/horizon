@@ -31,7 +31,15 @@ def assess_controller_evidence(
     selection = json.loads(Path(selection_rule_path).read_text())
     records = index.get("records")
     _require(isinstance(records, list) and records, "controller index has no records")
-    _require(all(record.get("split") != "heldout" for record in records), "use frozen heldout review")
+    splits = {str(record.get("split")) for record in records}
+    _require(len(splits) == 1, "controller index may contain exactly one split")
+    split = next(iter(splits))
+    _require(
+        split == "heldout",
+        "architecture selection requires a frozen heldout controller index",
+    )
+    _require(index.get("protocol_frozen") is True, "heldout index lacks frozen protocol")
+    _require(bool(index.get("study_plan_hash")), "heldout index lacks study-plan hash")
     audits = {
         (audit.get("branch_id"), audit.get("candidate_id")): audit
         for audit in index.get("assumption_audits", [])
@@ -168,19 +176,91 @@ def assess_controller_evidence(
             "selection_eligible": selectable,
         }
 
-    recommendation_status = (
-        "ready_for_predeclared_pareto_analysis"
-        if all_candidates_selectable
-        else "withheld_incomplete_or_failed_evidence"
-    )
+    recommendation = None
+    recommendation_status = "withheld_incomplete_or_failed_evidence"
+    if all_candidates_selectable:
+        # Lower mission cost and false intervention rate are preferable; larger
+        # clearance and intervention lead time are preferable.  Missing values
+        # make a candidate ineligible rather than being silently optimized away.
+        metrics: dict[str, dict[str, float]] = {}
+        for candidate_id, candidate_records in by_candidate.items():
+            complete = [record for record in candidate_records if not record["mission"]["censored"]]
+            interventions = [
+                record for record in candidate_records
+                if record["intervention"]["occurred"]
+            ]
+            leads = [
+                float(record["intervention"]["lead_time_s"])
+                for record in interventions
+                if record["intervention"]["lead_time_s"] is not None
+            ]
+            costs = [
+                float(record["mission"]["route_delay_s"] or 0.0)
+                + max(0.0, float(record["mission"]["extra_distance_m"] or 0.0))
+                for record in complete
+            ]
+            if len(costs) != len(candidate_records) or not leads:
+                candidate_results[candidate_id]["selection_eligible"] = False
+                all_candidates_selectable = False
+                break
+            metrics[candidate_id] = {
+                "mission_cost": sum(costs) / len(costs),
+                "false_intervention_rate": sum(
+                    record["intervention"]["occurred"]
+                    and not any(value > 0 for value in record["violations"].values())
+                    for record in candidate_records
+                ) / len(candidate_records),
+                "safety_margin": min(
+                    float(record["margins"]["min_hull_clearance_m"])
+                    for record in candidate_records
+                ),
+                "intervention_lead_time": sum(leads) / len(leads),
+            }
+        if all_candidates_selectable:
+            def dominates(left: dict[str, float], right: dict[str, float]) -> bool:
+                directions = {
+                    "mission_cost": -1,
+                    "false_intervention_rate": -1,
+                    "safety_margin": 1,
+                    "intervention_lead_time": 1,
+                }
+                no_worse = all(
+                    directions[key] * left[key] >= directions[key] * right[key]
+                    for key in directions
+                )
+                strictly_better = any(
+                    directions[key] * left[key] > directions[key] * right[key]
+                    for key in directions
+                )
+                return no_worse and strictly_better
+
+            frontier = sorted(
+                candidate_id
+                for candidate_id in metrics
+                if not any(
+                    dominates(metrics[other], metrics[candidate_id])
+                    for other in metrics
+                    if other != candidate_id
+                )
+            )
+            # The frozen rule only resolves a Pareto tie by declared simplicity.
+            recommendation = frontier[0] if len(frontier) == 1 else None
+            recommendation_status = (
+                "selected_by_frozen_safety_first_pareto"
+                if recommendation is not None
+                else "pareto_frontier_tied_no_selection"
+            )
+    else:
+        metrics = {}
     return {
         "schema_version": "horizon.controller-evidence-readiness.v1",
-        "split": records[0]["split"],
+        "split": split,
         "paired_episode_sets_complete": paired,
         "fixture_only": index.get("fixture_only"),
         "candidate_results": candidate_results,
-        "recommendation": None,
+        "recommendation": recommendation,
         "recommendation_status": recommendation_status,
+        "pareto_metrics": metrics,
         "timing_scope": {
             "candidate_compute": "observed decision compute_time_ns",
             "end_to_end": "unknown until a declared acceptance-load trace supplies it",

@@ -186,6 +186,7 @@ def run_adapter_jobs(
     run_id: str,
     max_simulation_time_s: float,
     timing_profile_id: str = "idealized-front-zero-v1",
+    study_metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not jobs:
         raise ValueError("no jobs to run")
@@ -274,6 +275,16 @@ def run_adapter_jobs(
             }
             assumption_audits.append(audit)
             write_json(destination / f"{request['branch_id']}.assumption-audit.json", audit)
+    metadata = dict(study_metadata or {})
+    if metadata:
+        required = {"study_plan_hash", "protocol_frozen", "split"}
+        missing_metadata = sorted(required - set(metadata))
+        if missing_metadata:
+            raise ValueError(
+                "study metadata missing: " + ", ".join(missing_metadata)
+            )
+        if metadata["split"] != jobs[0].split:
+            raise ValueError("study metadata split does not match jobs")
     write_json(
         index_path,
         {
@@ -283,6 +294,7 @@ def run_adapter_jobs(
             ),
             "assumption_audits": assumption_audits,
             "diagnostics": diagnostics,
+            **metadata,
         },
     )
     return records

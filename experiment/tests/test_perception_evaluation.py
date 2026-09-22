@@ -349,7 +349,7 @@ def _controller_record(candidate: str, runtime, boundary=2.0, recoverability="de
         "candidate_id": candidate,
         "episode_id": "episode-1",
         "branch_id": f"{candidate}-branch",
-        "split": "development",
+        "split": "heldout",
         "recoverability_class": recoverability,
         "violations": {"collision_count": 0, "grounding_count": 0, "boundary_count": 0},
         "intervention": {"last_recovery_opportunity_s": boundary},
@@ -371,6 +371,8 @@ def test_controller_evidence_keeps_odd_failures_and_zero_opportunity_unknown(tmp
     }
     index = {
         "fixture_only": False,
+        "protocol_frozen": True,
+        "study_plan_hash": "frozen-test-plan",
         "records": [_controller_record("A1", []), _controller_record("A3", [10_000])],
         "assumption_audits": [
             {
@@ -403,3 +405,67 @@ def test_controller_evidence_keeps_odd_failures_and_zero_opportunity_unknown(tmp
     assert report["candidate_results"]["A3"]["gates"]["candidate_compute_deadline"] == "pass"
     assert report["recommendation"] is None
     assert report["recommendation_status"] == "withheld_incomplete_or_failed_evidence"
+
+
+def test_controller_evidence_selects_only_a_unique_heldout_pareto_survivor(
+    tmp_path: Path,
+) -> None:
+    selection = {
+        "safety_gate": {
+            "preventable_violations_allowed": 0,
+            "unsafe_or_stale_gate_acceptances_allowed": 0,
+        },
+        "runtime_gate": {"deadline_misses_allowed_in_declared_acceptance_load": 0},
+    }
+    records = []
+    for candidate, delay, margin in (("A1", 1.0, 6.0), ("A5", 2.0, 5.0)):
+        record = _controller_record(candidate, [1_000])
+        record.update(
+            {
+                "mission": {
+                    "censored": False,
+                    "route_delay_s": delay,
+                    "extra_distance_m": 0.0,
+                },
+                "margins": {"min_hull_clearance_m": margin},
+                "intervention": {
+                    "occurred": True,
+                    "last_recovery_opportunity_s": 2.0,
+                    "lead_time_s": 1.0,
+                },
+            }
+        )
+        records.append(record)
+    index = {
+        "fixture_only": False,
+        "protocol_frozen": True,
+        "study_plan_hash": "frozen-test-plan",
+        "records": records,
+        "assumption_audits": [
+            {
+                "branch_id": f"{candidate}-branch",
+                "candidate_id": candidate,
+                "configured_assumptions": {},
+                "violated_assumption_ids": [],
+            }
+            for candidate in ("A1", "A5")
+        ],
+        "timing_evidence": {
+            candidate: {
+                "deadline_opportunities": 1,
+                "deadline_misses": 0,
+                "acceptance_load_hash": "load-hash",
+                "simulated_service_intervals_separate": True,
+            }
+            for candidate in ("A1", "A5")
+        },
+    }
+    selection_path = tmp_path / "selection.json"
+    index_path = tmp_path / "index.json"
+    _write_json(selection_path, selection)
+    _write_json(index_path, index)
+
+    report = assess_controller_evidence(index_path, selection_path)
+
+    assert report["recommendation"] == "A1"
+    assert report["recommendation_status"] == "selected_by_frozen_safety_first_pareto"

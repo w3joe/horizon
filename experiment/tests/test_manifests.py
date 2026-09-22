@@ -13,6 +13,10 @@ from experiment.harness.manifests import (
     require_implemented,
     validate_study_plan,
 )
+from experiment.harness.frozen_plan import (
+    build_a1_a5_heldout_plan,
+    write_r6_singapore_heldout_plan,
+)
 from experiment.io import load_json
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -138,3 +142,38 @@ def test_heldout_count_uses_distinct_expanded_episode_keys() -> None:
     ]
     with pytest.raises(ManifestError, match="distinct expanded episode keys"):
         validate_study_plan(plan, splits)
+
+
+def test_frozen_a1_a5_plan_uses_real_per_seed_identities_and_calibration(tmp_path: Path) -> None:
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(
+        '{"record_type":"CalibrationEvidence","split":"calibration","frozen":true}'
+    )
+    plan = build_a1_a5_heldout_plan(calibration)
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+    jobs = expand_jobs(plan, splits)
+
+    assert sum(item["seed_count"] for item in plan["scenarios"]) == 1200
+    assert all(item["seed_count"] >= 30 for item in plan["scenarios"])
+    assert len(jobs) == 6000
+    assert plan["execution_status"] == "frozen_ready"
+    assert "pending" not in str(plan).lower()
+
+
+def test_frozen_r6_plan_covers_all_singapore_ais_fault_modes(tmp_path: Path) -> None:
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(
+        '{"record_type":"CalibrationEvidence","split":"calibration","frozen":true}'
+    )
+    output = tmp_path / "r6-plan.json"
+    plan = write_r6_singapore_heldout_plan(calibration, output, study_id="r6-test")
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+
+    assert len(expand_jobs(plan, splits)) == 6000
+    assert {item["scenario_id"] for item in plan["scenarios"]} == {
+        "singapore-ais-absent-v1",
+        "singapore-traffic-mirror-synthetic-v1",
+        "singapore-ais-contradictory-v1",
+        "singapore-ais-overloaded-v1",
+        "singapore-radar-only-v1",
+    }

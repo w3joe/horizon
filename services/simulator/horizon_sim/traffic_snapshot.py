@@ -86,6 +86,74 @@ def _validate_sha256(value: Any, label: str) -> str:
     return value
 
 
+def _generated_parallel_lanes(specification: Any) -> list[dict[str, Any]]:
+    """Expand a compact, hash-pinned synthetic traffic-load fixture.
+
+    The generator is deliberately narrow: it is an offline fixture format for
+    scale testing, never an AIS decoder and never a substitute for a recorded
+    capture.  The enclosing snapshot file is still byte-hashed by the scenario
+    reference before this function is reached.
+    """
+
+    if not isinstance(specification, dict):
+        raise ValueError("synthetic_generation must be an object")
+    expected = {
+        "kind",
+        "candidate_count",
+        "selected_count",
+        "mmsi_start",
+        "north_origin_m",
+        "east_origin_m",
+        "lane_spacing_m",
+        "row_spacing_m",
+    }
+    if set(specification) != expected or specification.get("kind") != "parallel_lanes_v1":
+        raise ValueError("unsupported synthetic traffic generation specification")
+    candidate_count = specification["candidate_count"]
+    selected_count = specification["selected_count"]
+    mmsi_start = specification["mmsi_start"]
+    if (
+        isinstance(candidate_count, bool)
+        or isinstance(selected_count, bool)
+        or isinstance(mmsi_start, bool)
+        or not isinstance(candidate_count, int)
+        or not isinstance(selected_count, int)
+        or not isinstance(mmsi_start, int)
+        or not 1 <= selected_count <= MAX_TRAFFIC_VESSELS
+        or selected_count > candidate_count
+        or not 100_000_000 <= mmsi_start <= 999_999_999 - selected_count
+    ):
+        raise ValueError("invalid synthetic traffic generation count or MMSI range")
+    north_origin = _finite_number(specification["north_origin_m"], "generation north origin")
+    east_origin = _finite_number(specification["east_origin_m"], "generation east origin")
+    lane_spacing = _nonnegative(specification["lane_spacing_m"], "generation lane spacing")
+    row_spacing = _nonnegative(specification["row_spacing_m"], "generation row spacing")
+    if lane_spacing <= 0.0 or row_spacing <= 0.0:
+        raise ValueError("synthetic traffic generation spacing must be positive")
+    vessels: list[dict[str, Any]] = []
+    for index in range(selected_count):
+        lane = index % 5
+        row = index // 5
+        heading = 0.0 if row % 2 == 0 else math.pi
+        vessels.append(
+            {
+                "mmsi": f"{mmsi_start + index:09d}",
+                "identity_generation": 1,
+                "position_ne_m": [north_origin + row * row_spacing, east_origin + (lane - 2) * lane_spacing],
+                "speed_mps": 2.0 + (index % 4) * 0.4,
+                "course_rad": heading,
+                "true_heading_rad": heading,
+                "hull": {"length_m": 26.0, "beam_m": 7.0, "draft_m": 2.2},
+                "dimensions_assumed": True,
+                "report_age_s": 0.0,
+                "position_uncertainty_m": 12.0,
+                "source_health": "recorded",
+                "simulated_observations": {"radar": True, "camera": True, "ais": True},
+            }
+        )
+    return vessels
+
+
 def load_traffic_snapshot(
     path: str | Path,
     *,
@@ -152,7 +220,12 @@ def load_traffic_snapshot(
     if horizon_s <= 0.0:
         raise ValueError("motion horizon must be positive")
 
-    vessels_raw = raw.get("vessels")
+    generated = raw.get("synthetic_generation")
+    vessels_raw = (
+        _generated_parallel_lanes(generated)
+        if generated is not None
+        else raw.get("vessels")
+    )
     if not isinstance(vessels_raw, list) or not vessels_raw:
         raise ValueError("traffic snapshot vessels must be a nonempty list")
     if len(vessels_raw) > maximum_vessels:
