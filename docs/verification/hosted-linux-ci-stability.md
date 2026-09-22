@@ -115,3 +115,27 @@ the Linux-only affinity test skipped in 84.40 seconds. Hosted Linux remains
 authoritative only for the kernel-visible two-lane startup smoke. These results
 do not establish WCET, hard real-time behavior, or target-hardware
 qualification.
+
+## Production launcher startup barrier
+
+Run `35706034327` passed the complete functional test suite but failed the
+implemented CPU-slice launch smoke. The launcher had allowed the simulator to
+advance to tick 594 while starting the remaining services sequentially. Gate
+telemetry retained only watchdog receipts, and assurance recorded 169
+`startup_independent_recovery_pending` events, so the unchanged public-slice
+verification correctly rejected the run because it had no joined receipt.
+
+The launcher now pauses the protected simulator immediately after simulator
+health using its local operator capability. Once every service and the console
+are healthy, it polls the console's operator capabilities until the plant
+epoch, gate epoch, and startup recovery certificate match. It then performs an
+explicit console resume before public-slice verification. A failed pause,
+missing recovery certificate, epoch mismatch, or rejected resume aborts launch
+while the plant remains paused.
+
+Each run's `run.json` records `startup_synchronization`: the accepted pause,
+the paused tick and simulation time, and the matched recovery/resume epochs and
+resume point. Capability values and the recovery certificate are not persisted.
+The launcher still requires the original joined receipt in
+`verify_public_slice`; startup synchronization does not replace or weaken that
+check.

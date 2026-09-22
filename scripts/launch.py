@@ -254,6 +254,99 @@ def post_json(url: str, value: dict[str, object]) -> tuple[int, dict[str, object
         return exc.code, json.loads(exc.read())
 
 
+def post_capability_json(
+    url: str, value: dict[str, object], capability_file: Path
+) -> tuple[int, dict[str, object]]:
+    token = capability_file.read_text().strip()
+    if not token:
+        raise RuntimeError(f"capability is unavailable: {capability_file.name}")
+    request = Request(
+        url,
+        data=json.dumps(value).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=2.0) as response:
+            return response.status, json.load(response)
+    except HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def pause_protected_simulator(
+    host: str, simulator_port: int, operator_capability: Path
+) -> dict[str, object]:
+    status, payload = post_capability_json(
+        f"http://{host}:{simulator_port}/v1/operator/pause?branch=protected",
+        {},
+        operator_capability,
+    )
+    if status != HTTPStatus.OK or payload.get("paused") is not True:
+        raise RuntimeError(f"startup simulator pause was not accepted: {payload}")
+    return {
+        "accepted": True,
+        "plant_epoch": payload.get("plant_epoch"),
+        "physical_tick_index": payload.get("physical_tick_index"),
+        "simulation_time_s": payload.get("simulation_time_s"),
+    }
+
+
+def resume_synchronized_startup(
+    host: str,
+    ports: dict[str, int],
+    *,
+    timeout_s: float = 30.0,
+) -> dict[str, object]:
+    console = f"http://{host}:{ports['console']}"
+    readiness: dict[str, object] = {}
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(f"{console}/api/operator/capabilities", timeout=0.5) as response:
+                value = json.load(response)
+            if isinstance(value, dict):
+                readiness = value
+        except (HTTPError, URLError, TimeoutError, ConnectionError, json.JSONDecodeError):
+            readiness = {}
+        if (
+            readiness.get("startup_recovery_ready") is True
+            and readiness.get("resume_permitted") is True
+            and readiness.get("plant_epoch") == readiness.get("gate_epoch")
+            and isinstance(readiness.get("startup_recovery_certificate"), dict)
+        ):
+            break
+        time.sleep(0.05)
+    else:
+        raise RuntimeError(
+            "startup recovery did not become ready while the simulator was paused: "
+            f"state={readiness.get('state')}, "
+            f"plant_epoch={readiness.get('plant_epoch')}, "
+            f"gate_epoch={readiness.get('gate_epoch')}, "
+            f"startup_recovery_ready={readiness.get('startup_recovery_ready')}"
+        )
+
+    status, resume = post_json(f"{console}/api/operator/resume", {})
+    upstream = resume.get("upstream", {})
+    if (
+        status != HTTPStatus.OK
+        or resume.get("accepted") is not True
+        or not isinstance(upstream, dict)
+        or upstream.get("paused") is not False
+    ):
+        raise RuntimeError(f"synchronized startup resume was not accepted: {resume}")
+    return {
+        "accepted": True,
+        "plant_epoch": readiness.get("plant_epoch"),
+        "gate_epoch": readiness.get("gate_epoch"),
+        "startup_recovery_ready": True,
+        "physical_tick_index": upstream.get("physical_tick_index"),
+        "simulation_time_s": upstream.get("simulation_time_s"),
+    }
+
+
 def _increment(counter: dict[str, int], value: object) -> None:
     key = str(value) if value not in (None, "") else "unknown"
     counter[key] = counter.get(key, 0) + 1
@@ -847,6 +940,16 @@ def main() -> int:
             item = ManagedProcess(name, process, log_handle, f"http://{host}:{port}/health")
             managed.append(item)
             wait_healthy(item, timeout_s=60.0 if name == "perception" else 15.0)
+            if name == "simulator":
+                pause = pause_protected_simulator(
+                    host,
+                    ports["simulator"],
+                    secrets_dir / "operator.token",
+                )
+                status["startup_synchronization"] = {
+                    "state": "paused",
+                    "pause": pause,
+                }
             process_scheduling = status["process_scheduling"]
             assert isinstance(process_scheduling, dict)
             process_scheduling[name] = scheduling.observe_process(name, process.pid)
@@ -866,6 +969,14 @@ def main() -> int:
                     "fresh_sources": diagnostics.get("fresh_sources", []),
                 }
             (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
+
+        startup_synchronization = status.get("startup_synchronization")
+        if not isinstance(startup_synchronization, dict):
+            raise RuntimeError("startup synchronization did not pause the simulator")
+        resume = resume_synchronized_startup(host, ports)
+        startup_synchronization["state"] = "resumed"
+        startup_synchronization["resume"] = resume
+        (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
 
         status["smoke_checks"] = verify_public_slice(
             host, ports, verify_reset=args.verify_reset

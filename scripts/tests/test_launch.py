@@ -27,6 +27,21 @@ class FakeProcess:
         return self.returncode
 
 
+class FakeResponse:
+    def __init__(self, payload: dict, *, status: int = 200) -> None:
+        self.payload = payload
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode()
+
+
 def test_candidate_cli_defaults_to_a5_and_validates_explicit_selection() -> None:
     parser = launch.argument_parser()
 
@@ -49,6 +64,145 @@ def test_assurance_command_propagates_exact_candidate(tmp_path: Path) -> None:
     )
 
     assert command[command.index("--candidate") + 1] == "A2"
+
+
+def test_startup_pause_uses_operator_capability_and_requires_paused_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    capability = tmp_path / "operator.token"
+    capability.write_text("operator-secret\n")
+    observed = []
+
+    def urlopen(request, timeout):
+        observed.append((request, timeout))
+        return FakeResponse(
+            {
+                "paused": True,
+                "plant_epoch": 0,
+                "physical_tick_index": 3,
+                "simulation_time_s": 0.06,
+            }
+        )
+
+    monkeypatch.setattr(launch, "urlopen", urlopen)
+    result = launch.pause_protected_simulator("127.0.0.1", 8100, capability)
+
+    request, timeout = observed[0]
+    assert request.full_url.endswith("/v1/operator/pause?branch=protected")
+    assert request.get_header("Authorization") == "Bearer operator-secret"
+    assert timeout == 2.0
+    assert result == {
+        "accepted": True,
+        "plant_epoch": 0,
+        "physical_tick_index": 3,
+        "simulation_time_s": 0.06,
+    }
+
+    monkeypatch.setattr(
+        launch,
+        "post_capability_json",
+        lambda *_args: (200, {"paused": False}),
+    )
+    with pytest.raises(RuntimeError, match="pause was not accepted"):
+        launch.pause_protected_simulator("127.0.0.1", 8100, capability)
+
+
+def test_startup_resume_waits_for_matching_recovery_then_uses_console(
+    monkeypatch,
+) -> None:
+    readiness = iter(
+        [
+            {
+                "state": "reset_in_progress",
+                "plant_epoch": 0,
+                "gate_epoch": 0,
+                "startup_recovery_ready": False,
+                "resume_permitted": False,
+                "startup_recovery_certificate": None,
+            },
+            {
+                "state": "ready",
+                "plant_epoch": 0,
+                "gate_epoch": 0,
+                "startup_recovery_ready": True,
+                "resume_permitted": True,
+                "startup_recovery_certificate": {"plant_epoch": 0},
+            },
+        ]
+    )
+    requested_urls = []
+
+    def urlopen(url, timeout):
+        requested_urls.append((url, timeout))
+        return FakeResponse(next(readiness))
+
+    resumed = []
+    monkeypatch.setattr(launch, "urlopen", urlopen)
+    monkeypatch.setattr(launch.time, "sleep", lambda _duration: None)
+    monkeypatch.setattr(
+        launch,
+        "post_json",
+        lambda url, body: (
+            resumed.append((url, body))
+            or (
+                200,
+                {
+                    "accepted": True,
+                    "upstream": {
+                        "paused": False,
+                        "physical_tick_index": 3,
+                        "simulation_time_s": 0.06,
+                    },
+                },
+            )
+        ),
+    )
+
+    result = launch.resume_synchronized_startup(
+        "127.0.0.1", {"console": 5176}, timeout_s=1.0
+    )
+
+    assert len(requested_urls) == 2
+    assert resumed == [("http://127.0.0.1:5176/api/operator/resume", {})]
+    assert result["accepted"] is True
+    assert result["startup_recovery_ready"] is True
+    assert result["physical_tick_index"] == 3
+
+
+def test_startup_resume_fails_closed_without_recovery_readiness(monkeypatch) -> None:
+    clock = {"now": 0.0}
+    monkeypatch.setattr(launch.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        launch.time,
+        "sleep",
+        lambda duration: clock.__setitem__("now", clock["now"] + duration),
+    )
+    monkeypatch.setattr(
+        launch,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(
+            {
+                "state": "reset_in_progress",
+                "plant_epoch": 0,
+                "gate_epoch": 0,
+                "startup_recovery_ready": False,
+                "resume_permitted": False,
+                "startup_recovery_certificate": None,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        launch,
+        "post_json",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("resume called without recovery readiness")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="did not become ready"):
+        launch.resume_synchronized_startup(
+            "127.0.0.1", {"console": 5176}, timeout_s=0.1
+        )
 
 
 def test_component_exit_is_recorded_without_stopping_survivor(
