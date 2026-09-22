@@ -8,6 +8,7 @@ import copy
 from http.client import HTTPConnection
 import json
 import math
+import re
 import secrets
 import socket
 import threading
@@ -25,6 +26,21 @@ from horizon_assurance.validation import (
     validate_governor_input,
     validate_recovery_input,
 )
+
+
+def _governor_input_epoch(governor_input: dict[str, Any]) -> int:
+    values = (
+        str(governor_input.get("episode_id", "")),
+        str(governor_input.get("snapshot", {}).get("snapshot_id", "")),
+    )
+    found = {
+        int(match.group(1))
+        for value in values
+        if (match := re.search(r"epoch-(\d+)", value))
+    }
+    if len(found) != 1:
+        raise InputRejected(("PLANT_EPOCH_IDENTITY_INVALID",))
+    return found.pop()
 
 
 @dataclass(frozen=True)
@@ -300,6 +316,8 @@ class ActuatorGate:
         try:
             try:
                 validate_governor_input(governor_input)
+                if _governor_input_epoch(governor_input) != epoch:
+                    raise InputRejected(("PLANT_EPOCH_MISMATCH",))
                 if governor_input.get("configuration_hash") != self.reference.digest():
                     raise InputRejected(("CONFIGURATION_HASH_MISMATCH",))
                 if (
@@ -580,9 +598,15 @@ class ActuatorGate:
         return receipt
 
     def _validate_submission(
-        self, decision: dict[str, Any], governor_input: dict[str, Any], arrival_ns: int
+        self,
+        decision: dict[str, Any],
+        governor_input: dict[str, Any],
+        arrival_ns: int,
+        expected_epoch: int,
     ) -> tuple[Assessment, int]:
         validate_governor_input(governor_input)
+        if _governor_input_epoch(governor_input) != expected_epoch:
+            raise InputRejected(("PLANT_EPOCH_MISMATCH",))
         if governor_input.get("configuration_hash") != self.reference.digest():
             raise InputRejected(("CONFIGURATION_HASH_MISMATCH",))
         if not isinstance(decision, dict):
@@ -788,7 +812,7 @@ class ActuatorGate:
 
         try:
             assessment, source_valid_until_ns = self._validate_submission(
-                decision, governor_input, arrival
+                decision, governor_input, arrival, start_epoch
             )
         except InputRejected as exc:
             with self.lock:

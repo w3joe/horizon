@@ -54,7 +54,11 @@ class FakeGate:
         prime_accepted=True,
         submit_accepted=True,
         prime_transport_error=False,
+        submit_transport_error=False,
+        malformed_receipt=False,
         independent_state=None,
+        run_id="fixture-run-001",
+        branch_id="protected",
     ):
         self.epoch = epoch
         self.ready = ready
@@ -64,11 +68,25 @@ class FakeGate:
         self.prime_accepted = prime_accepted
         self.submit_accepted = submit_accepted
         self.prime_transport_error = prime_transport_error
+        self.submit_transport_error = submit_transport_error
+        self.malformed_receipt = malformed_receipt
         self.independent_state = independent_state
+        self.run_id = run_id
+        self.branch_id = branch_id
+        self.status_calls = 0
+        self.certificate_valid_until_ns = time.monotonic_ns() + 5_000_000_000
 
     def status(self, *, timeout_s):
         del timeout_s
+        self.status_calls += 1
         result = {"epoch": self.epoch, "startup_recovery_ready": self.ready}
+        if self.ready:
+            result["startup_recovery_certificate"] = {
+                "run_id": self.run_id,
+                "branch_id": self.branch_id,
+                "plant_epoch": self.epoch,
+                "original_host_valid_until_ns": self.certificate_valid_until_ns,
+            }
         if self.independent_state is not None:
             result["independent_recovery"] = {
                 "state": self.independent_state,
@@ -102,9 +120,17 @@ class FakeGate:
     def submit(self, governor_input, decision, *, timeout_s):
         del timeout_s
         self.submissions.append((governor_input, decision))
+        if self.submit_transport_error:
+            self.submit_transport_error = False
+            raise EndpointError(None, {"error": "TRANSPORT_ERROR"})
+        if self.malformed_receipt:
+            self.malformed_receipt = False
+            return {"accepted": True, "decision_id": "wrong-decision"}
         return {
             "accepted": self.submit_accepted,
             "decision_id": decision["decision_id"],
+            "run_id": governor_input["run_id"],
+            "branch_id": governor_input["branch_id"],
         }
 
 
@@ -197,6 +223,75 @@ def test_loop_primes_before_first_autonomy_and_skips_duplicate(reference, govern
     assert evidence[0]["receipt"]["decision_id"] == evidence[0]["decision"]["decision_id"]
     assert loop.run_once()["event_type"] == "duplicate_sample_skipped"
     assert gate.primes == [first["snapshot"]["snapshot_id"]]
+
+
+def test_loop_reuses_bounded_gate_readiness_certificate(reference, governor_input) -> None:
+    first = live_input(governor_input, tick=42)
+    second = live_input(governor_input, tick=43)
+    gate = FakeGate(ready=True)
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([first, second]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+
+    assert loop.run_once()["event_type"] == "decision_receipt"
+    assert loop.run_once()["event_type"] == "decision_receipt"
+    assert gate.status_calls == 1
+    assert len(gate.submissions) == 2
+
+
+@pytest.mark.parametrize("failure", ["rejected", "transport", "malformed"])
+def test_loop_invalidates_gate_readiness_after_submission_failure(
+    reference, governor_input, failure
+) -> None:
+    first = live_input(governor_input, tick=42)
+    second = live_input(governor_input, tick=43)
+    gate = FakeGate(
+        ready=True,
+        submit_accepted=failure != "rejected",
+        submit_transport_error=failure == "transport",
+        malformed_receipt=failure == "malformed",
+    )
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([first, second]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+
+    event = loop.run_once()
+    if failure == "rejected":
+        assert event["event_type"] == "decision_receipt"
+        assert event["receipt"]["accepted"] is False
+        gate.submit_accepted = True
+    else:
+        assert event["event_type"] == "gate_submission_failed"
+    assert loop.run_once()["event_type"] == "decision_receipt"
+    assert gate.status_calls == 2
+
+
+def test_loop_reprobes_after_gate_readiness_certificate_expiry(
+    reference, governor_input
+) -> None:
+    first = live_input(governor_input, tick=42)
+    second = live_input(governor_input, tick=43)
+    gate = FakeGate(ready=True)
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([first, second]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+
+    assert loop.run_once()["event_type"] == "decision_receipt"
+    assert loop._gate_readiness is not None
+    loop._gate_readiness = control_loop.GateReadinessCache(
+        run_id=loop._gate_readiness.run_id,
+        branch_id=loop._gate_readiness.branch_id,
+        epoch=loop._gate_readiness.epoch,
+        valid_until_ns=0,
+    )
+    assert loop.run_once()["event_type"] == "decision_receipt"
+    assert gate.status_calls == 2
 
 
 def test_loop_gives_configured_independent_recovery_exclusive_startup_slot(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 import copy
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
@@ -15,6 +16,16 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .candidates import Candidate
+
+
+@dataclass(frozen=True)
+class GateReadinessCache:
+    """One gate-issued startup certificate, bounded by its original host expiry."""
+
+    run_id: str
+    branch_id: str
+    epoch: int
+    valid_until_ns: int
 
 
 class EndpointError(RuntimeError):
@@ -187,6 +198,7 @@ class AssuranceControlLoop:
         self.evidence_sink = evidence_sink
         self.events: deque[dict[str, Any]] = deque(maxlen=2_000)
         self.last_sample_id: str | None = None
+        self._gate_readiness: GateReadinessCache | None = None
         self.stop_event = threading.Event()
 
     def _record(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -248,6 +260,71 @@ class AssuranceControlLoop:
             "health": copy.deepcopy(governor_input["health"]),
         }
 
+    def _invalidate_gate_readiness(self) -> None:
+        self._gate_readiness = None
+
+    def _cached_gate_status(
+        self,
+        governor_input: dict[str, Any],
+        *,
+        epoch: int,
+        now_ns: int,
+    ) -> dict[str, Any] | None:
+        cached = self._gate_readiness
+        if cached is None:
+            return None
+        if (
+            cached.run_id != governor_input.get("run_id")
+            or cached.branch_id != governor_input.get("branch_id")
+            or cached.epoch != epoch
+            or now_ns >= cached.valid_until_ns
+        ):
+            self._invalidate_gate_readiness()
+            return None
+        return {
+            "epoch": cached.epoch,
+            "startup_recovery_ready": True,
+            "startup_recovery_certificate": {
+                "run_id": cached.run_id,
+                "branch_id": cached.branch_id,
+                "plant_epoch": cached.epoch,
+                "original_host_valid_until_ns": cached.valid_until_ns,
+            },
+        }
+
+    def _remember_gate_readiness(
+        self,
+        gate_status: dict[str, Any],
+        governor_input: dict[str, Any],
+        *,
+        epoch: int,
+        now_ns: int,
+    ) -> None:
+        certificate = gate_status.get("startup_recovery_certificate")
+        if not gate_status.get("startup_recovery_ready", False) or not isinstance(
+            certificate, dict
+        ):
+            self._invalidate_gate_readiness()
+            return
+        certificate_epoch = certificate.get("plant_epoch")
+        valid_until_ns = certificate.get("original_host_valid_until_ns")
+        if (
+            type(certificate_epoch) is not int
+            or certificate_epoch != epoch
+            or type(valid_until_ns) is not int
+            or valid_until_ns <= now_ns
+            or certificate.get("run_id") != governor_input.get("run_id")
+            or certificate.get("branch_id") != governor_input.get("branch_id")
+        ):
+            self._invalidate_gate_readiness()
+            return
+        self._gate_readiness = GateReadinessCache(
+            run_id=str(governor_input["run_id"]),
+            branch_id=str(governor_input["branch_id"]),
+            epoch=epoch,
+            valid_until_ns=valid_until_ns,
+        )
+
     def run_once(self) -> dict[str, Any]:
         started = time.monotonic_ns()
         try:
@@ -274,11 +351,18 @@ class AssuranceControlLoop:
         input_summary = self._input_summary(governor_input)
         epoch = input_epoch(governor_input)
         epoch_synchronized = False
+        gate_status = self._cached_gate_status(
+            governor_input,
+            epoch=epoch,
+            now_ns=time.monotonic_ns(),
+        )
         try:
-            gate_status = self.gate.status(
-                timeout_s=self._remaining_s(permission_valid_until_ns)
-            )
+            if gate_status is None:
+                gate_status = self.gate.status(
+                    timeout_s=self._remaining_s(permission_valid_until_ns)
+                )
             if int(gate_status["epoch"]) != epoch:
+                self._invalidate_gate_readiness()
                 independent_recovery = gate_status.get("independent_recovery")
                 reset = self.gate.reset(
                     timeout_s=self._remaining_s(permission_valid_until_ns)
@@ -292,6 +376,7 @@ class AssuranceControlLoop:
                     "independent_recovery": independent_recovery,
                 }
             if not gate_status.get("startup_recovery_ready", False):
+                self._invalidate_gate_readiness()
                 if time.monotonic_ns() >= permission_valid_until_ns:
                     self.last_sample_id = sample_id
                     return self._record(
@@ -328,6 +413,7 @@ class AssuranceControlLoop:
                     timeout_s=self._remaining_s(permission_valid_until_ns, cap_s=2.0),
                 )
                 self.last_sample_id = sample_id
+                self._invalidate_gate_readiness()
                 return self._record(
                     {
                         "event_type": (
@@ -343,7 +429,14 @@ class AssuranceControlLoop:
                         "result": prime,
                     }
                 )
+            self._remember_gate_readiness(
+                gate_status,
+                governor_input,
+                epoch=epoch,
+                now_ns=time.monotonic_ns(),
+            )
         except EndpointError as exc:
+            self._invalidate_gate_readiness()
             return self._record(
                 {
                     "event_type": "gate_unavailable",
@@ -387,6 +480,7 @@ class AssuranceControlLoop:
                 timeout_s=self._remaining_s(deadline_ns),
             )
         except EndpointError as exc:
+            self._invalidate_gate_readiness()
             return self._record(
                 {
                     "event_type": "gate_submission_failed",
@@ -398,6 +492,28 @@ class AssuranceControlLoop:
                     "detail": exc.payload,
                 }
             )
+        if (
+            not isinstance(receipt, dict)
+            or not isinstance(receipt.get("accepted"), bool)
+            or receipt.get("decision_id") != decision.get("decision_id")
+            or receipt.get("run_id") != governor_input.get("run_id")
+            or receipt.get("branch_id") != governor_input.get("branch_id")
+        ):
+            self._invalidate_gate_readiness()
+            return self._record(
+                {
+                    "event_type": "gate_submission_failed",
+                    "host_monotonic_ns": time.monotonic_ns(),
+                    "snapshot_id": sample_id,
+                    "epoch": epoch,
+                    "epoch_synchronized": epoch_synchronized,
+                    "input_summary": input_summary,
+                    "decision": decision,
+                    "detail": {"error": "MALFORMED_GATE_RECEIPT"},
+                }
+            )
+        if receipt["accepted"] is not True:
+            self._invalidate_gate_readiness()
         event = {
             "event_type": "decision_receipt",
             "host_monotonic_ns": time.monotonic_ns(),

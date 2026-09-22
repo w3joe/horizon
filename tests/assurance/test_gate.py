@@ -162,6 +162,25 @@ def test_gate_is_exclusive_and_revalidates_final_command(reference, governor_inp
     assert runtime.stored_recovery is not None
 
 
+def test_gate_rejects_governor_input_from_old_plant_epoch(reference, governor_input) -> None:
+    plant = FakePlant()
+    runtime = gate(reference, plant)
+    runtime.epoch = 1
+    message = retime_live(governor_input)
+    decision = A1ThresholdSimplex(reference, runtime.checker.config).evaluate(message)
+
+    rejected = runtime.submit(decision, message, token="decision-secret")
+
+    assert rejected["accepted"] is False
+    assert "PLANT_EPOCH_MISMATCH" in rejected["reason_codes"]
+    assert plant.envelopes == []
+
+    primed, reasons = runtime.prime_recovery(message, token="decision-secret")
+    assert primed is False
+    assert reasons == ["PLANT_EPOCH_MISMATCH"]
+    assert runtime.stored_recovery is None
+
+
 @pytest.mark.parametrize("fault", ["invalid", "expired", "missing", "duplicate"])
 def test_gate_independently_rejects_pass_without_qualified_radar(reference, governor_input, fault) -> None:
     plant = FakePlant()

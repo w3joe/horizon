@@ -38,6 +38,9 @@ def reference() -> NavigationReference:
 @pytest.fixture
 def governor_input(reference: NavigationReference) -> dict:
     message = json.loads((ROOT / "packages/contracts/fixtures/governor-input.json").read_text())
+    message["episode_id"] = "fixture:epoch-0"
+    message["snapshot"]["snapshot_id"] = "fixture:protected:epoch-0:snapshot:42"
+    message["proposal"]["origin_snapshot_id"] = message["snapshot"]["snapshot_id"]
     message["configuration_hash"] = reference.digest()
     config = AssuranceConfig()
     health_sources = (*config.required_health_sources, *config.optional_health_sources)
