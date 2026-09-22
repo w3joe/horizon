@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { headingToSceneYaw, nedToScene } from "../lib/coordinates";
 import type { CameraMode, ConsolePacket, PathPoint } from "../types";
+import { LicensedCargoShip, LicensedCargoStack, LicensedOceanBuoy, LicensedRib } from "./MaritimeAssets";
 
 interface Props {
   packet: ConsolePacket;
@@ -11,6 +12,22 @@ interface Props {
   onSelectContact: (id: string) => void;
   showBranch: boolean;
 }
+
+const CARGO_STACK_PLACEMENTS: ReadonlyArray<{
+  position: [number, number, number];
+  rotation: number;
+}> = [
+  { position: [-96, 0.3, 44], rotation: 0 },
+  { position: [-86, 0.3, 68], rotation: Math.PI / 2 },
+  { position: [105, 0.28, -51], rotation: Math.PI / 2 },
+];
+
+const BUOY_PLACEMENTS: ReadonlyArray<[number, number, number]> = [
+  [-54, -0.12, 91],
+  [62, -0.12, 88],
+  [-58, -0.12, -96],
+  [68, -0.12, -91],
+];
 
 function Ocean() {
   const geometry = useMemo(() => new THREE.PlaneGeometry(360, 300, 72, 60), []);
@@ -91,42 +108,33 @@ function Harbor() {
           </mesh>
         </group>
       ))}
-      {[[-67, -101], [77, -102], [102, 83], [-98, 104]].map(([east, north]) => (
-        <group key={`beacon-${east}-${north}`} position={[east, 0, -north]}>
-          <mesh position-y={2.2}><cylinderGeometry args={[0.22, 0.3, 4.4, 8]} /><meshStandardMaterial color="#c4ced0" /></mesh>
-          <mesh position-y={4.55}><sphereGeometry args={[0.45, 10, 8]} /><meshBasicMaterial color="#f5c35b" /></mesh>
-          <pointLight position-y={4.5} intensity={9} distance={28} color="#f3b84d" />
-        </group>
+      {CARGO_STACK_PLACEMENTS.map(({ position, rotation }) => (
+        <LicensedCargoStack key={`cargo-${position.join("-")}`} position={position} rotationY={rotation} />
+      ))}
+      {BUOY_PLACEMENTS.map((position, index) => (
+        <LicensedOceanBuoy key={`buoy-${position.join("-")}`} position={position} rotationY={index * 0.7} />
       ))}
     </group>
   );
 }
 
-function Vessel({ position, heading, ownship = false, selected = false, ghost = false, onClick, scale = 1 }: {
-  position: [number, number, number]; heading: number; ownship?: boolean; selected?: boolean; ghost?: boolean; onClick?: () => void; scale?: number;
+function GhostVessel({ position, heading }: {
+  position: [number, number, number]; heading: number;
 }) {
-  const hull = ownship ? "#17242a" : "#d7ddda";
-  const accent = ownship ? "#55e3df" : "#829195";
   return (
-    <group position={position} rotation-y={headingToSceneYaw(heading)} scale={scale} onClick={(event) => { event.stopPropagation(); onClick?.(); }}>
-      {selected && <pointLight position={[0, 4, 0]} color="#f2bb64" intensity={18} distance={22} />}
+    <group position={position} rotation-y={headingToSceneYaw(heading)}>
       <mesh castShadow scale={[1, 1, 1]}>
         <boxGeometry args={[3, 1.25, 9.6]} />
-        <meshStandardMaterial color={hull} metalness={0.18} roughness={0.5} transparent={ghost} opacity={ghost ? 0.28 : 1} emissive={selected ? "#514018" : "#000000"} />
+        <meshStandardMaterial color="#55e3df" metalness={0.18} roughness={0.5} transparent opacity={0.28} />
       </mesh>
       <mesh position={[0, 0, -5.4]} rotation-x={-Math.PI / 2} castShadow>
         <coneGeometry args={[2.12, 3.1, 4]} />
-        <meshStandardMaterial color={hull} transparent={ghost} opacity={ghost ? 0.28 : 1} />
+        <meshStandardMaterial color="#55e3df" transparent opacity={0.24} />
       </mesh>
       <mesh position={[0, 1.15, 0.5]} castShadow>
         <boxGeometry args={[2.15, 1.25, 3.1]} />
-        <meshStandardMaterial color={accent} transparent={ghost} opacity={ghost ? 0.2 : 0.92} roughness={0.35} />
+        <meshStandardMaterial color="#55e3df" transparent opacity={0.2} roughness={0.35} />
       </mesh>
-      <mesh position={[0, 2.35, 0.3]} castShadow>
-        <cylinderGeometry args={[0.08, 0.08, 2.4, 8]} />
-        <meshStandardMaterial color="#c7d5d8" transparent={ghost} opacity={ghost ? 0.2 : 1} />
-      </mesh>
-      {ownship && <mesh position={[0, 1.95, -1.4]}><boxGeometry args={[2.35, 0.12, 0.35]} /><meshBasicMaterial color="#58e3df" /></mesh>}
     </group>
   );
 }
@@ -172,16 +180,39 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
       {packet.proposedPath.length > 1 && <PathLine points={packet.proposedPath} color="#fb6674" dashed />}
       {packet.acceptedPath.length > 1 && <PathLine points={packet.acceptedPath} color="#4ce1de" />}
       {showBranch && packet.branchPath.length > 1 && <PathLine points={packet.branchPath} color="#f2bb64" dashed opacity={0.72} />}
-      <Vessel position={nedToScene({ north: own.position_ne_m[0], east: own.position_ne_m[1] }, 0.42)} heading={own.heading_rad} ownship />
-      {contact && <Vessel position={contactPosition} heading={contact.heading_rad} selected={selected} onClick={() => onSelectContact(contact.vessel_id)} scale={1.45} />}
+      <LicensedRib
+        position={nedToScene({ north: own.position_ne_m[0], east: own.position_ne_m[1] }, 0)}
+        heading={own.heading_rad}
+        timeS={packet.snapshot.simulation_time_s}
+        physicalPose={packet.snapshot.marine_environment ? {
+          heaveDown: own.heave_down_m ?? 0,
+          roll: own.attitude_rp_rad?.[0] ?? 0,
+          pitch: own.attitude_rp_rad?.[1] ?? 0,
+        } : undefined}
+      />
+      {contact && <LicensedCargoShip
+        position={contactPosition}
+        heading={contact.heading_rad}
+        lengthM={contact.hull.length_m}
+        beamM={contact.hull.beam_m}
+        selected={selected}
+        onClick={() => onSelectContact(contact.vessel_id)}
+      />}
       {contact && uncertaintyRadius !== null && uncertaintyRadius > 0 && <mesh ref={uncertaintyRef} position={[contactPosition[0], 0.08, contactPosition[2]]} rotation-x={-Math.PI / 2}>
         <ringGeometry args={[Math.max(0, uncertaintyRadius - 0.28), uncertaintyRadius, 72]} />
         <meshBasicMaterial color="#f2bb64" transparent opacity={0.56} side={THREE.DoubleSide} />
       </mesh>}
-      {packet.snapshot.traffic.slice(1).map((vessel) => (
-        <Vessel key={vessel.vessel_id} position={nedToScene({ north: vessel.position_ne_m[0], east: vessel.position_ne_m[1] }, 0.35)} heading={vessel.heading_rad} scale={1.65} />
+      {packet.snapshot.traffic.slice(1).map((vessel, index) => (
+        <LicensedCargoShip
+          key={vessel.vessel_id}
+          position={nedToScene({ north: vessel.position_ne_m[0], east: vessel.position_ne_m[1] }, 0)}
+          heading={vessel.heading_rad}
+          lengthM={vessel.hull.length_m}
+          beamM={vessel.hull.beam_m}
+          detailed={index < 2}
+        />
       ))}
-      {branchGhost && <Vessel position={nedToScene(branchGhost, 0.42)} heading={0.08} ownship ghost />}
+      {branchGhost && <GhostVessel position={nedToScene(branchGhost, 0.42)} heading={0.08} />}
     </>
   );
 }
@@ -203,6 +234,11 @@ export function MaritimeScene(props: Props) {
       </Canvas>
       <div className="north-indicator" aria-hidden="true"><span>N</span><i /></div>
       <div className="scene-coordinates">NED frame · heading clockwise from north</div>
+      <div className="asset-attribution">
+        <a href="https://opengameart.org/content/container-ship-full" target="_blank" rel="noreferrer">Ship + cargo · Sketlux · CC0</a>
+        <a href="https://polyhaven.com/a/ocean_buoy" target="_blank" rel="noreferrer">Ocean Buoy · Mateusz Sadek / Poly Haven · CC0</a>
+        <span>Visual proxies · public hulls remain authoritative</span>
+      </div>
       {props.packet.snapshot.traffic[0] && <button className="contact-label" type="button" onClick={() => props.onSelectContact(props.packet.contact.contactId)} aria-pressed={props.selectedContactId === props.packet.contact.contactId}>
         <strong>{props.packet.contact.label}</strong><span>{props.packet.contact.rangeM.toFixed(1)} m · {props.packet.contact.status}</span>
       </button>}

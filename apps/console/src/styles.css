@@ -100,6 +100,8 @@ button { cursor: pointer; }
 .north-indicator i { width: 1px; height: 28px; margin-top: 4px; background: currentColor; position: relative; }
 .north-indicator i::before { content: ""; position: absolute; left: -4px; top: 0; border: 4px solid transparent; border-bottom: 7px solid currentColor; transform: translateY(-6px); }
 .scene-coordinates { position: absolute; left: 16px; bottom: 16px; padding: 6px 9px; background: rgba(4, 17, 23, .78); color: #9cb3b9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; pointer-events: none; }
+.asset-attribution { position: absolute; z-index: 2; right: 16px; bottom: 14px; max-width: min(440px, 58%); display: flex; justify-content: flex-end; gap: 5px 10px; flex-wrap: wrap; padding: 6px 9px; border: 1px solid rgba(76, 225, 222, .13); border-radius: 4px; background: rgba(4, 17, 23, .82); color: #809aa0; font: 9px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+.asset-attribution a { color: #a9d9d6; text-decoration: none; }.asset-attribution a:hover, .asset-attribution a:focus-visible { color: var(--cyan); text-decoration: underline; }
 .contact-label { position: absolute; left: 56%; top: 35%; display: flex; flex-direction: column; gap: 2px; padding: 7px 10px 7px 14px; text-align: left; border: 1px solid rgba(242, 187, 100, .5); border-radius: 3px; background: rgba(6, 19, 25, .86); box-shadow: 0 5px 20px rgba(0, 0, 0, .25); }
 .contact-label::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--amber); }
 .contact-label strong { font-size: 12px; }
@@ -242,14 +244,14 @@ button { cursor: pointer; }
   .control-bar { flex-direction: column; align-items: stretch; gap: 7px; }.workspace-tabs { justify-content: center; }.workspace-tabs button { flex: 1; }.scenario-controls { justify-content: center; flex-wrap: wrap; }.scenario-controls select { max-width: 210px; }
   .operator-controls { padding: 10px 14px; }.operator-state { min-width: 100%; border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 8px; }.operator-buttons, .fault-controls { flex-wrap: wrap; }
   .mode-disclosure { padding: 8px 14px; flex-wrap: wrap; }.mode-disclosure code { display: none; }
-  .scene-canvas { height: 460px; }.evidence-panel { grid-template-columns: 1fr 1fr; gap: 16px; }.evidence-panel .intervention-card, .evidence-panel .selected-event-card { grid-column: 1 / -1; }
+  .scene-canvas { height: 460px; }.asset-attribution { max-width: 72%; }.evidence-panel { grid-template-columns: 1fr 1fr; gap: 16px; }.evidence-panel .intervention-card, .evidence-panel .selected-event-card { grid-column: 1 / -1; }
   .timeline { grid-template-columns: 1fr; }.timeline-sequence { grid-column: 1; }.playback-controls { justify-content: center; }.workspace-scroll { min-height: 520px; padding: 18px; }
   .recorded-frame-grid, .neural-evidence-grid, .validation-strip { grid-template-columns: 1fr; }.artifact-disclosure { align-items: flex-start; flex-direction: column; }.flow-evidence-row { grid-template-columns: 1fr; }.flow-evidence-row .event-record { grid-column: auto; }
 }
 
 @media (max-width: 500px) {
   .connection-pill { font-size: 0; padding: 8px; }.connection-pill i { width: 9px; height: 9px; }.workspace-tabs button { font-size: 12px; padding: 10px 5px; }
-  .scenario-controls button { display: none; }.scene-legend .branch { display: none; }.scene-legend { gap: 8px; }.scene-canvas { height: 400px; }.contact-label { left: auto; right: 12px; top: 30%; }
+  .scenario-controls button { display: none; }.scene-legend .branch { display: none; }.scene-legend { gap: 8px; }.scene-canvas { height: 400px; }.asset-attribution { left: 12px; right: 12px; max-width: none; }.asset-attribution span { display: none; }.scene-coordinates { bottom: 60px; }.contact-label { left: auto; right: 12px; top: 30%; }
   .evidence-panel { grid-template-columns: 1fr; }.evidence-panel .intervention-card, .evidence-panel .selected-event-card { grid-column: auto; }.timeline { padding: 14px; }.timeline-sequence, .console-footer span:first-child { display: none; }.console-footer { justify-content: flex-end; }
 }
 

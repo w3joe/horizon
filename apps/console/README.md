@@ -18,6 +18,22 @@ The console opens `/api/v1/public/stream?branch=protected&events=0` and polls th
 
 The Neural sensor workspace reads the allowlisted `/api/artifacts/perception` reproduction routes. It labels the 85-frame CPU WaSR-T run as a recorded reproduction, independent from the simulator encounter. Raw images, class-mask previews, measured frame timing, and per-layer summary statistics are loaded from the server; pooled feature arrays never enter the browser.
 
+## Maritime display assets
+
+Both navigation canvases use the checked-in maritime registry as the source of
+truth for browser paths and required glTF root nodes. The RIB remains the
+ownship display proxy. The Sketlux container ship is scaled to each contact's
+public hull dimensions, while the cargo stack and Poly Haven buoy provide a
+small, deterministic harbor set. These models are visual proxies: public hull
+records remain authoritative for navigation and safety evidence.
+
+The renderer shares loader caches and underlying geometry between instances,
+limits detailed cargo models in dense traffic, and retains lightweight local
+geometry during downloads or asset errors. Source links and licenses remain
+visible in each scene. Full hashes, bounds, attribution, and reproduction
+instructions live in `assets/maritime/registry.json` and
+`docs/realism/assets/`.
+
 Production playback and fault controls remain disabled until A01 exposes the coordinated server-side operator API. Private tokens must remain in the platform process.
 
 The Navigation, Data flow, and Neural sensor workspaces share the selected timeline event. Keyboard shortcuts are `1`–`3` for workspaces, Space for fixture play/pause, and `R` for fixture reset.
@@ -29,4 +45,5 @@ The Navigation, Data flow, and Neural sensor workspaces share the selected timel
 - The browser interpolates fixture playback only; it does not implement plant dynamics, a governor, or an actuator gate.
 - Runtime-linked neural telemetry stays unavailable unless the live sample includes a trace. The recorded reproduction shows measured summaries and images without inventing activations or attribution maps.
 - Live simulator snapshots are sensor-derived display state, not evaluation truth.
+- Maritime GLBs never alter collision geometry, hydrodynamics, contacts, or assurance evidence.
 - The recorded perception source is a camera sequence reproduction, not a simulator camera or a live 20 Hz/GPU claim.

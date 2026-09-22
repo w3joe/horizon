@@ -1,11 +1,9 @@
-import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Component, Suspense, useEffect, useMemo } from "react";
-import type { JSX, ReactNode } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { useEffect, useMemo } from "react";
+import type { JSX } from "react";
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { SimulationSnapshot } from "../../../../packages/contracts/typescript/src/index";
-
-const RIB_ASSET_URL = "/assets/maritime/horizon-rib.glb";
+import { LicensedCargoShip, LicensedRib } from "./MaritimeAssets";
 
 export interface DemoSceneProps {
   snapshot: SimulationSnapshot;
@@ -234,126 +232,16 @@ function CameraDirector({ snapshot, trail, mode }: {
   return null;
 }
 
-function FallbackRib({ failed = false }: { failed?: boolean }) {
-  const color = failed ? "#a93d3c" : "#d79b45";
-  return (
-    <group>
-      <mesh castShadow position-y={0.45}>
-        <boxGeometry args={[3, 0.9, 10.5]} />
-        <meshStandardMaterial color={color} roughness={0.55} metalness={0.12} />
-      </mesh>
-      <mesh castShadow position={[0, 0.78, -5.45]} rotation-x={-Math.PI / 2}>
-        <coneGeometry args={[1.5, 2.8, 4]} />
-        <meshStandardMaterial color={color} roughness={0.55} />
-      </mesh>
-      {failed && <pointLight color="#ff625f" intensity={18} distance={20} position-y={3} />}
-    </group>
-  );
-}
-
-class RibAssetBoundary extends Component<{
-  children: ReactNode;
-  position: [number, number, number];
-  heading: number;
-}, { failed: boolean }> {
-  state = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  componentDidCatch(error: unknown) {
-    console.error("Horizon RIB asset failed to load", error);
-  }
-
-  render() {
-    if (this.state.failed) {
-      return (
-        <group position={this.props.position} rotation-y={yaw(this.props.heading)}>
-          <FallbackRib failed />
-        </group>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-function LicensedRib({ position, heading, timeS, physicalPose }: {
-  position: [number, number, number];
-  heading: number;
-  timeS: number;
-  physicalPose?: { heaveDown: number; roll: number; pitch: number };
-}) {
-  const gltf = useLoader(GLTFLoader, RIB_ASSET_URL);
-  const model = useMemo(() => {
-    const clone = gltf.scene.clone(true);
-    clone.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        object.castShadow = true;
-        object.receiveShadow = true;
-      }
-    });
-    return clone;
-  }, [gltf.scene]);
-  const heave = physicalPose ? -physicalPose.heaveDown : Math.sin(timeS * 0.72) * 0.055;
-  const pitch = physicalPose?.pitch ?? Math.sin(timeS * 0.51 + 0.8) * 0.012;
-  const roll = physicalPose ? -physicalPose.roll : Math.sin(timeS * 0.64) * 0.018;
-  return (
-    <group position={[position[0], position[1] + heave, position[2]]} rotation-y={yaw(heading)}>
-      <group rotation={[pitch, 0, roll]}><primitive object={model} /></group>
-    </group>
-  );
-}
-
 function Ownship({ snapshot, timeS }: Pick<DemoSceneProps, "snapshot" | "timeS">) {
   const own = snapshot.ownship;
   const position = ned(own.position_ne_m[0], own.position_ne_m[1], 0);
   return (
-    <RibAssetBoundary position={position} heading={own.heading_rad}>
-      <Suspense fallback={<group position={position} rotation-y={yaw(own.heading_rad)}><FallbackRib /></group>}>
-        <LicensedRib position={position} heading={own.heading_rad} timeS={timeS}
-          physicalPose={snapshot.marine_environment ? {
-            heaveDown: own.heave_down_m ?? 0,
-            roll: own.attitude_rp_rad?.[0] ?? 0,
-            pitch: own.attitude_rp_rad?.[1] ?? 0,
-          } : undefined} />
-      </Suspense>
-    </RibAssetBoundary>
-  );
-}
-
-function Barge({ position, heading, length, beam, collision }: {
-  position: [number, number, number];
-  heading: number;
-  length: number;
-  beam: number;
-  collision: boolean;
-}) {
-  return (
-    <group position={position} rotation-y={yaw(heading)}>
-      <mesh castShadow receiveShadow position-y={0.55}>
-        <boxGeometry args={[beam, 1.1, length]} />
-        <meshStandardMaterial color={collision ? "#6b332d" : "#4e5556"} roughness={0.73} metalness={0.38} />
-      </mesh>
-      <mesh castShadow position={[0, 1.28, length * 0.18]}>
-        <boxGeometry args={[beam * 0.58, 1.4, Math.min(4.4, length * 0.24)]} />
-        <meshStandardMaterial color="#d2cec0" roughness={0.66} metalness={0.12} />
-      </mesh>
-      <mesh castShadow position={[0, 2.2, length * 0.18]}>
-        <boxGeometry args={[beam * 0.44, 0.48, Math.min(3.7, length * 0.2)]} />
-        <meshStandardMaterial color="#23343a" roughness={0.35} metalness={0.24} />
-      </mesh>
-      {[-1, 1].flatMap((side) => [-0.34, 0, 0.34].map((offset) => (
-        <mesh key={`${side}-${offset}`} position={[side * (beam / 2 + 0.12), 0.48, offset * length]} rotation-z={Math.PI / 2}>
-          <torusGeometry args={[0.32, 0.1, 8, 16]} />
-          <meshStandardMaterial color="#11191b" roughness={0.86} />
-        </mesh>
-      )))}
-      <mesh position={[0, 1.35, -length * 0.27]}>
-        <boxGeometry args={[beam * 0.72, 0.2, 0.2]} />
-        <meshStandardMaterial color="#e3a842" emissive="#573308" emissiveIntensity={0.35} />
-      </mesh>
-    </group>
+    <LicensedRib position={position} heading={own.heading_rad} timeS={timeS}
+      physicalPose={snapshot.marine_environment ? {
+        heaveDown: own.heave_down_m ?? 0,
+        roll: own.attitude_rp_rad?.[0] ?? 0,
+        pitch: own.attitude_rp_rad?.[1] ?? 0,
+      } : undefined} />
   );
 }
 
@@ -363,13 +251,14 @@ function Traffic({ snapshot, collision }: Pick<DemoSceneProps, "snapshot" | "col
       {snapshot.traffic.map((vessel, index) => {
         const position = ned(vessel.position_ne_m[0], vessel.position_ne_m[1], 0);
         return (
-          <Barge
+          <LicensedCargoShip
             key={vessel.vessel_id}
             position={position}
             heading={vessel.heading_rad}
-            length={vessel.hull.length_m}
-            beam={vessel.hull.beam_m}
+            lengthM={vessel.hull.length_m}
+            beamM={vessel.hull.beam_m}
             collision={collision && index === 0}
+            detailed={index === 0}
           />
         );
       })}
@@ -533,7 +422,8 @@ export function DemoScene(props: DemoSceneProps): JSX.Element {
       <div style={{ position: "absolute", right: 11, bottom: 9, maxWidth: "70%", padding: "5px 7px", borderRadius: 6, color: "rgba(235, 248, 248, .82)", background: "rgba(4, 24, 31, .68)", font: "500 9px/1.3 system-ui", textAlign: "right", pointerEvents: "auto" }}>
         {props.snapshot.marine_environment
           ? `Marine motion: ${props.snapshot.marine_environment.qualification} · assurance unqualified`
-          : "Visual sea and vessel motion only"} · RIB “Assault Boat” © tnnv ·{" "}
+          : "Visual sea and vessel motion only"} · Traffic uses a scaled{" "}
+        <a href="https://opengameart.org/content/container-ship-full" target="_blank" rel="noreferrer" style={{ color: "#b7f5ef" }}>Sketlux CC0 visual proxy</a>; public hulls remain authoritative · RIB “Assault Boat” © tnnv ·{" "}
         <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer" style={{ color: "#b7f5ef" }}>CC BY 4.0</a>
       </div>
     </div>
