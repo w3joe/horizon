@@ -78,9 +78,40 @@ the isolated topology. Timing qualification, WCET, and safe operation under a
 specific affinity plan require representative target hardware and a dedicated
 resource budget.
 
-Local verification on macOS cannot reproduce Linux CPU affinity. Three repeated
-runs of the five affected cases passed 15/15 in 73.97, 74.28, and 75.56 seconds.
-The complete system suite then passed 14 tests with the Linux-only affinity test
-skipped in 83.87 seconds. Hosted Linux remains authoritative only for the
-kernel-visible two-lane startup smoke. These results do not establish WCET,
-hard real-time behavior, or target-hardware qualification.
+## Post-integration startup synchronization
+
+Run `35700957110` confirmed that the functional job used scheduling mode `off`,
+but four live-stack tests still failed after the simulator, geography, traffic,
+and console integration. S02 observed 30.08 simulated seconds after its
+30.0-second boundary, S22 observed 38.68 seconds after a 38.44-second comparison
+collision, and both restart-lineage tests failed to obtain initial accepted
+evidence within 15 host seconds. Public diagnostics showed stale or rejected
+startup recovery inputs, fusion or gate unavailability, and deadline-exhausted
+recovery validation. S02's retained decisions were valid and deadline-met, but
+fusion samples skipped across the narrow final boundary interval.
+
+The test harness had started the simulator's real-time physics thread before
+starting decision AI, collector, fusion, gate, and assurance. A loaded host
+therefore consumed scenario time while the protected chain was still becoming
+operational. The harness now pauses physics immediately after simulator health,
+then requires a current fusion recovery input, a gate recovery certificate,
+and, for loop-enabled stacks, an accepted deadline-met joined chain. It resumes
+physics only with a fresh matching gate certificate. The Linux affinity smoke
+opts out because it verifies process startup and affinity only.
+
+S02 additionally keeps physics paused while it explicitly exercises the real
+fusion, assurance, and gate HTTP endpoints. It advances only after an accepted
+chain, using coarse steps away from the boundary and the exact 0.02-second
+fixed step during the final five simulated seconds. This removes dependence on
+host scheduling without changing the 30.0-second boundary, the required
+physical actuation before that boundary, or the 40 ms decision deadline. S22
+continues to exercise the live assurance loop; the startup barrier is its only
+behavioral harness change.
+
+Local verification on macOS cannot reproduce Linux CPU affinity. Focused runs
+passed for nominal startup, S02, the unchanged live-loop S22 case, and both
+restart-lineage scenarios. The complete system suite then passed 19 tests with
+the Linux-only affinity test skipped in 84.40 seconds. Hosted Linux remains
+authoritative only for the kernel-visible two-lane startup smoke. These results
+do not establish WCET, hard real-time behavior, or target-hardware
+qualification.
