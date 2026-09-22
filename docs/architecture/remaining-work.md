@@ -1,22 +1,19 @@
-# Remaining implementation — active parallel work
+# Remaining implementation and claim closure
 
-The user authorized the remaining work on 2026-09-21, with Sol/high agents,
-isolated worktrees, automatic integration after checks, and a USD 100 total
-Horizon compute cap. Three workers can run alongside the coordinator.
+The bounded implementation packets authorized on 2026-09-21 are integrated into
+the main branch. The USD 100 total Horizon compute cap remains in force. This
+page records the resulting capabilities and the evidence still required;
+worktree and worker status are omitted because they are temporary coordination
+state.
 
-| Workstream | Owner / worktree | Current deliverable |
+| Workstream | Integrated capability | Remaining boundary |
 | --- | --- | --- |
-| Marine physics | A10, `a10-marine-physics` | First implementation merged: versioned wave/current/wind response, heave/roll/pitch, effective draft, characterization, and public operating-mode qualification. Fusion enforcement is in the live-evidence packet. |
-| Maritime assets | A11, `a11-asset-renderer` | Merged licensed RIB, cargo vessel, cargo stacks and buoys with normalized GLBs, provenance, browser budgets, loading fallbacks and role-appropriate placement in both 3D views. |
-| Live neural evidence | A13, `a13-live-launch` | Core recorded-camera inference, health lineage, bounded queues and fail-closed fusion policy are merged. Active packet makes it an explicit coordinated launch mode. |
-| Research and verification | A12, `a12-acceptance` | Frozen 296-frame CUDA/MPS drift comparison complete. S09/S12 restart lineage tests and the S01–S22 gap audit are merged; S02/S22 evidence strengthening remains active. |
-| Deadline performance | A14, `a14-deadline` | Preserve the exact 40 ms control deadline while removing predictive-rollout allocation overhead; prove numerical equivalence and rerun Linux end-to-end tests. |
-| Integration/platform | Coordinator, integrated `main` | Shared contracts, launch modes, Modal reservations and artifact recovery, UI integration, Linux timing diagnosis, merges and private remote. |
-
-Three Sol/high workers run concurrently in isolated worktrees, with the
-coordinator as the fourth active slot. Completed workers rotate onto the next
-bounded packet without overlapping file ownership. The coordinator integrates
-and automatically merges reviewed changes into the private repository.
+| Marine physics | Versioned wave/current/wind response, heave/roll/pitch, effective draft, characterization, and public operating-mode qualification are merged. | The higher-fidelity marine mode remains unqualified for assurance and needs its own evidence. |
+| Maritime assets | The console renders the licensed RIB, cargo vessel, cargo stack, and buoy in both 3D views, with normalized GLBs, provenance, browser budgets, loading fallbacks, and validated served copies. | These are display assets only; collision hulls, hydrodynamics, sensing, and safety evidence remain separate. |
+| Live neural evidence | Recorded-camera inference, exact health lineage, bounded queues and expiry, fail-closed policy, and the optional eighth coordinated process are merged. | The finite MODD2 footage is not pose-reactive and cannot provide metric contacts, free-space authority, or calibrated risk. |
+| Research and verification | The frozen 296-frame CUDA/MPS descriptive drift comparison, S09/S12 restart-lineage tests, and S01–S22 gap audit are merged. | Full mission-level S01–S22 acceptance, calibration, and held-out evaluation remain open. |
+| Deadline performance | Fixed-step recovery rollout allocation was reduced without relaxing the production 40 ms deadline. | Linux shared-runner deadline evidence and the remaining live-chain acceptance cases must still pass. |
+| Integration/platform | Shared contracts, the default seven-service launch, opt-in perception launch, UI integration, bounded compute records, and private repository integration are present. | Real ship endpoints, production AI integration, and deployment qualification require external systems and evidence. |
 
 The replay renderer now accepts authoritative wave components and physical
 heave/roll/pitch, and the launcher accepts `--marine-config`. The existing audited
@@ -24,12 +21,12 @@ guided replay remains the baseline encounter. A new marine demonstration still
 needs its own recorded run and visual verification; it must not reuse the
 baseline safety outcome. Full S01–S22 acceptance and Linux timing remain open.
 
-The integrated local check passes 377 Python tests, contract checks, the maritime
-asset registry, TypeScript checks and a production console build. The guided
-collision comparison and live harbor were checked visually after asset
-integration. Linux run 35677708977 still failed six live-chain tests because
-recovery requests took about 48–59 ms under shared-runner load. The 40 ms
-deadline has not been relaxed; A14 is optimizing the same fixed-step equations.
+The integrated checks cover Python, contracts, the maritime asset registry,
+TypeScript, and a production console build. The guided collision comparison and
+live harbor were checked visually after asset integration. Linux run 35677708977
+failed six live-chain tests because recovery requests took about 48–59 ms under
+shared-runner load. The later fixed-step optimization preserves the 40 ms
+deadline, but a passing Linux end-to-end rerun is still required.
 
 ## Completion evidence
 
@@ -44,8 +41,9 @@ deadline has not been relaxed; A14 is optimizing the same fixed-step equations.
 - Real ship hardware and production AI connections require actual endpoint and
   interface information. Tested adapters, local replay, and declared unavailable
   capabilities are the current implementable boundary.
-- Every cloud job needs a unique bounded reservation. The working budget remains
-  USD 80 with USD 20 protected; do not change the workspace-wide billing limit.
+- Every cloud job needs a unique bounded reservation. The project cap remains
+  USD 100: USD 80 working and USD 20 protected. Do not change the workspace-wide
+  billing limit.
 
 ## Modal retry result
 
@@ -74,9 +72,11 @@ CUDA/fp16 forward time was 34.907 ms; CPU health features took 108.308 ms, so no
 20 Hz end-to-end claim is made. Relative feature drift against the frozen MPS
 reference was nonzero (p95: encoder 0.003637, temporal 0.009944, decoder 0.002857)
 and mask-disagreement p95 was 0.000174. This remains descriptive development
-evidence: equivalence and calibration thresholds are not established.
+evidence: numerical, operational, and safety equivalence and calibration
+thresholds are not established.
 
-All completed provider charges total USD 0.04250377. There are no active compute
-reservations, leaving USD 79.957496 of the USD 80 working budget and the full
-USD 20 protected reserve. No calibration or held-out partition was opened. The
+All completed provider charges total USD 0.04250377. Every reservation is
+reconciled and none is active, leaving USD 79.95749623 of the USD 80 working
+budget, the full USD 20 protected reserve, and USD 99.95749623 unspent under the
+USD 100 project cap. No calibration or held-out partition was opened. The
 external ledger remains authoritative for current spending.
