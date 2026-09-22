@@ -1,0 +1,172 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[a4paper,top=1.35cm,bottom=1.45cm,left=1.45cm,right=1.45cm,columnsep=0.58cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext,newtxmath}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{hyperref}
+\usepackage{balance}
+\usepackage{caption}
+
+\definecolor{hnavy}{HTML}{112B45}
+\definecolor{hblue}{HTML}{1E78B4}
+\definecolor{hgreen}{HTML}{167C63}
+\definecolor{hpale}{HTML}{EAF4F8}
+\definecolor{hred}{HTML}{A4423D}
+\hypersetup{colorlinks=true,linkcolor=hblue,urlcolor=hblue,citecolor=hblue}
+\captionsetup{font=footnotesize,labelfont=bf}
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0pt}
+\setlength{\textfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\renewcommand{\arraystretch}{1.06}
+
+\begin{document}
+\twocolumn[
+\begin{center}
+{\LARGE\bfseries Horizon: Evidence-Conditioned Runtime Assurance\\[-1pt]for Autonomous Maritime Systems\par}
+\vspace{0.35em}
+{\small Horizon Project \quad|\quad Development White Paper \quad|\quad 22 September 2026\par}
+\end{center}
+\vspace{-0.4em}
+\begin{abstract}
+Horizon places an independent safety governor between a vessel's decision-making AI and its actuators. The governor joins navigation, contact, platform, network, inter-ship communication, perception, and neural-health evidence; evaluates each proposed heading and speed; and either passes, modifies, replaces, or rejects the command. A 60-episode development study compared five runtime-assurance candidates across four maritime encounter classes. No declared-recoverable branch collided and no unsafe or stale candidate decision passed the independent gate. For the hackathon prototype, we select A5, an evidence-conditioned predictive and barrier-filter hybrid. It achieved 99.83\% gate acceptance with three candidate deadline misses, the best acceptance/miss balance among the recovery-oriented candidates. This is an engineering selection, not a certified safety ranking: all missions were censored, 40 branches exceeded at least one assumed uncertainty bound, and the study used only three paired seeds per scenario.
+\end{abstract}
+\vspace{0.35em}
+]
+
+\section{Safety Objective}
+Autonomous maritime systems can emit unsafe commands even when individual sensors and software services appear healthy. Horizon therefore enforces a single protected actuation path. The external AI proposes a command but cannot write to steering or propulsion. A separate assurance process evaluates public observations and declared uncertainty, while an exclusive gate independently revalidates decision identity, lineage, epoch, freshness, deadline, actuator limits, and final-command safety. A watchdog retains minimum-risk authority if the supervisor stops.
+
+The governing rule is monotone: unknown, stale, invalid, unbounded, or late evidence may preserve or reduce authority; it may never increase authority. Camera or neural evidence is consequently a \emph{perception-health input}, not proof of obstacle-free water.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[node distance=2.8mm, every node/.style={font=\scriptsize,align=center}, box/.style={draw=hnavy,rounded corners=1.2pt,minimum width=\columnwidth-2mm,minimum height=5.7mm,inner sep=2pt}, arr/.style={-{Latex[length=1.5mm]},hblue,thick}]
+\node[box,fill=hpale] (sense) {Sensors and communications\\Radar, AIS, GNSS, IMU, camera, platform telemetry, internal bus, inter-ship messages};
+\node[box,fill=hpale,below=of sense] (fusion) {Fusion and health\\Tracks, uncertainty, freshness, integrity, disagreement, neural evidence};
+\node[box,fill=hpale,below=of fusion] (ai) {External decision AI proposal\\Desired heading and speed};
+\node[box,fill=hnavy,text=white,below=of ai] (a5) {A5 assurance governor\\Evidence conditioning, predictive continuation, barrier correction};
+\node[box,fill=hnavy,text=white,below=of a5] (gate) {Exclusive command gate and watchdog\\Pass, modify, validated recovery, or minimum-risk fallback};
+\draw[arr] (sense)--(fusion); \draw[arr] (fusion)--(ai); \draw[arr] (ai)--(a5); \draw[arr] (a5)--(gate);
+\end{tikzpicture}
+\caption{Protected Horizon control path. Evaluation truth is isolated from this path.}
+\label{fig:architecture}
+\end{figure}
+
+\section{Candidate Architectures}
+All candidates implement the same bounded \texttt{GovernorInput} to \texttt{AssuranceDecision} contract. A1 applies fixed closest-point/time-to-closest-point thresholds and Simplex switching. A2 uses an analytic Gaussian collision-risk approximation and Simplex recovery; its probability is not calibrated. A3 performs finite bounded rollout and requires a complete checked recovery continuation. A4 searches a nonlinear discrete vessel plant map for a barrier-compatible command, then validates it with a full three-degree-of-freedom rollout. A5 conditions declared bounds and speed limits on evidence health, attempts predictive recoverability, and then invokes the A4 filter when required.
+
+\subsection{A5 decision path}
+Healthy evidence retains nominal declared bounds and a 6\,m/s cap. Degraded evidence expands those bounds by 1.5 and caps speed at 3\,m/s. Invalid evidence caps speed at 1\,m/s and forces recovery. A5 first evaluates the requested command through a short handoff and a complete recovery continuation. If that fails, it attempts a changed command using the A4 plant-map barrier filter and subjects the result to a complete vessel rollout. Any incomplete, infeasible, late, or unsupported result falls back to a prevalidated recovery or minimum-risk command.
+
+\section{Experimental Method}
+The development matrix contained 12 paired episode identities: four scenarios, three seeds, and five candidates per identity, for 60 branches. Scenarios covered a recoverable crossing, dense traffic, vessel degradation, and an explicitly initially-unrecoverable encounter. Each branch ran for 30 simulated seconds using the \texttt{idealized-front-zero-v1} timing profile. The analyzer required exact joins among evaluation records, diagnostics, and assumption audits. It retained all collisions, timeouts, bound violations, and censored outcomes in their denominators~\cite{a32}.
+
+\begin{table}[b]
+\centering
+\caption{A1--A5 development results.}
+\label{tab:results}
+\scriptsize
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+ & Gate & Deadline & Recoverable & Unsafe/stale\\
+ID & accepted & misses & collisions & accepted\\
+\midrule
+A1 & 8.87\% & 0  & 0 & 0\\
+A2 & 8.73\% & 1  & 0 & 0\\
+A3 & 99.66\% & 6 & 0 & 0\\
+A4 & 99.44\% & 10 & 0 & 0\\
+\textbf{A5} & \textbf{99.83\%} & \textbf{3} & \textbf{0} & \textbf{0}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Results and Architecture Choice}
+All 15 branches in the deliberately unrecoverable stratum collided; none of the 45 declared-recoverable branches collided. No unsafe or stale result was accepted by the gate. A1 and A2 were computationally light but mostly passed proposals that the independent gate later rejected, giving acceptance rates below 9\%. A3--A5 actively selected recovery or minimum-risk actions and exceeded 99.4\% acceptance. A5 recorded the highest acceptance and fewer deadline misses than A3 or A4 (Fig.~\ref{fig:controller}). We therefore recommend A5 for the hackathon integration while retaining A1 as the transparent baseline.
+
+\begin{center}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  name=accept,width=.95\columnwidth,height=4.25cm,
+  ybar,bar width=10pt,ymin=0,ymax=108,
+  symbolic x coords={A1,A2,A3,A4,A5},xtick=data,
+  ylabel={Gate acceptance (\%)},ylabel style={hblue},
+  nodes near coords,nodes near coords style={font=\scriptsize},
+  tick label style={font=\scriptsize},label style={font=\scriptsize},
+  axis line style={draw=gray!70},grid=major,grid style={gray!15},
+  enlarge x limits=.14]
+\addplot[fill=hblue,draw=hnavy] coordinates {(A1,8.87) (A2,8.73) (A3,99.66) (A4,99.44)};
+\addplot[fill=hgreen,draw=hgreen] coordinates {(A5,99.83)};
+\end{axis}
+\begin{axis}[
+  at={(accept.south west)},anchor=south west,
+  width=.95\columnwidth,height=4.25cm,
+  axis x line=none,axis y line*=right,
+  ymin=0,ymax=11,
+  symbolic x coords={A1,A2,A3,A4,A5},xtick=data,
+  ylabel={Deadline misses},ylabel style={hred},
+  tick label style={font=\scriptsize},label style={font=\scriptsize},
+  enlarge x limits=.14]
+\addplot[hred,thick,mark=*,mark options={fill=hred}] coordinates {(A1,0) (A2,1) (A3,6) (A4,10) (A5,3)};
+\end{axis}
+\end{tikzpicture}
+\captionof{figure}{Gate acceptance (bars) and candidate deadline misses (red markers), 12 branches per candidate. Counts are descriptive, not a formal safety ranking.}
+\label{fig:controller}
+\end{center}
+
+\section{Neural Mechanistic Evidence}
+The implemented mechanistic-interpretability experiment is H4: a small sparse autoencoder (SAE) fitted to all 2,048 spatially pooled encoder channels from WaSR-T's ResNet-101 \texttt{layer4}. Inputs are standardized and encoded into 16 nonnegative ReLU features. Runtime novelty would be the standardized reconstruction mean-square error plus an $L_1$ sparsity term. The 296-frame development fit reached its 3,000-epoch cap, reducing loss from 0.992552 to 0.168764 with zero dead features, but it did not meet the convergence criterion~\cite{perception}.
+
+For exploratory causal testing, the largest adjacent-frame SAE-code change was selected independently for three predeclared frame pairs. Its decoder direction was injected into the real \texttt{layer4} activation during six-frame temporal replay. The measured output was the absolute change in mean obstacle-class logit inside MODD2 obstacle boxes. Each selected direction exceeded both a random-direction and equal-norm noise control (Fig.~\ref{fig:causal}), but the absolute effects were small and the selection was pair-specific.
+
+\begin{center}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+ width=.95\columnwidth,height=4.05cm,
+ ybar=1.5pt,bar width=5pt,ymode=log,ymin=0.00002,ymax=0.025,
+ symbolic x coords={P1,P2,P3},xtick=data,
+ ylabel={Absolute obstacle-logit change},
+ legend style={font=\tiny,at={(0.5,1.02)},anchor=south,legend columns=3,draw=none},
+ tick label style={font=\scriptsize},label style={font=\scriptsize},
+ grid=major,grid style={gray!15},axis line style={draw=gray!70}]
+\addplot[fill=hgreen,draw=hgreen] coordinates {(P1,0.001119) (P2,0.001281) (P3,0.012779)};
+\addplot[fill=hblue,draw=hnavy] coordinates {(P1,0.000466) (P2,0.001163) (P3,0.006381)};
+\addplot[fill=gray!45,draw=gray!70] coordinates {(P1,0.000191) (P2,0.0000267) (P3,0.0000670)};
+\legend{SAE direction,Random direction,Equal norm}
+\end{axis}
+\end{tikzpicture}
+\captionof{figure}{Offline H4 causal probes on three development pairs. Log scale.}
+\label{fig:causal}
+\end{center}
+
+H4 is \emph{not deployed as a trusted runtime sensor}. Its claim gate remains closed because the SAE did not converge, the experiment used one sequence and one seed, no stable maritime semantic was assigned, and calibration and held-out partitions remain unopened. The live recorded-camera service currently defaults to H0 output entropy and permits H0/H1 only. H4 code therefore returns \texttt{unknown} unless a frozen causal-validation artifact explicitly passes the claim gate. This fail-closed boundary prevents exploratory interpretation from silently increasing camera authority.
+
+\section{Limitations and Next Study}
+The experiment cannot support certification or a final architecture ranking. All 60 missions were censored at 30 seconds, so route completion, delay, and extra distance are unknown. Forty branches exceeded at least one declared engineering uncertainty bound. No independent sampled recovery boundary was supplied, modeled front-end delay was idealized, and gate/watchdog actions materially affected trajectories. Three seeds per scenario are insufficient for statistical claims.
+
+The next study should freeze methods and calibration before opening held-out data; run at least 1,000 paired held-out episodes with 30 or more seeds per stochastic scenario/candidate cell; separate preventable and initially-unrecoverable encounters; validate perception-health thresholds on the target CUDA runtime; and measure sensor-to-actuator latency on target hardware. Real vessel deployment additionally requires qualified hydrodynamics, uncertainty coverage, communications fault testing, and actual ship interfaces.
+
+\section{Conclusion}
+Horizon demonstrates a coherent runtime-assurance pattern: diverse ship and AI evidence informs a bounded governor, while an independent gate owns actuation and fails closed. A5 is the best current hackathon architecture because it combines evidence-conditioned margins, predictive continuation, plant-aware correction, and the strongest measured acceptance/miss balance. The neural-health work uses SAE reconstruction and controlled activation intervention as exploratory evidence; it remains outside trusted runtime authority until convergence, calibration, and held-out causal replication close its claim gate.
+
+\balance
+\begin{thebibliography}{9}
+\footnotesize
+\bibitem{a32} Horizon Project, ``A32 A1--A5 30-second development analysis,'' revision \texttt{28eb923}, Sept. 2026, analysis hash \texttt{8004358e...e909}.
+\bibitem{perception} Horizon Project, ``MODD2 development evidence and extraction completion,'' Sept. 2026.
+\bibitem{wasrt} L. Zust et al., ``WaSR-T official implementation,'' \url{https://github.com/lojzezust/WaSR-T}.
+\bibitem{modd2} B. Bovcon et al., ``MODD2 maritime obstacle-detection dataset,'' \url{https://github.com/bborja/modd}.
+\end{thebibliography}
+
+\end{document}
