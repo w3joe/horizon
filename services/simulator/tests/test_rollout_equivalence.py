@@ -263,3 +263,112 @@ def test_rollout_prepares_once_then_steps_without_state_objects(monkeypatch) -> 
     assert len(result) == 11
     assert prepare_calls == 1
     assert step_calls == 10
+
+
+def test_compact_rollout_is_bit_exact_with_public_rollout() -> None:
+    random_source = random.Random(20319)
+    for case_index in range(20):
+        estimated = {
+            "position_ne_m": [
+                random_source.uniform(-1_000.0, 1_000.0),
+                random_source.uniform(-1_000.0, 1_000.0),
+            ],
+            "heading_rad": random_source.uniform(-math.pi, math.pi),
+            "velocity_body_mps": [
+                random_source.uniform(-1.0, 8.0),
+                random_source.uniform(-1.5, 1.5),
+            ],
+            "yaw_rate_rps": random_source.uniform(-0.4, 0.4),
+        }
+        command = {
+            "heading_rad": random_source.uniform(-2.0 * math.pi, 2.0 * math.pi),
+            "speed_mps": random_source.uniform(-1.0, 8.0),
+        }
+        actuator = {
+            "rudder_rad": random_source.uniform(-0.7, 0.7),
+            "thrust_fraction": random_source.uniform(-1.0, 1.0),
+        }
+        environment = Environment(
+            current_north_mps=random_source.uniform(-0.8, 0.8),
+            current_east_mps=random_source.uniform(-0.8, 0.8),
+            wind_force_n=random_source.uniform(-900.0, 900.0),
+            wind_force_e=random_source.uniform(-900.0, 900.0),
+            wave_force_n=random_source.uniform(-500.0, 500.0),
+            wave_force_e=random_source.uniform(-500.0, 500.0),
+        )
+        parameters = replace(
+            PlantParameters(),
+            fixed_step_s=(0.01, 0.02, 0.05)[case_index % 3],
+            rudder_lag_s=0.0 if case_index % 5 == 0 else random_source.uniform(0.2, 1.5),
+            thrust_lag_s=0.0 if case_index % 7 == 0 else random_source.uniform(0.4, 2.5),
+        )
+        horizon_s = (-0.1, 0.0, 0.03, 0.4, 1.25)[case_index % 5]
+
+        public = rollout_module.rollout_from_estimate(
+            estimated,
+            command,
+            actuator_capability=actuator,
+            horizon_s=horizon_s,
+            environment=environment,
+            parameters=parameters,
+        )
+        compact = rollout_module.rollout_values_from_estimate(
+            estimated,
+            command,
+            actuator_capability=actuator,
+            horizon_s=horizon_s,
+            environment=environment,
+            parameters=parameters,
+        )
+
+        assert len(compact) == len(public)
+        for value_sample, public_sample in zip(compact, public, strict=True):
+            assert type(value_sample) is tuple
+            assert len(value_sample) == 9
+            assert value_sample == (
+                public_sample["time_s"],
+                public_sample["north_m"],
+                public_sample["east_m"],
+                public_sample["heading_rad"],
+                public_sample["surge_mps"],
+                public_sample["sway_mps"],
+                public_sample["yaw_rate_rps"],
+                public_sample["rudder_rad"],
+                public_sample["thrust_fraction"],
+            )
+
+
+def test_compact_rollout_positions_are_stable_and_prepares_once(monkeypatch) -> None:
+    prepare_calls = 0
+    actual_prepare = rollout_module.prepare_value_integrator
+
+    def counted_prepare(*args, **kwargs):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return actual_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(rollout_module, "prepare_value_integrator", counted_prepare)
+    result = rollout_module.rollout_values_from_estimate(
+        {
+            "position_ne_m": [3.0, -4.0],
+            "heading_rad": 0.2,
+            "velocity_body_mps": [4.0, 0.1],
+            "yaw_rate_rps": -0.01,
+        },
+        {"heading_rad": 0.4, "speed_mps": 2.0},
+        actuator_capability={"rudder_rad": 0.0, "thrust_fraction": 0.5},
+        horizon_s=0.2,
+    )
+
+    assert prepare_calls == 1
+    assert len(result) == 11
+    first = result[0]
+    assert first[rollout_module.ROLLOUT_TIME_S] == 0.0
+    assert first[rollout_module.ROLLOUT_NORTH_M] == 3.0
+    assert first[rollout_module.ROLLOUT_EAST_M] == -4.0
+    assert first[rollout_module.ROLLOUT_HEADING_RAD] == 0.2
+    assert first[rollout_module.ROLLOUT_SURGE_MPS] == 4.0
+    assert first[rollout_module.ROLLOUT_SWAY_MPS] == 0.1
+    assert first[rollout_module.ROLLOUT_YAW_RATE_RPS] == -0.01
+    assert first[rollout_module.ROLLOUT_RUDDER_RAD] == 0.0
+    assert first[rollout_module.ROLLOUT_THRUST_FRACTION] == 0.5
