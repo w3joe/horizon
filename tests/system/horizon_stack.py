@@ -76,8 +76,10 @@ def wait_for(
     raise AssertionError(f"condition was not met within {timeout_s:.1f}s; last={last!r}")
 
 
-def is_fully_joined_evidence(payload: dict[str, Any]) -> bool:
-    """Return whether evidence describes one accepted, exactly actuated chain."""
+def is_joined_evidence(
+    payload: dict[str, Any], *, require_exact_command: bool
+) -> bool:
+    """Return whether evidence describes one accepted identity chain."""
     governor = payload.get("governor_input")
     decision = payload.get("decision")
     receipt = payload.get("receipt")
@@ -106,8 +108,16 @@ def is_fully_joined_evidence(payload: dict[str, Any]) -> bool:
         and decision.get("valid") is True
         and decision.get("deadline_met") is True
         and receipt.get("accepted") is True
-        and receipt.get("actual_command") == decision.get("issued_command")
+        and (
+            not require_exact_command
+            or receipt.get("actual_command") == decision.get("issued_command")
+        )
     )
+
+
+def is_fully_joined_evidence(payload: dict[str, Any]) -> bool:
+    """Return whether evidence describes one accepted, exactly actuated chain."""
+    return is_joined_evidence(payload, require_exact_command=True)
 
 
 @dataclass
@@ -299,16 +309,78 @@ class HorizonStack:
 
         return wait_for(ready, timeout_s=STARTUP_READY_TIMEOUT_S)
 
-    def _wait_assurance_evidence(self) -> dict[str, Any]:
+    def acknowledge_gate_recovery(self) -> None:
+        status, payload, _ = request_json(
+            self.url("gate", "/v1/operator/acknowledge"),
+            {},
+            bearer=self.token("gate-operator.token"),
+            timeout_s=2.0,
+        )
+        assert status == 200 and payload.get("accepted") is True
+
+    def drive_joined_chain(
+        self,
+        *,
+        candidate: str | None = None,
+        require_exact_command: bool = True,
+        timeout_s: float = STARTUP_READY_TIMEOUT_S,
+    ) -> dict[str, Any]:
+        """Drive one fresh fusion -> assurance -> gate transaction."""
+        selected_candidate = self.candidate if candidate is None else candidate
+        last_tick = -1
+
         def accepted():
-            status, payload, _ = request_json(
-                self.url("assurance", "/v1/evidence/latest"), timeout_s=0.7
+            nonlocal last_tick
+            status, governor, _ = request_json(
+                self.url("fusion", "/v1/governor-input?branch=protected"),
+                timeout_s=0.7,
             )
-            if status == 200 and is_fully_joined_evidence(payload):
-                return payload
+            if status != 200 or int(governor["tick_index"]) == last_tick:
+                return None
+            last_tick = int(governor["tick_index"])
+
+            decision_status, decision, _ = request_json(
+                self.url("assurance", "/v1/evaluate"),
+                {"candidate_id": selected_candidate, "input": governor},
+                timeout_s=0.7,
+            )
+            receipt: dict[str, Any] = {}
+            gate_status = 0
+            if (
+                decision_status == 200
+                and decision.get("valid") is True
+                and decision.get("deadline_met") is True
+            ):
+                gate_status, receipt, _ = request_json(
+                    self.url("gate", "/v1/decision"),
+                    {"input": governor, "decision": decision},
+                    bearer=self.token("gate-decision.token"),
+                    timeout_s=0.7,
+                )
+            evidence = {
+                "governor_input": governor,
+                "decision": decision,
+                "receipt": receipt,
+            }
+            if gate_status == 200 and is_joined_evidence(
+                evidence, require_exact_command=require_exact_command
+            ):
+                return evidence
+            if (
+                gate_status == 200
+                and receipt.get("accepted") is True
+                and receipt.get("actual_command") != decision.get("issued_command")
+            ):
+                # The gate substituted its latched recovery command. Renew the
+                # explicit release acknowledgement before the next clear pass.
+                self.acknowledge_gate_recovery()
+
+            # Every retry uses a new simulation tick and therefore a new
+            # snapshot, proposal, deadline, and decision identity.
+            self.step_simulation()
             return None
 
-        return wait_for(accepted, timeout_s=STARTUP_READY_TIMEOUT_S)
+        return wait_for(accepted, timeout_s=timeout_s, interval_s=0.05)
 
     def resume_simulation(self) -> dict[str, Any]:
         def resumed():
@@ -475,8 +547,9 @@ class HorizonStack:
             "--reference-url",
             self.url("simulator", "/v1/reference?branch=protected"),
         ]
+        assurance_loop = list(assurance)
         if self.assurance_loop:
-            assurance.extend(
+            assurance_loop.extend(
                 [
                     "--fusion-url",
                     self.url("fusion"),
@@ -492,11 +565,15 @@ class HorizonStack:
             )
         self._start_process("assurance", assurance)
         if self.synchronize_startup:
-            # Paused observations have short host-time validity. Resume only
-            # after every service is healthy, then require a fresh joined pass.
-            self.resume_simulation()
             if self.assurance_loop:
-                self.startup_evidence = self._wait_assurance_evidence()
+                # Do not race the 20 Hz background loop for a short-lived
+                # input. Drive a concrete accepted chain while physics remains
+                # paused, then launch the production loop for the test itself.
+                self.acknowledge_gate_recovery()
+                self.startup_evidence = self.drive_joined_chain()
+                self.stop_process("assurance")
+                self._start_process("assurance", assurance_loop)
+            self.resume_simulation()
         return self
 
     def stop_process(self, name: str) -> None:

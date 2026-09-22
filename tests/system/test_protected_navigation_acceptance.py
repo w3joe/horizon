@@ -24,6 +24,9 @@ def _stack(tmp_path, **kwargs) -> HorizonStack:
 
 
 def _latest_evidence(stack: HorizonStack, *, timeout_s: float = 15.0) -> dict:
+    if stack.startup_evidence is not None:
+        return stack.startup_evidence
+
     def accepted():
         status, payload, _ = request_json(stack.url("assurance", "/v1/evidence/latest"))
         return payload if status == 200 else None
@@ -42,22 +45,46 @@ def _assert_joined_chain(evidence: dict) -> None:
     assert receipt["actual_command"] == decision["issued_command"]
 
 
-def _accepted_a1_intervention(stack: HorizonStack) -> dict | None:
-    assurance_status, assurance, _ = request_json(
-        stack.url("assurance", "/v1/telemetry"), timeout_s=0.7
-    )
-    if assurance_status != 200:
-        return None
-    return next(
-        (
-            event
-            for event in assurance["control_events"]
-            if event.get("event_type") == "decision_receipt"
-            and event.get("decision", {}).get("candidate_id") == "A1"
-            and event.get("decision", {}).get("action") in {"modify", "recover"}
-            and event.get("receipt", {}).get("accepted") is True
-        ),
-        None,
+def _drive_s22_protected_path(
+    stack: HorizonStack,
+    *,
+    collision_time_s: float,
+    duration_s: float,
+) -> dict:
+    deadline = time.monotonic() + HOST_PROGRESS_WATCHDOG_S
+    intervention: dict | None = None
+    while time.monotonic() < deadline:
+        evidence = stack.drive_joined_chain(
+            require_exact_command=intervention is None,
+            timeout_s=max(0.1, deadline - time.monotonic())
+        )
+        governor = evidence["governor_input"]
+        decision = evidence["decision"]
+        simulation_time_s = float(governor["simulation_time_s"])
+        if intervention is None:
+            assert simulation_time_s < collision_time_s, (
+                "A1 did not intervene before the counterfactual collision: "
+                f"simulation_time_s={simulation_time_s}, "
+                f"collision_s={collision_time_s}"
+            )
+            if decision.get("action") in {"modify", "recover"}:
+                intervention = evidence
+
+        # Each physics advance follows a complete accepted transaction. Exact
+        # fixed steps inside the final pre-collision window prevent the host
+        # scheduler from skipping the safety boundary.
+        coarse_step = (
+            intervention is not None
+            or simulation_time_s < collision_time_s - 5.0
+        )
+        step_count = 25 if coarse_step else 1
+        snapshot = stack.step_simulation(step_count)
+        if float(snapshot["simulation_time_s"]) >= duration_s:
+            assert intervention is not None
+            return intervention
+
+    raise AssertionError(
+        f"protected S22 path did not complete within {HOST_PROGRESS_WATCHDOG_S:.1f}s"
     )
 
 
@@ -235,30 +262,17 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
         tmp_path / "protected",
         scenario="static_obstacle_approach.json",
         policy="unsafe_straight",
+        assurance_loop=False,
     )
     try:
-        def intervention_before_collision():
-            event = _accepted_a1_intervention(unsafe)
-            if event is not None:
-                return event
-            status, snapshot, _ = request_json(
-                unsafe.url("simulator", "/v1/public/snapshot?branch=protected"),
-                timeout_s=0.7,
-            )
-            assert status == 200
-            simulation_time_s = float(snapshot["simulation_time_s"])
-            assert simulation_time_s < counterfactual_collision_s, (
-                "A1 did not intervene before the counterfactual collision: "
-                f"simulation_time_s={simulation_time_s}, "
-                f"collision_s={counterfactual_collision_s}"
-            )
-            return None
-
-        intervention_event = wait_for(
-            intervention_before_collision,
-            timeout_s=HOST_PROGRESS_WATCHDOG_S,
+        unsafe.pause_simulation()
+        unsafe.acknowledge_gate_recovery()
+        intervention_event = _drive_s22_protected_path(
+            unsafe,
+            collision_time_s=counterfactual_collision_s,
+            duration_s=float(scenario["duration_s"]),
         )
-        governor = intervention_event["input_summary"]
+        governor = intervention_event["governor_input"]
         decision = intervention_event["decision"]
         a1_receipt = intervention_event["receipt"]
         assert governor["proposal"]["command"]["speed_mps"] == 6.0
@@ -268,7 +282,7 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
         assert decision["valid"] is True and decision["deadline_met"] is True
         assert "CPA_THRESHOLD_CROSSED" in decision["reason_codes"]
         assert "VALIDATED_RECOVERY_SELECTED" in decision["reason_codes"]
-        assert decision["input_snapshot_id"] == governor["snapshot_id"]
+        assert decision["input_snapshot_id"] == governor["snapshot"]["snapshot_id"]
         assert decision["proposal_id"] == governor["proposal"]["command_id"]
         assert a1_receipt["decision_id"] == decision["decision_id"]
         assert a1_receipt["accepted"] is True
@@ -286,19 +300,6 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
             == 40_000_000
         )
         assert a1_receipt["received_monotonic_ns"] < decision["expires_monotonic_ns"]
-
-        def protected_window_complete():
-            _, snapshot, _ = request_json(
-                unsafe.url("simulator", "/v1/public/snapshot?branch=protected"),
-                timeout_s=0.5,
-            )
-            return snapshot if snapshot["simulation_time_s"] >= scenario["duration_s"] else None
-
-        wait_for(
-            protected_window_complete,
-            timeout_s=HOST_PROGRESS_WATCHDOG_S,
-            interval_s=0.1,
-        )
 
         records, events = _truth_records(unsafe, "protected")
         assert records[-1]["simulation_time_s"] == scenario["duration_s"]

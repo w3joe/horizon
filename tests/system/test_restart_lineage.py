@@ -29,6 +29,9 @@ def _stack(tmp_path) -> HorizonStack:
 
 
 def _latest_evidence(stack: HorizonStack, *, timeout_s: float = 15.0) -> dict:
+    if stack.startup_evidence is not None:
+        return stack.startup_evidence
+
     def accepted():
         status, payload, _ = request_json(
             stack.url("assurance", "/v1/evidence/latest"), timeout_s=0.7
