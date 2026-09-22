@@ -279,13 +279,18 @@ class AssuranceControlLoop:
                 timeout_s=self._remaining_s(permission_valid_until_ns)
             )
             if int(gate_status["epoch"]) != epoch:
+                independent_recovery = gate_status.get("independent_recovery")
                 reset = self.gate.reset(
                     timeout_s=self._remaining_s(permission_valid_until_ns)
                 )
                 if not reset.get("accepted") or int(reset["epoch"]) != epoch:
                     raise EndpointError(None, {"error": "GATE_EPOCH_SYNC_FAILED", "reset": reset})
                 epoch_synchronized = True
-                gate_status = {"epoch": epoch, "startup_recovery_ready": False}
+                gate_status = {
+                    "epoch": epoch,
+                    "startup_recovery_ready": False,
+                    "independent_recovery": independent_recovery,
+                }
             if not gate_status.get("startup_recovery_ready", False):
                 if time.monotonic_ns() >= permission_valid_until_ns:
                     self.last_sample_id = sample_id
@@ -297,6 +302,25 @@ class AssuranceControlLoop:
                             "epoch": epoch,
                             "epoch_synchronized": epoch_synchronized,
                             "input_summary": input_summary,
+                        }
+                    )
+                independent_recovery = gate_status.get("independent_recovery")
+                independent_state = (
+                    independent_recovery.get("state")
+                    if isinstance(independent_recovery, dict)
+                    else None
+                )
+                if independent_state in {"starting", "rejected", "ready", "current"}:
+                    self.last_sample_id = sample_id
+                    return self._record(
+                        {
+                            "event_type": "startup_independent_recovery_pending",
+                            "host_monotonic_ns": time.monotonic_ns(),
+                            "sample_id": sample_id,
+                            "epoch": epoch,
+                            "epoch_synchronized": epoch_synchronized,
+                            "input_summary": input_summary,
+                            "independent_recovery": independent_recovery,
                         }
                     )
                 prime = self.gate.prime(

@@ -54,6 +54,7 @@ class FakeGate:
         prime_accepted=True,
         submit_accepted=True,
         prime_transport_error=False,
+        independent_state=None,
     ):
         self.epoch = epoch
         self.ready = ready
@@ -63,10 +64,18 @@ class FakeGate:
         self.prime_accepted = prime_accepted
         self.submit_accepted = submit_accepted
         self.prime_transport_error = prime_transport_error
+        self.independent_state = independent_state
 
     def status(self, *, timeout_s):
         del timeout_s
-        return {"epoch": self.epoch, "startup_recovery_ready": self.ready}
+        result = {"epoch": self.epoch, "startup_recovery_ready": self.ready}
+        if self.independent_state is not None:
+            result["independent_recovery"] = {
+                "state": self.independent_state,
+                "last_input_id": "recovery-input-42",
+                "last_reason_codes": [],
+            }
+        return result
 
     def reset(self, *, timeout_s):
         del timeout_s
@@ -188,6 +197,67 @@ def test_loop_primes_before_first_autonomy_and_skips_duplicate(reference, govern
     assert evidence[0]["receipt"]["decision_id"] == evidence[0]["decision"]["decision_id"]
     assert loop.run_once()["event_type"] == "duplicate_sample_skipped"
     assert gate.primes == [first["snapshot"]["snapshot_id"]]
+
+
+def test_loop_gives_configured_independent_recovery_exclusive_startup_slot(
+    reference, governor_input
+) -> None:
+    first = live_input(governor_input, tick=42)
+    second = live_input(governor_input, tick=43)
+    gate = FakeGate(independent_state="starting")
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([first, second]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+
+    pending = loop.run_once()
+    assert pending["event_type"] == "startup_independent_recovery_pending"
+    assert pending["independent_recovery"]["state"] == "starting"
+    assert gate.primes == []
+    assert gate.submissions == []
+
+    gate.ready = True
+    gate.independent_state = "current"
+    accepted = loop.run_once()
+    assert accepted["event_type"] == "decision_receipt"
+    assert accepted["receipt"]["accepted"] is True
+    assert gate.primes == []
+
+
+def test_loop_retains_legacy_prime_when_independent_recovery_is_unavailable(
+    reference, governor_input
+) -> None:
+    message = live_input(governor_input, tick=42)
+    gate = FakeGate(independent_state="unavailable")
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([message]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+
+    event = loop.run_once()
+    assert event["event_type"] == "startup_recovery_primed"
+    assert gate.primes == [message["snapshot"]["snapshot_id"]]
+
+
+def test_epoch_reset_does_not_race_configured_independent_recovery(
+    reference, governor_input
+) -> None:
+    message = live_input(governor_input, tick=0, epoch=1)
+    gate = FakeGate(epoch=0, ready=True, independent_state="current")
+    loop = AssuranceControlLoop(
+        fusion=FakeFusion([message]),
+        gate=gate,
+        candidate=A1ThresholdSimplex(reference),
+    )
+
+    event = loop.run_once()
+    assert event["event_type"] == "startup_independent_recovery_pending"
+    assert event["epoch_synchronized"] is True
+    assert gate.resets == 1
+    assert gate.primes == []
+    assert gate.submissions == []
 
 
 def test_loop_synchronizes_epoch_before_evaluation(reference, governor_input) -> None:
