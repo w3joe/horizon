@@ -9,6 +9,7 @@ from typing import Sequence
 
 from experiment.errors import ExperimentError
 from experiment.evaluation.calibration import calibrate_threshold, require_calibration_split
+from experiment.evaluation.candidate_acceptance import assess_candidate_implementations
 from experiment.evaluation.controller_evidence import assess_controller_evidence
 from experiment.evaluation.perception import calibrate_perception_methods, compare_runtime_drift
 from experiment.evaluation.reporting import summarize_records
@@ -139,6 +140,14 @@ def _controller_evidence(args: argparse.Namespace) -> int:
     return 0
 
 
+def _candidate_acceptance(args: argparse.Namespace) -> int:
+    report = assess_candidate_implementations(args.capabilities, args.schema)
+    write_json(args.output, report)
+    status = "working" if report["all_primary_candidates_working"] else "failed"
+    print(json.dumps({"status": status, "artifact_hash": report["artifact_hash"]}, indent=2))
+    return 0 if report["all_primary_candidates_working"] else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Horizon paired experiment harness")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -210,6 +219,24 @@ def build_parser() -> argparse.ArgumentParser:
     controller.add_argument("--selection-rule", default=EXPERIMENT_ROOT / "configs" / "selection-rule.json")
     controller.add_argument("--output", required=True)
     controller.set_defaults(function=_controller_evidence)
+
+    candidate_acceptance = subparsers.add_parser(
+        "candidate-acceptance",
+        help="audit A1-A5 and A4-VQP on paired public-input fixtures",
+    )
+    candidate_acceptance.add_argument("--capabilities", default=DEFAULT_CAPABILITIES)
+    candidate_acceptance.add_argument(
+        "--schema",
+        default=(
+            EXPERIMENT_ROOT.parent
+            / "packages"
+            / "contracts"
+            / "schema"
+            / "horizon.schema.json"
+        ),
+    )
+    candidate_acceptance.add_argument("--output", required=True)
+    candidate_acceptance.set_defaults(function=_candidate_acceptance)
     return parser
 
 

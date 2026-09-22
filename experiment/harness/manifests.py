@@ -70,7 +70,19 @@ def load_capabilities(path: str | Path) -> dict[str, Any]:
     health_ids = tuple(item["id"] for item in manifest["health_methods"])
     _require(architecture_ids == ARCHITECTURES, "capabilities must list A1-A5 once, in order")
     _require(health_ids == HEALTH_METHODS, "capabilities must list H0-H4 once, in order")
-    for item in manifest["architectures"] + manifest["health_methods"]:
+    baseline_ids = tuple(item["id"] for item in manifest.get("comparison_baselines", []))
+    _require(len(baseline_ids) == len(set(baseline_ids)), "comparison baseline IDs must be unique")
+    _require(
+        not set(baseline_ids).intersection(architecture_ids),
+        "comparison baselines may not replace candidate architectures",
+    )
+    for item in manifest["architectures"] + manifest.get("comparison_baselines", []):
+        _require(bool(item.get("candidate_version")), f"{item['id']} is missing candidate_version")
+    for item in (
+        manifest["architectures"]
+        + manifest.get("comparison_baselines", [])
+        + manifest["health_methods"]
+    ):
         _require(item.get("alias_of") is None, f"{item['id']} may not alias another method")
         if item["availability"] == "implemented":
             _require(bool(item.get("entrypoint")), f"{item['id']} is implemented without entrypoint")
@@ -83,6 +95,7 @@ def require_implemented(
     records = {
         item["id"]: item
         for item in capabilities["architectures"]
+        + capabilities.get("comparison_baselines", [])
         + capabilities["health_methods"]
         + capabilities.get("fixed_health_policies", [])
     }
@@ -92,7 +105,7 @@ def require_implemented(
             raise MissingImplementationError(f"unknown research method: {method_id}")
         if record["availability"] != "implemented" or not record.get("entrypoint"):
             raise MissingImplementationError(
-                f"{method_id} is declared {record['availability']}; no implementation is registered"
+                f"{method_id} is declared {record['availability']}; it is unavailable for study execution"
             )
 
 

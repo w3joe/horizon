@@ -6,6 +6,7 @@
       "name": "rule_threshold_simplex",
       "availability": "implemented",
       "entrypoint": "horizon_assurance.candidates:A1ThresholdSimplex",
+      "candidate_version": "a1-threshold-simplex-v1",
       "alias_of": null,
       "required_input_representations": ["point_estimate"],
       "required_failure_behavior": ["stale_input_recovery", "deadline_recovery"]
@@ -15,6 +16,7 @@
       "name": "probabilistic_risk_simplex",
       "availability": "implemented",
       "entrypoint": "horizon_assurance.candidates:A2ProbabilisticRisk",
+      "candidate_version": "a2-probabilistic-risk-simplex-v1",
       "alias_of": null,
       "required_input_representations": ["covariance", "covariance_coverage"],
       "required_failure_behavior": ["uncalibrated_risk_unknown", "deadline_recovery"],
@@ -25,6 +27,7 @@
       "name": "bounded_predictive_recoverability",
       "availability": "implemented",
       "entrypoint": "horizon_assurance.candidates:A3PredictiveBounded",
+      "candidate_version": "a3-finite-bounded-rollout-v1",
       "alias_of": null,
       "required_input_representations": ["bounded_set", "bounded_error_assumption"],
       "required_failure_behavior": ["no_valid_continuation_minimum_risk", "deadline_recovery"]
@@ -34,6 +37,7 @@
       "name": "model_appropriate_robust_barrier_filter",
       "availability": "implemented",
       "entrypoint": "horizon_assurance.candidates:A4RobustBarrierFilter",
+      "candidate_version": "a4-discrete-plant-map-barrier-search-v1",
       "alias_of": null,
       "required_input_representations": ["declared_dynamics_abstraction", "bounded_disturbance"],
       "required_failure_behavior": ["infeasible_recovery", "invalid_residual_recovery", "timeout_recovery"],
@@ -45,9 +49,24 @@
       "name": "evidence_conditioned_hybrid",
       "availability": "implemented",
       "entrypoint": "horizon_assurance.candidates:A5EvidenceHybrid",
+      "candidate_version": "a5-evidence-conditioned-predictive-filter-hybrid-v1",
       "alias_of": null,
       "required_input_representations": ["bounded_set", "source_health", "perception_health"],
       "required_failure_behavior": ["diagnostics_missing_policy", "independent_recovery", "final_command_revalidation"]
+    }
+  ],
+  "comparison_baselines": [
+    {
+      "id": "A4-VQP",
+      "name": "provisional_kinematic_velocity_space_qp",
+      "role": "historical_algorithm_baseline",
+      "availability": "diagnostic_only",
+      "entrypoint": "horizon_assurance.candidates:A4VelocityQPBaseline",
+      "candidate_version": "a4-provisional-kinematic-filter-full-plant-validation-v1",
+      "alias_of": null,
+      "required_input_representations": ["declared_dynamics_abstraction", "bounded_disturbance"],
+      "required_failure_behavior": ["infeasible_recovery", "timeout_recovery", "final_command_revalidation"],
+      "research_status": "reproducibility baseline for earlier development results; kinematic velocity-space QP with final nonlinear rollout validation; it is not the current A4 method and carries no formal barrier guarantee"
     }
   ],
   "fixed_health_policies": [

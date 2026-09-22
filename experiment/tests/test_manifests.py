@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from experiment.errors import ManifestError
+from experiment.errors import ManifestError, MissingImplementationError
 from experiment.harness.manifests import (
     EpisodeKey,
     expand_jobs,
@@ -26,6 +26,9 @@ def test_capability_matrix_registers_all_distinct_methods() -> None:
         ["H0", "H1", "H2", "H3", "H4"],
     )
     assert all(item["alias_of"] is None for item in capabilities["architectures"])
+    assert capabilities["comparison_baselines"][0]["role"] == "historical_algorithm_baseline"
+    with pytest.raises(MissingImplementationError, match="diagnostic_only"):
+        require_implemented(capabilities, ["A4-VQP"], [])
 
 
 def test_split_manifest_has_disjoint_frozen_heldout_plan() -> None:
@@ -49,6 +52,17 @@ def test_smoke_jobs_are_paired_across_candidates() -> None:
     for job in jobs:
         by_pair.setdefault(job.key.pair_key, set()).add(job.candidate_id)
     assert all(candidates == {"STUB_PASS", "STUB_RECOVERY"} for candidates in by_pair.values())
+
+
+def test_working_development_jobs_pair_all_a1_a5_candidates() -> None:
+    splits = load_splits(ROOT / "manifests" / "splits.json")
+    plan = load_json(ROOT / "manifests" / "a1-a5-working-development.json")
+    jobs = expand_jobs(plan, splits)
+
+    assert len(jobs) == 5
+    assert {job.candidate_id for job in jobs} == {"A1", "A2", "A3", "A4", "A5"}
+    assert len({job.key.pair_key for job in jobs}) == 1
+    assert plan["timing_profile_id"] == "idealized-front-zero-v1"
 
 
 def test_headline_stochastic_plan_rejects_fewer_than_30_seeds() -> None:

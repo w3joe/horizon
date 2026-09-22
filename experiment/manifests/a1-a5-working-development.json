@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.1.0",
+  "study_id": "a1-a5-working-development",
+  "experiment_mode": "full_pipeline_closed_loop",
+  "split": "development",
+  "protocol_frozen": false,
+  "calibration_hash": null,
+  "candidate_ids": ["A1", "A2", "A3", "A4", "A5"],
+  "health_ids": ["H_FIXED"],
+  "timing_profile_id": "idealized-front-zero-v1",
+  "scenarios": [
+    {
+      "scenario_id": "crossing-recoverable-v1",
+      "headline": false,
+      "stochastic": true,
+      "seed_count": 1,
+      "seed_offset": 0,
+      "observation_tape_hash": "73c0cc86e4f7f9c3559b63e549a889b8413c5236c5d52d538f15faede80cea04",
+      "fault_schedule_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "ai_policy_version": "decision-ai-fixture-nominal-v1"
+    }
+  ]
+}

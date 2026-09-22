@@ -33,13 +33,19 @@ PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment perception-calibrate \
 PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment controller-evidence \
   --index ../horizon-runs/development/controller-study/index.json \
   --output ../horizon-runs/development/controller-study/readiness.json
+
+PYTHONPATH=.:packages/contracts/python:services/assurance:services/simulator \
+  /opt/homebrew/bin/python3.12 -m experiment candidate-acceptance \
+  --output ../horizon-runs/development/a1-a5-working-acceptance.json
 ```
 
 `plan` refuses methods until the relevant production entrypoint is registered in
 `configs/capabilities.json`. A missing algorithm is never substituted or aliased. A1-A5 and H0-H4
-are registered as distinct implementations. A2 remains an uncalibrated analytic Gaussian trigger;
-A4 remains a provisional kinematic velocity-space QP followed by full 3-DOF rollout validation.
-Neither label is upgraded by registration. Generated
+are registered as distinct implementations. A2 remains an uncalibrated analytic Gaussian trigger.
+Current A4 is a finite nonlinear plant-map barrier search with a configured residual reserve and
+final rollout revalidation. The earlier kinematic velocity-space QP is registered separately as
+the `A4-VQP` historical baseline; results for it do not transfer to A4. Neither method label implies
+formal invariance. Generated
 runs belong under the external sibling `horizon-runs/`; datasets, weights, activation caches, and
 raw traces belong under `horizon-data/`.
 

@@ -95,12 +95,20 @@ def test_adapter_writes_bounded_diagnostics_sidecar(tmp_path: Path) -> None:
     job = expand_jobs(load_json(ROOT / "manifests" / "smoke-study.json"), splits)[0]
     request = build_episode_request(job, "run-1", 1.0)
 
-    run_adapter_jobs([job], _fixture_adapter(job), tmp_path, "run-1", 1.0)
+    fixture_adapter = _fixture_adapter(job)
+
+    def adapter_with_reason(request: dict) -> dict:
+        bundle = fixture_adapter(request)
+        bundle["decisions"][0]["reason_codes"] = ["BOUNDED_TEST_REASON"]
+        return bundle
+
+    run_adapter_jobs([job], adapter_with_reason, tmp_path, "run-1", 1.0)
 
     diagnostics_path = tmp_path / f"{request['branch_id']}.diagnostics.json"
     diagnostics = load_json(diagnostics_path)
     index = load_json(tmp_path / "index.json")
     assert diagnostics["record_type"] == "DevelopmentEpisodeDiagnostics"
     assert diagnostics["decision_action_counts"] == {"pass": 1}
+    assert diagnostics["decision_reason_counts"] == {"BOUNDED_TEST_REASON": 1}
     assert diagnostics["operational_authority_counts"] == {"autonomy": 3}
     assert index["diagnostics"] == [diagnostics]

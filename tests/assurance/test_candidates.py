@@ -433,6 +433,49 @@ def test_all_five_candidates_are_distinct_schema_valid_plugins(reference, govern
     assert len({item["candidate_version"] for item in decisions.values()}) == 5
 
 
+@pytest.mark.parametrize("candidate_id", ("A1", "A2", "A3", "A4", "A5"))
+@pytest.mark.parametrize(
+    ("position_ne_m", "velocity_ne_mps", "expected_action"),
+    (
+        ([400.0, 400.0], [0.0, 0.0], "pass"),
+        ([50.0, -30.0], [0.0, 4.0], "recover"),
+        ([18.0, 0.0], [0.0, 0.0], "minimum_risk"),
+    ),
+    ids=("safe-transit", "recoverable-crossing", "no-validated-recovery"),
+)
+def test_all_candidate_plugins_share_representative_action_semantics(
+    reference,
+    governor_input,
+    candidate_id: str,
+    position_ne_m: list[float],
+    velocity_ne_mps: list[float],
+    expected_action: str,
+) -> None:
+    message = copy.deepcopy(governor_input)
+    message["run_id"] = f"common-actions:{expected_action}"
+    message["branch_id"] = f"{candidate_id}:{expected_action}"
+    message["proposal"]["run_id"] = message["run_id"]
+    message["proposal"]["branch_id"] = message["branch_id"]
+    message["snapshot"]["contacts"][0]["position_ne_m"] = position_ne_m
+    message["snapshot"]["contacts"][0]["velocity_ne_mps"] = velocity_ne_mps
+
+    decision = candidate(candidate_id, reference, fast_config()).evaluate(message)
+
+    VALIDATOR.validate(decision)
+    json.dumps(decision, allow_nan=False)
+    assert decision["candidate_id"] == candidate_id
+    assert decision["action"] == expected_action
+    assert decision["valid"] is True
+    assert decision["deadline_met"] is True
+    assert decision["issued_command"] is not None
+    if expected_action == "recover":
+        assert decision["recovery"] is not None
+        assert "VALIDATED_RECOVERY_SELECTED" in decision["reason_codes"]
+    if expected_action == "minimum_risk":
+        assert decision["recovery"] is None
+        assert "NO_VALIDATED_RECOVERY" in decision["reason_codes"]
+
+
 def test_a2_probability_threshold_triggers_simplex_recovery(reference, governor_input) -> None:
     message = copy.deepcopy(governor_input)
     contact = message["snapshot"]["contacts"][0]

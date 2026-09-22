@@ -90,6 +90,15 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
         "decision_action_counts": dict(
             sorted(Counter(str(item.get("action", "unknown")) for item in decisions).items())
         ),
+        "decision_reason_counts": dict(
+            sorted(
+                Counter(
+                    str(reason)
+                    for item in decisions
+                    for reason in item.get("reason_codes", [])
+                ).items()
+            )
+        ),
         "decision_disposition_counts": dict(
             sorted(
                 Counter(
