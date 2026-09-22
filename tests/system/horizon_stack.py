@@ -24,6 +24,7 @@ from scripts.process_scheduling import build_process_scheduling_plan
 
 
 ROOT = Path(__file__).resolve().parents[2]
+STARTUP_READY_TIMEOUT_S = 30.0
 
 
 def _port() -> int:
@@ -169,6 +170,7 @@ class HorizonStack:
         collector_link_proxy: bool = False,
         candidate: str = "A1",
         marine_config: Path | str | None = None,
+        synchronize_startup: bool = True,
     ):
         self.directory = directory
         self.scenario = scenario
@@ -176,6 +178,8 @@ class HorizonStack:
         self.assurance_loop = assurance_loop
         self.candidate = candidate
         self.marine_config = None if marine_config is None else Path(marine_config)
+        self.synchronize_startup = synchronize_startup
+        self.startup_evidence: dict[str, Any] | None = None
         self.ports = {
             name: _port()
             for name in ("simulator", "decision_ai", "collector", "fusion", "gate", "assurance")
@@ -214,6 +218,84 @@ class HorizonStack:
 
     def token(self, name: str) -> str:
         return (self.capabilities / name).read_text().strip()
+
+    def pause_simulation(self) -> dict[str, Any]:
+        status, payload, _ = request_json(
+            self.url("simulator", "/v1/operator/pause?branch=protected"),
+            {},
+            bearer=self.token("simulator-operator.token"),
+            timeout_s=2.0,
+        )
+        assert status == 200 and payload["paused"] is True
+        return payload
+
+    def step_simulation(self, steps: int = 1) -> dict[str, Any]:
+        status, payload, _ = request_json(
+            self.url("simulator", "/v1/evaluation/step?branch=protected"),
+            {"steps": steps},
+            bearer=self.token("evaluation.token"),
+            timeout_s=8.0,
+        )
+        assert status == 200
+        return payload
+
+    def _wait_fusion_recovery_input(self) -> dict[str, Any]:
+        def available():
+            status, payload, _ = request_json(
+                self.url("fusion", "/v1/recovery-input?branch=protected"),
+                timeout_s=0.7,
+            )
+            return payload if status == 200 else None
+
+        return wait_for(available, timeout_s=STARTUP_READY_TIMEOUT_S)
+
+    def _wait_gate_recovery_certificate(self) -> dict[str, Any]:
+        def ready():
+            status, payload, _ = request_json(
+                self.url("gate", "/health"), timeout_s=0.7
+            )
+            certificate = payload.get("startup_recovery_certificate")
+            if (
+                status == 200
+                and payload.get("startup_recovery_ready") is True
+                and isinstance(certificate, dict)
+            ):
+                return certificate
+            return None
+
+        return wait_for(ready, timeout_s=STARTUP_READY_TIMEOUT_S)
+
+    def _wait_assurance_evidence(self) -> dict[str, Any]:
+        def accepted():
+            status, payload, _ = request_json(
+                self.url("assurance", "/v1/evidence/latest"), timeout_s=0.7
+            )
+            if (
+                status == 200
+                and payload.get("decision", {}).get("deadline_met") is True
+                and payload.get("receipt", {}).get("accepted") is True
+            ):
+                return payload
+            return None
+
+        return wait_for(accepted, timeout_s=STARTUP_READY_TIMEOUT_S)
+
+    def resume_simulation(self) -> dict[str, Any]:
+        def resumed():
+            certificate = self._wait_gate_recovery_certificate()
+            status, payload, _ = request_json(
+                self.url("simulator", "/v1/operator/resume?branch=protected"),
+                {"startup_recovery_certificate": certificate},
+                bearer=self.token("simulator-operator.token"),
+                timeout_s=2.0,
+            )
+            if status == 200 and payload.get("paused") is False:
+                return payload
+            if status == 409:
+                return None
+            raise AssertionError(f"simulator resume failed: status={status}, payload={payload}")
+
+        return wait_for(resumed, timeout_s=STARTUP_READY_TIMEOUT_S)
 
     def _start_process(self, name: str, command: list[str]) -> None:
         log_path = self.logs / f"{name}.log"
@@ -266,6 +348,8 @@ class HorizonStack:
         if self.marine_config is not None:
             simulator.extend(["--marine-config", str(self.marine_config)])
         self._start_process("simulator", simulator)
+        if self.synchronize_startup:
+            self.pause_simulation()
         self._start_process(
             "decision_ai",
             [
@@ -318,6 +402,8 @@ class HorizonStack:
                 "protected",
             ],
         )
+        if self.synchronize_startup:
+            self._wait_fusion_recovery_input()
         self._start_process(
             "gate",
             [
@@ -346,6 +432,8 @@ class HorizonStack:
                 str(self.capabilities / "gate-operator.token"),
             ],
         )
+        if self.synchronize_startup:
+            self._wait_gate_recovery_certificate()
         assurance = [
             python,
             "-m",
@@ -373,6 +461,10 @@ class HorizonStack:
                 ]
             )
         self._start_process("assurance", assurance)
+        if self.synchronize_startup:
+            if self.assurance_loop:
+                self.startup_evidence = self._wait_assurance_evidence()
+            self.resume_simulation()
         return self
 
     def stop_process(self, name: str) -> None:

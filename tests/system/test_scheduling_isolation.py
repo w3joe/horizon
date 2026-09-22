@@ -15,7 +15,12 @@ from .horizon_stack import HorizonStack
 def test_required_affinity_starts_services_and_matches_declared_lanes(tmp_path) -> None:
     """Verify startup and kernel affinity without making safety-timing claims."""
 
-    stack = HorizonStack(tmp_path, scenario="normal_transit.json", assurance_loop=False)
+    stack = HorizonStack(
+        tmp_path,
+        scenario="normal_transit.json",
+        assurance_loop=False,
+        synchronize_startup=False,
+    )
     try:
         stack.start()
         assert stack.scheduling.status == "enabled"

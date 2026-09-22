@@ -275,6 +275,12 @@ def _drive_to_a1_intervention(
             and decision.get("action") in {"modify", "recover"}
         ):
             return attempt
+        if gate_status == 200 and receipt.get("accepted") is True:
+            # Advance physics only after this simulation state has completed
+            # the full fusion -> assurance -> gate chain. Use coarse steps far
+            # from the boundary and exact fixed steps inside its final window.
+            step_count = 25 if simulation_time_s < safety_horizon_s - 5.0 else 1
+            stack.step_simulation(step_count)
         return None
 
     # Pace fixture requests at the 20 Hz control-loop cadence. Faster polling
@@ -311,6 +317,7 @@ def test_s02_a1_intervenes_before_independent_sampled_recovery_boundary(
     boundary = float(reference["last_sampled_recovery_opportunity_s"])
     protected = _stack(tmp_path / "protected", assurance_loop=False)
     try:
+        protected.pause_simulation()
         event = _drive_to_a1_intervention(
             protected,
             safety_horizon_s=boundary,
@@ -352,6 +359,7 @@ def test_s02_a1_intervenes_before_independent_sampled_recovery_boundary(
                 None,
             )
 
+        protected.step_simulation()
         actuation = wait_for(actuated, timeout_s=2.0)
         intervention_time = float(actuation["simulation_time_s"])
         assert intervention_time < boundary
