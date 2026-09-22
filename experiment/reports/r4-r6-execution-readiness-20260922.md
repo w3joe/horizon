@@ -112,3 +112,22 @@ mkdir -p "$RUN_ROOT"
 ```
 
 Live AIS is never a scoring source.
+
+### Bounded full-pipeline development smoke
+
+Run bundle: `/Users/w3joe/Desktop/2026_sdth/horizon-runs/development/r6-singapore-full-pipeline-smoke-20260922`.
+The committed manifest `r6-singapore-development-smoke.json` ran all five A1--A5
+implementations across all five Singapore cells for 25 real full-pipeline
+branches, with the conservative all-stages-20ms timing profile and a 20 s
+simulation bound.  The output hashes are:
+
+- `index.json`: `8447f01e5ffdea2c337d1e193cb37399fb41f7110820a6cc6b801d57d31b39ea`
+- `summary.json`: `9bebf2db964ca0c48ca2dfdc2e6a1a7aa2a7be61902f625030af981a1ff19044`
+
+The simulator loaded the 60-candidate/50-tracked overload fixture and scored
+all 25 branches against private truth.  The bounded run had zero collisions,
+groundings, and boundary events, but all 25 missions were censored and no
+candidate decision reached the gate.  This reproduces R1's current
+fail-closed fusion snapshot-origin blocker.  It is evidence that the fixtures
+and protected pipeline execute; it is explicitly not controller-performance,
+mission-completion, or held-out selection evidence.

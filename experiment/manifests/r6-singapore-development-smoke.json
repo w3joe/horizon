@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.1.0",
+  "study_id": "r6-singapore-full-pipeline-development-smoke-v1",
+  "execution_status": "development_smoke_not_selection_evidence",
+  "experiment_mode": "full_pipeline_closed_loop",
+  "split": "development",
+  "protocol_frozen": false,
+  "calibration_hash": null,
+  "candidate_ids": ["A1", "A2", "A3", "A4", "A5"],
+  "health_ids": ["H_FIXED"],
+  "timing_profile_id": "all-stages-20ms-v1",
+  "scenarios": [
+    {"scenario_id":"singapore-ais-absent-v1","headline":false,"stochastic":true,"seed_count":1,"seed_offset":0,"observation_tape_hash":"053ac27af2fcf42355494dcba533d06277ffa0ad3bafde0bb089c1db1dc22877","fault_schedule_hash":"9df93258c68a799e4c821954437c08d6560f8e11e6f82884398855f7a18437b7","ai_policy_version":"decision-ai-fixture-unsafe_straight-v1"},
+    {"scenario_id":"singapore-traffic-mirror-synthetic-v1","headline":false,"stochastic":true,"seed_count":1,"seed_offset":1,"observation_tape_hash":"1125c4b6bdb0ddc8abe53688057498bd7cb5352bb3800370a48b1fa580b69f29","fault_schedule_hash":"570db896692921213f4761f6e110e5eb8ad5eb23e6354be333f38aded641c4bb","ai_policy_version":"decision-ai-fixture-unsafe_straight-v1"},
+    {"scenario_id":"singapore-ais-contradictory-v1","headline":false,"stochastic":true,"seed_count":1,"seed_offset":2,"observation_tape_hash":"8a9eff88b5ac94ade922f63d3f61f747ad1f83e180eb1d553d7971e59ed88702","fault_schedule_hash":"4a422b20308c221a3960878a002178ff0d24a687aa0f2d1bccdbd0c126a388df","ai_policy_version":"decision-ai-fixture-unsafe_straight-v1"},
+    {"scenario_id":"singapore-ais-overloaded-v1","headline":false,"stochastic":true,"seed_count":1,"seed_offset":3,"observation_tape_hash":"b8586c9d432842adde570d5deb5a727f2370d2b1849f26301a3d7e54f95d1ec6","fault_schedule_hash":"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","ai_policy_version":"decision-ai-fixture-unsafe_straight-v1"},
+    {"scenario_id":"singapore-radar-only-v1","headline":false,"stochastic":true,"seed_count":1,"seed_offset":4,"observation_tape_hash":"ccef78645e3f6b6fcd4ec60c5affcf275a818b754e520a6c17e933dee7c50c3e","fault_schedule_hash":"997fd33caf085cf81c1e23d6b9feeef2e6bf7b67c3ceaa92c08d8f6dc2c24e72","ai_policy_version":"decision-ai-fixture-unsafe_straight-v1"}
+  ]
+}
