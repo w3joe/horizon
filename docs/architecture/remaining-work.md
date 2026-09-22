@@ -11,8 +11,8 @@ state.
 | Marine physics | Versioned wave/current/wind response, heave/roll/pitch, effective draft, characterization, and public operating-mode qualification are merged. | The higher-fidelity marine mode remains unqualified for assurance and needs its own evidence. |
 | Maritime assets | The console renders the licensed RIB, cargo vessel, cargo stack, and buoy in both 3D views, with normalized GLBs, provenance, browser budgets, loading fallbacks, and validated served copies. | These are display assets only; collision hulls, hydrodynamics, sensing, and safety evidence remain separate. |
 | Live neural evidence | Recorded-camera inference, exact health lineage, bounded queues and expiry, fail-closed policy, and the optional eighth coordinated process are merged. | The finite MODD2 footage is not pose-reactive and cannot provide metric contacts, free-space authority, or calibrated risk. |
-| Research and verification | The frozen 296-frame CUDA/MPS descriptive drift comparison, S09/S12 restart-lineage tests, and S01–S22 gap audit are merged. | Full mission-level S01–S22 acceptance, calibration, and held-out evaluation remain open. |
-| Deadline performance | Fixed-step recovery rollout allocation was reduced without relaxing the production 40 ms deadline. | Linux shared-runner deadline evidence and the remaining live-chain acceptance cases must still pass. |
+| Research and verification | The frozen 296-frame CUDA/MPS descriptive drift comparison, bounded S02/S22 causal evidence, S09/S12 restart-lineage tests, A1–A5 working-interface audit, and S01–S22 gap audit are merged. | Full mission-level S01–S22 acceptance, calibration, held-out evaluation, and architecture selection remain open. |
+| Deadline performance | Predictive rollout work, recovery cadence, and the assurance critical path were reduced without relaxing the production 40 ms deadline. Linux CI exercises an explicit two-lane logical-CPU policy while retaining fail-closed deadline checks. | Hosted-runner evidence is scheduler characterization, not WCET, hard real-time, or exclusive-CPU evidence. Target hardware profiling remains open. |
 | Integration/platform | Shared contracts, the default seven-service launch, opt-in perception launch, UI integration, bounded compute records, and private repository integration are present. | Real ship endpoints, production AI integration, and deployment qualification require external systems and evidence. |
 
 The replay renderer now accepts authoritative wave components and physical
@@ -23,10 +23,23 @@ baseline safety outcome. Full S01–S22 acceptance and Linux timing remain open.
 
 The integrated checks cover Python, contracts, the maritime asset registry,
 TypeScript, and a production console build. The guided collision comparison and
-live harbor were checked visually after asset integration. Linux run 35677708977
-failed six live-chain tests because recovery requests took about 48–59 ms under
-shared-runner load. The later fixed-step optimization preserves the 40 ms
-deadline, but a passing Linux end-to-end rerun is still required.
+live harbor were checked visually after asset integration. The Linux timing work
+kept the 40 ms contract, added bounded readiness leases and strict epoch checks,
+and removed a redundant gate-status round trip from established control-loop
+cycles. Current CI status is linked from the repository's GitHub Actions page;
+hosted-runner success does not qualify deployment timing.
+
+The A1–A5 implementations now pass one common finite/schema acceptance over
+paired safe, recoverable, and no-valid-recovery fixtures. In the short paired
+closed-loop diagnostic, A3, A4, and A5 selected gate-accepted recoveries; A1 and
+A2 passed commands that the independent gate rejected during final collision
+revalidation. This is useful disagreement evidence, not an architecture ranking.
+A2 remains an uncalibrated analytic Gaussian method; A4 is a finite discrete
+plant-map barrier search rather than a formal robust maritime CBF; and A3/A5 are
+finite sampled engineering checks rather than reachability or viability proofs.
+The calibration partition, held-out study, target-runtime calibration, marine-mode
+qualification, real-vessel endpoints, and production decision-AI endpoint remain
+open. H4 development fitting has not established a deployable threshold.
 
 ## Completion evidence
 

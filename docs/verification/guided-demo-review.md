@@ -64,6 +64,8 @@ effects and do not alter authoritative vessel physics. The guided replay does no
 claim that neural-network evidence caused its intervention. Responsive CSS exists,
 but this review did not certify a mobile-device/browser matrix.
 
-The preceding Linux CI run had failures in four live service-chain timing tests;
-local checks do not establish Linux timing portability. Control deadlines were
-not relaxed to obtain a demo result.
+Subsequent Linux work preserved the 40 ms contract, added logical-CPU lane
+characterization, strict epoch rejection, and a bounded gate-readiness lease.
+GitHub-hosted results characterize that runner only; local checks do not establish
+Linux timing portability, WCET, hard real-time behavior, or target-hardware
+qualification. Control deadlines were not relaxed to obtain the demo result.

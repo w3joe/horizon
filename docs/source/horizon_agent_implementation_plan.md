@@ -1,13 +1,18 @@
 # Horizon — Multi-agent implementation plan
 
-**Status:** Approved and executing as of 2026-09-21; automatic integration of accepted agent work is authorized.  
+> **Historical execution plan.** The repository, demo, algorithms, experiment harness,
+> maritime assets, marine model, and recorded-perception packets now exist. Current
+> status and remaining evidence are tracked in the repository README,
+> `docs/architecture/remaining-work.md`, and `experiment/reports/claim-ledger.md`.
+
+**Status:** Approved historical plan from 2026-09-21; automatic integration of accepted agent work was authorized.
 **Repository:** `horizon`, private on GitHub.  
 **Local clone:** `/Users/w3joe/Desktop/2026_sdth/horizon`  
 **All subagents:** **Sol / high** — `model: gpt-5.6-sol`, `reasoning_effort: high`.  
 **Team:** One coordinating parent, eight core subagent assignments, and two later 3D-realism assignments, scheduled within available concurrency.  
 **Outcome:** A working maritime runtime-assurance demo and reproducible implementation of the current research plan.
 
-This document is the requested review artifact. Repository creation, cloning, agent launch, implementation, and cloud jobs happen after the user authorizes execution of this plan. Preparing this file does not create a GitHub repository or spend compute budget.
+This document is the original review artifact and preserves its planned sequencing and targets. It is not current implementation evidence.
 
 ## 1. Source of truth and intended result
 

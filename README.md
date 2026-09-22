@@ -66,16 +66,18 @@ do not change plant dynamics, collision geometry, sensing, or assurance evidence
 See the [asset pack record](docs/realism/assets/maritime-pack.md).
 
 Horizon's compute cap is USD 100: a USD 80 working budget plus a protected
-USD 20 reserve. The current external ledger records USD 0.04250377 of reconciled
+USD 20 reserve. At the 2026-09-22 development snapshot, the external ledger
+records USD 0.04250377 of reconciled
 spend and no active reservations, leaving USD 79.95749623 in the working budget
 and USD 99.95749623 unspent in total. The mutable
 `horizon-runs/compute/ledger.json` remains authoritative.
 
-The workspace is still under active validation. Independent system acceptance,
+The workspace is still under active validation. It has no safety certification
+or field validation. Independent system acceptance,
 marine-mode assurance qualification, calibration, and held-out evaluation remain
 to be completed before release claims. Recorded-camera execution, GPU timing,
 and descriptive backend drift are not safety-equivalence evidence.
 
-See [system boundaries](docs/architecture/system.md), [local runtime](docs/architecture/local-runtime.md), [compute controls](docs/architecture/compute.md), and [reviewed source material](docs/source/README.md). JSON Schema in `packages/contracts/schema/horizon.schema.json` is the shared language-neutral interface source.
+See [system boundaries](docs/architecture/system.md), [local runtime](docs/architecture/local-runtime.md), [remaining research and implementation work](docs/architecture/remaining-work.md), [compute controls](docs/architecture/compute.md), and [reviewed source material](docs/source/README.md). JSON Schema in `packages/contracts/schema/horizon.schema.json` is the shared language-neutral interface source.
 
 This repository contains no project license. It must remain private. Large datasets, weights, captures, caches, and generated runs stay outside Git.

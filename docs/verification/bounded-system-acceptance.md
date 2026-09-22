@@ -56,6 +56,13 @@ regressions.
 acceptance condition remains. A source-plan recipe is never counted as passed
 from catalogue validation or a component test.
 
+> **Superseding implementation note (2026-09-22):** bounded S02 evidence now
+> joins an accepted A1 recovery before an independently sampled recovery boundary;
+> bounded S22 evidence joins an accepted A1 intervention before its paired
+> counterfactual collision; and S09/S12 restart-lineage tests now require fresh
+> joined chains. Mission completion, statistical coverage, and full S01–S22
+> acceptance remain open, so the historical packet below is retained unchanged.
+
 | ID | Status in this packet | Executed evidence or remaining dependency |
 |---|---|---|
 | S01 | executed_partial | Joined nominal actuation passed; mission completion and unnecessary-intervention rate need a full episode. |

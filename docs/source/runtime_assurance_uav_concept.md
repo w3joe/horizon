@@ -7,7 +7,12 @@
 
 > Demonstrate an autonomous vessel receiving an unsafe command, predicting the consequence, correcting its motion before the hazard becomes unavoidable, and explaining exactly why it intervened.
 
-This is a build plan, not a report of a completed system. Numerical settings are proposed simulation parameters and acceptance targets, not measured results or operational navigation limits. The original plan is preserved in `output/runtime-assurance/runtime_assurance_uav_concept.original.md`.
+> **Historical source plan.** Current implementation status is recorded in the
+> repository README, `docs/architecture/remaining-work.md`, and the experiment
+> claim ledger. Planning references to calibration, MODS, held-out evaluation,
+> and 20 Hz operation remain targets unless those current records cite evidence.
+
+This is a build plan, not a report of a completed system. Numerical settings are proposed simulation parameters and acceptance targets, not measured results or operational navigation limits. The reviewed source copy is preserved in this repository; Git history retains earlier revisions.
 
 **Reading guide:** Sections 5–9 define integration and intervention; Section 10 defines the visual product; Sections 11–13 define tests and build milestones; Section 16 specifies the WaSR-T/perception-health experiment; Section 17 selects usable data and repositories. The accompanying interactive console concept is illustrative, not an implemented RTA engine.
 
