@@ -1197,6 +1197,11 @@ class A5EvidenceHybrid(Candidate):
                 requested,
                 capture_time_s=self.recovery_handoff_s,
                 host_deadline_ns=work_deadline,
+                # A sampled-pose violation is sufficient to reject this
+                # command. Safe results still complete the entire assessment,
+                # which is required before the command can be issued or used
+                # as the start of a validated recovery continuation.
+                stop_on_definitive_unsafe=True,
             )
             if assessment.safe and assessment.handoff_sample is not None:
                 continuation = self.checker.recovery_from_handoff(
@@ -1225,8 +1230,22 @@ class A5EvidenceHybrid(Candidate):
                 conditioned, requested, host_deadline_ns=work_deadline
             )
             if filtered is not None and status == "optimal":
-                final = self.checker.assess(
-                    conditioned, filtered, host_deadline_ns=work_deadline
+                # The filter may certify its one-step barrier condition without
+                # changing the requested command. In that case the predictive
+                # assessment above already rejected the identical command as
+                # non-safe. Repeating it cannot qualify that command for
+                # issuance; an unknown result remains fail-closed. For a changed
+                # command, reject on the first definitive violation but still
+                # require a complete assessment before issuance.
+                final = (
+                    assessment
+                    if filtered == requested and not assessment.safe
+                    else self.checker.assess(
+                        conditioned,
+                        filtered,
+                        host_deadline_ns=work_deadline,
+                        stop_on_definitive_unsafe=True,
+                    )
                 )
                 if final.safe:
                     return _decision(

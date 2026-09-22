@@ -169,6 +169,24 @@ def _axis_aligned_value_sweep_clearance(
     return math.hypot(north_gap, east_gap)
 
 
+def _synchronized_endpoint_clearance(
+    own_polygons: tuple[tuple[tuple[float, float], ...], ...],
+    contact_polygons: tuple[tuple[tuple[float, float], ...], ...],
+) -> float:
+    """Return the least clearance between endpoint poses at equal times."""
+
+    from horizon_sim.geometry import signed_polygon_clearance
+
+    return min(
+        signed_polygon_clearance(own_polygon, contact_polygon)
+        for own_polygon, contact_polygon in zip(
+            own_polygons,
+            contact_polygons,
+            strict=True,
+        )
+    )
+
+
 def _convex_boundary_center_clearance(
     centers: list[dict[str, float]],
     boundary: tuple[tuple[float, float], ...],
@@ -838,10 +856,15 @@ class BoundedPredictiveChecker:
                                 hull_polygon(contact_start_state, contact_hull),
                                 hull_polygon(contact_end_state, contact_hull),
                             )
-                            sample_clearance = min(
-                                signed_polygon_clearance(own_polygon, contact_polygon)
-                                for own_polygon in own_endpoint_polygons
-                                for contact_polygon in contact_endpoint_polygons
+                            # Only synchronized endpoint poses can certify a
+                            # sampled-time violation. Cross-pairing the ownship
+                            # start with the contact end (or vice versa) can
+                            # invent a collision between states that never
+                            # coexist and is therefore unsuitable as an early
+                            # unsafe certificate.
+                            sample_clearance = _synchronized_endpoint_clearance(
+                                own_endpoint_polygons,
+                                contact_endpoint_polygons,
                             )
                             sample_margin = (
                                 sample_clearance

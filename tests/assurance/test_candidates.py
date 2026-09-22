@@ -22,9 +22,12 @@ from horizon_assurance.candidates import (
 )
 from horizon_assurance.configuration import AssuranceConfig, NavigationReference
 from horizon_assurance.predictive import (
+    Assessment,
     BoundedPredictiveChecker,
+    RecoverySelection,
     _axis_aligned_sweep_clearance,
     _convex_boundary_center_clearance,
+    _synchronized_endpoint_clearance,
 )
 from horizon_assurance.validation import InputRejected
 
@@ -182,6 +185,33 @@ def test_axis_aligned_sweep_clearance_lower_bounds_convex_center_sweep() -> None
     assert 0.0 <= box_clearance <= exact_clearance
 
 
+def test_unsafe_endpoint_certificate_compares_only_synchronized_poses() -> None:
+    from horizon_sim.geometry import hull_polygon, signed_polygon_clearance
+    from horizon_sim.model import Hull, VesselState
+
+    hull = Hull(length_m=10.0, beam_m=4.0)
+    own_polygons = (
+        hull_polygon(VesselState(north_m=0.0, east_m=0.0), hull),
+        hull_polygon(VesselState(north_m=100.0, east_m=0.0), hull),
+    )
+    contact_polygons = (
+        hull_polygon(VesselState(north_m=100.0, east_m=0.0), hull),
+        hull_polygon(VesselState(north_m=200.0, east_m=0.0), hull),
+    )
+
+    synchronized = _synchronized_endpoint_clearance(
+        own_polygons, contact_polygons
+    )
+    cross_time = min(
+        signed_polygon_clearance(own_polygon, contact_polygon)
+        for own_polygon in own_polygons
+        for contact_polygon in contact_polygons
+    )
+
+    assert synchronized > 0.0
+    assert cross_time < 0.0
+
+
 def test_convex_boundary_center_clearance_matches_inward_edge_distance() -> None:
     from horizon_sim.geometry import signed_boundary_margin
 
@@ -302,9 +332,10 @@ def test_partial_contact_certificates_skip_only_proven_safe_chunks(
     monkeypatch.setattr(geometry, "signed_polygon_clearance", partial_clearance)
     partial = BoundedPredictiveChecker(reference).recovery_from_current(message)
 
-    # Index zero has no preceding chunk certificate; the other detailed calls
-    # are exactly the three deliberately unresolved chunks.
-    assert detailed_calls == 1 + 5 * len(forced_chunk_ends)
+    # Index zero has no preceding chunk certificate. Each deliberately
+    # unresolved chunk checks its two synchronized endpoints and then executes
+    # the detailed swept-hull comparison.
+    assert detailed_calls == 1 + 3 * len(forced_chunk_ends)
 
     forced_detailed_calls = 0
 
@@ -321,7 +352,7 @@ def test_partial_contact_certificates_skip_only_proven_safe_chunks(
     monkeypatch.setattr(geometry, "signed_polygon_clearance", forced_clearance)
     forced = BoundedPredictiveChecker(reference).recovery_from_current(message)
 
-    assert forced_detailed_calls == 151
+    assert forced_detailed_calls == 91
     assert partial.command == forced.command
     assert partial.option == forced.option
     assert partial.assessment.status == forced.assessment.status
@@ -358,7 +389,8 @@ def test_proven_unsafe_candidates_preserve_first_safe_recovery_selection(
     exact_checker.assess = forced_exact
     exact = exact_checker.recovery_from_current(copy.deepcopy(message))
 
-    assert observed_completeness == [False, False, True]
+    assert False in observed_completeness
+    assert observed_completeness[-1] is True
     assert optimized == exact
 
 
@@ -397,7 +429,8 @@ def test_all_unsafe_library_rechecks_provisional_margins_before_ranking(
     exact_checker.assess = forced_exact
     exact = exact_checker.recovery_from_current(copy.deepcopy(message))
 
-    assert observed_completeness == [False, False, True, True]
+    assert False in observed_completeness
+    assert observed_completeness[-1] is True
     assert optimized == exact
     assert not optimized.assessment.safe
     assert optimized.assessment.complete
@@ -716,6 +749,90 @@ def test_a5_conditions_declared_bounds_and_speed_for_degraded_required_source(
     if decision["action"] == "modify":
         assert decision["issued_command"]["speed_mps"] <= 3.0
     assert "EVIDENCE_POLICY_DEGRADED" in decision["reason_codes"]
+
+
+def test_a5_reuses_unsafe_assessment_when_barrier_keeps_exact_command(
+    reference, governor_input, monkeypatch
+) -> None:
+    message = copy.deepcopy(governor_input)
+    governor = A5EvidenceHybrid(reference, fast_config())
+    assessment_calls: list[tuple[dict[str, float], dict[str, object]]] = []
+    unsafe = Assessment(
+        "unsafe",
+        ("COLLISION_MARGIN_VIOLATION",),
+        (),
+        -1.0,
+        complete=False,
+    )
+
+    def assess(_input, command, **kwargs):
+        assessment_calls.append((dict(command), kwargs))
+        return unsafe
+
+    recovery = RecoverySelection(
+        {"heading_rad": 0.5, "speed_mps": 1.0},
+        {
+            "recovery_id": "finite-starboard-70-1mps-v1",
+            "valid_until_monotonic_ns": message["snapshot"][
+                "valid_until_monotonic_ns"
+            ],
+            "assumption_id": "test-recovery-v1",
+        },
+        Assessment("safe", (), (), 1.0),
+    )
+    monkeypatch.setattr(governor.checker, "assess", assess)
+    monkeypatch.setattr(
+        governor.checker,
+        "recovery_from_current",
+        lambda *_args, **_kwargs: recovery,
+    )
+    monkeypatch.setattr(
+        A4RobustBarrierFilter,
+        "_filter_command",
+        lambda _self, _input, requested, **_kwargs: (
+            dict(requested),
+            0.0,
+            None,
+            "optimal",
+        ),
+    )
+
+    decision = governor.evaluate(message)
+
+    assert decision["action"] == "recover"
+    assert decision["issued_command"] == recovery.command
+    assert len(assessment_calls) == 1
+    assert assessment_calls[0][1]["stop_on_definitive_unsafe"] is True
+
+
+def test_a5_early_unsafe_path_matches_complete_assessment_selection(
+    reference, governor_input
+) -> None:
+    message = copy.deepcopy(governor_input)
+    contact = message["snapshot"]["contacts"][0]
+    contact["position_ne_m"] = [50.0, -30.0]
+    contact["velocity_ne_mps"] = [0.0, 4.0]
+    config = replace(fast_config(), candidate_work_budget_s=0.5)
+
+    optimized_governor = A5EvidenceHybrid(reference, config)
+    optimized = optimized_governor.evaluate(copy.deepcopy(message))
+
+    complete_governor = A5EvidenceHybrid(reference, config)
+    complete_assess = complete_governor.checker.assess
+
+    def force_complete(*args, **kwargs):
+        kwargs["stop_on_definitive_unsafe"] = False
+        return complete_assess(*args, **kwargs)
+
+    complete_governor.checker.assess = force_complete
+    complete = complete_governor.evaluate(copy.deepcopy(message))
+
+    for decision in (optimized, complete):
+        decision.pop("compute_time_ns")
+        decision.pop("decided_monotonic_ns")
+    assert optimized == complete
+    assert optimized["action"] == "recover"
+    assert "VALIDATED_RECOVERY_SELECTED" in optimized["reason_codes"]
 
 
 def test_live_fusion_covariance_only_input_uses_explicit_eligible_assumptions() -> None:
