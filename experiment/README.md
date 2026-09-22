@@ -38,6 +38,14 @@ PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment r3-r5-readiness \
   --index experiment/manifests/r3-r5-calibration-readiness-index.json \
   --output ../horizon-runs/calibration/r3-r5-readiness.json
 
+PYTHONPATH=.:services/perception /opt/homebrew/bin/python3.12 -m experiment acquire-perception-calibration \
+  --frame-root ../horizon-data/datasets/modd2/video/video_data \
+  --annotations-root ../horizon-data/datasets/modd2/annotations/annotations_v2_redone \
+  --source ../horizon-data/sources/WaSR-T \
+  --weights ../horizon-data/weights/wasrt_mastr1325.pth \
+  --output-root ../horizon-runs/calibration-acquisition-mps-v1 \
+  --device mps --max-jobs 1 --max-frames-per-job 8 --join-labels
+
 PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment controller-evidence \
   --index ../horizon-runs/development/controller-study/index.json \
   --output ../horizon-runs/development/controller-study/readiness.json
@@ -87,6 +95,14 @@ and diagnostic overhead. It rejects an AIS bound that shrinks a radar-supported 
 maps representation novelty into metres. `r3-r5-readiness` is the explicit no-data outcome when
 valid calibration observations do not exist; it does not substitute development artifacts. The
 controller command checks evidence completeness and returns no ranking.
+
+`acquire-perception-calibration` hashes every declared `kope67`/`kope75` left-camera source frame
+and materializes nominal plus the five frozen controlled-stress arms outside Git. It checkpoints
+each arm so it can resume without changing source or perturbation lineage. A partial run is marked
+ineligible for threshold fitting. It writes H0 entropy evidence only; H1 remains blocked unless an
+independent horizon and an occlusion measurement are supplied, and H2--H4 remain blocked until their
+target-runtime references and causal gates are valid. The optional label join records a missing MAT
+parser dependency as a blocker rather than treating labels as absent obstacles.
 The detailed gates are in `protocol/perception-stage2.md`.
 
 The external data status is deliberately explicit:

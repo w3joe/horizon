@@ -13,6 +13,8 @@ from experiment.evaluation.candidate_acceptance import assess_candidate_implemen
 from experiment.evaluation.controller_evidence import assess_controller_evidence
 from experiment.evaluation.perception import calibrate_perception_methods, compare_runtime_drift
 from experiment.evaluation.rta_calibration import assess_r3_r5_calibration, assess_r3_r5_readiness
+from experiment.acquisition.perception_calibration import acquire as acquire_perception_calibration
+from experiment.acquisition.perception_calibration import build_plan as build_perception_calibration_plan
 from experiment.evaluation.reporting import summarize_records
 from experiment.harness.manifests import (
     expand_jobs,
@@ -161,6 +163,32 @@ def _r3_r5_readiness(args: argparse.Namespace) -> int:
     return 0
 
 
+def _acquire_perception_calibration(args: argparse.Namespace) -> int:
+    plan = build_perception_calibration_plan(args.config, args.frame_root)
+    if args.plan_only:
+        write_json(args.output_root / "plan.json", plan)
+        print(json.dumps({"status": "planned", "plan_sha256": plan["plan_sha256"]}, indent=2))
+        return 0
+    config = load_json(args.config)
+    if args.join_labels and args.annotations_root is None:
+        raise ValueError("--join-labels requires --annotations-root")
+    report = acquire_perception_calibration(
+        plan,
+        args.frame_root,
+        args.output_root,
+        source_dir=args.source,
+        weights=args.weights,
+        device=args.device,
+        fp16=args.fp16,
+        max_jobs=args.max_jobs,
+        max_frames_per_job=args.max_frames_per_job,
+        annotations_root=args.annotations_root if args.join_labels else None,
+        label_policy=config["label_policy"] if args.join_labels else None,
+    )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def _controller_evidence(args: argparse.Namespace) -> int:
     report = assess_controller_evidence(args.index, args.selection_rule)
     write_json(args.output, report)
@@ -304,6 +332,24 @@ def build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--index", required=True)
     readiness.add_argument("--output", required=True)
     readiness.set_defaults(function=_r3_r5_readiness)
+
+    acquisition = subparsers.add_parser(
+        "acquire-perception-calibration",
+        help="acquire declared MODD2 calibration H0 evidence and controlled arms with resume support",
+    )
+    acquisition.add_argument("--config", type=Path, default=DEFAULT_PERCEPTION_STAGE2)
+    acquisition.add_argument("--frame-root", type=Path, required=True)
+    acquisition.add_argument("--annotations-root", type=Path)
+    acquisition.add_argument("--source", type=Path, required=True)
+    acquisition.add_argument("--weights", type=Path, required=True)
+    acquisition.add_argument("--output-root", type=Path, required=True)
+    acquisition.add_argument("--device", default="mps")
+    acquisition.add_argument("--fp16", action="store_true")
+    acquisition.add_argument("--max-jobs", type=int, default=1)
+    acquisition.add_argument("--max-frames-per-job", type=int)
+    acquisition.add_argument("--join-labels", action="store_true")
+    acquisition.add_argument("--plan-only", action="store_true")
+    acquisition.set_defaults(function=_acquire_perception_calibration)
 
     controller = subparsers.add_parser(
         "controller-evidence", help="check whether paired controller evidence supports selection"
