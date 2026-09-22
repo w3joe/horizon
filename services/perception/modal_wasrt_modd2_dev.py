@@ -15,14 +15,23 @@ import shutil
 import modal
 
 
-LOCAL_REPO = Path(__file__).resolve().parents[2]
-LOCAL_DATA = Path(os.environ.get("HORIZON_DATA_ROOT", "/Users/w3joe/Desktop/2026_sdth/horizon-data"))
-LOCAL_SERVICE = Path(__file__).resolve().parent
-SOURCE = LOCAL_DATA / "sources" / "WaSR-T"
-WEIGHTS = LOCAL_DATA / "weights" / "wasrt_mastr1325.pth"
 SEQUENCE_NAME = "kope81-00-00006800-00007095"
-FRAMES = LOCAL_DATA / "datasets" / "modd2" / "video" / "video_data" / SEQUENCE_NAME / "frames"
-SPLIT_MANIFEST = LOCAL_REPO / "configs" / "perception" / "modd2-splits.json"
+if modal.is_local():
+    LOCAL_REPO = Path(os.environ["HORIZON_REPO_ROOT"])
+    LOCAL_DATA = Path(os.environ.get("HORIZON_DATA_ROOT", "/Users/w3joe/Desktop/2026_sdth/horizon-data"))
+    LOCAL_SERVICE = Path(__file__).resolve().parent
+    SOURCE = LOCAL_DATA / "sources" / "WaSR-T"
+    WEIGHTS = LOCAL_DATA / "weights" / "wasrt_mastr1325.pth"
+    FRAMES = LOCAL_DATA / "datasets" / "modd2" / "video" / "video_data" / SEQUENCE_NAME / "frames"
+    SPLIT_MANIFEST = LOCAL_REPO / "configs" / "perception" / "modd2-splits.json"
+else:
+    # Modal imports this module again inside the hydrated function container.
+    # Use the mounted container paths there; host checkout paths are local-only.
+    LOCAL_SERVICE = Path("/opt/horizon/services/perception")
+    SOURCE = Path("/opt/wasr-t")
+    WEIGHTS = Path("/opt/weights/wasrt_mastr1325.pth")
+    FRAMES = Path(f"/opt/input/{SEQUENCE_NAME}/frames")
+    SPLIT_MANIFEST = Path("/opt/input/modd2-splits.json")
 
 RUN_ID = os.environ["HORIZON_MODAL_RUN_ID"]
 VOLUME_NAME = os.environ["HORIZON_MODAL_VOLUME"]

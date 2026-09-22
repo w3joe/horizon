@@ -12,6 +12,7 @@ fi
 export PYTHONPATH="$repo_root:$repo_root/packages/contracts/python:$repo_root/packages/marine-environment:$repo_root/services/simulator:$repo_root/services/collector:$repo_root/services/fusion:$repo_root/services/assurance:$repo_root/services/gate:$repo_root/services/perception:$repo_root/services/neural-health:$repo_root/adapters/maritime${PYTHONPATH:+:$PYTHONPATH}"
 .venv/bin/python scripts/generate_contract_types.py --check
 .venv/bin/python scripts/validate_contracts.py
+.venv/bin/python scripts/assets/validate_maritime_assets.py
 
 test_paths=(packages/contracts/python/tests)
 for candidate in experiment/tests services scripts/tests tests; do

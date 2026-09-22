@@ -436,6 +436,7 @@ def main() -> int:
     launch_provenance = capture_launch_provenance(spec, entrypoint, spec_path)
     environment = os.environ.copy()
     environment["HORIZON_MODAL_JOB_SPEC"] = str(spec_path)
+    environment["HORIZON_REPO_ROOT"] = str(ROOT)
     environment["HORIZON_DATA_ROOT"] = str(Path(spec["input"]["source_path"]).parents[1])
     environment["HORIZON_MODAL_RUN_ID"] = spec["job_id"]
     environment["HORIZON_MODAL_VOLUME"] = spec["modal_volume_name"]
