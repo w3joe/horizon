@@ -1,6 +1,6 @@
 # AISStream integration plan for a Singapore-area Horizon demo
 
-**Status:** feasible as an optional, backend-only live civilian-AIS overlay, subject to service availability and a written data-use decision. This document is an implementation handoff. The A11 planning work did not request or handle an API key; a separate coordinator-run, sanitized feasibility smoke is summarized below.
+**Status:** feasible as an optional, backend-only live civilian-AIS overlay and as the source for a deterministic recorded traffic mirror, subject to service availability and a written data-use decision. This document is an implementation handoff. The A11 planning work did not request or handle an API key; a separate coordinator-run, sanitized feasibility smoke is summarized below.
 
 **Research snapshot:** 2026-09-22. Recheck the linked service documentation, schema, availability reports, and data-use terms immediately before implementation or any public demonstration.
 
@@ -8,7 +8,7 @@
 
 AISStream can supply reported positions and identity data for participating civilian vessels around Singapore. It cannot reliably “pinpoint every ship”: AIS is cooperative, intermittent, terrestrially received, self-reported, and vulnerable to stale, erroneous, duplicated, reused, or spoofed identities. Some government or defence vessels may omit, restrict, or manipulate transmissions. Horizon must label each marker **AIS-reported**, show last-seen age and uncertainty, and never present coverage as complete surveillance.
 
-The first implementation should be a read-only live overlay, isolated from deterministic recorded and synthetic experiments:
+The first network-facing implementation should be a read-only live overlay, isolated from deterministic recorded and synthetic experiments. A separate offline compiler may turn a permitted, hash-pinned capture into simulator traffic as specified below:
 
 ```text
 AISStream WSS (server side only)
@@ -90,6 +90,114 @@ Store configuration without secrets in `configs/maritime/aisstream-singapore-dem
 ```
 
 These coordinates are a broad **demo area of interest**, not Singapore port limits, traffic-separation geometry, navigational chart data, rules-of-the-road geometry, or an operating authorization. Normalize each box to `(min_lat, min_lon, max_lat, max_lon)` before serializing it as two `[latitude, longitude]` corners. Reject antimeridian-spanning or overlapping boxes in v1; overlapping subscriptions could produce duplicates. The origin is an arbitrary local visualization reference, not a waypoint. Later west/central/east presets may be added only as named visualization presets with the same disclaimer.
+
+## AIS-derived traffic mirror
+
+The useful demonstration is not a cloud of live dots. It is a closed-loop encounter in which Singapore-area AIS reports seed realistic surrounding traffic, the simulator generates independent onboard observations of those vessels, and the RTA prevents a collision. Keep three modes explicit:
+
+| Mode | Purpose | Authority and reproducibility |
+|---|---|---|
+| `recorded_mirror` | Default hackathon and research mode. Convert one approved, hash-pinned AIS capture into a deterministic traffic snapshot or replay. | The simulator owns plant truth after initialization. Safe for paired, offline experiments when rights and provenance gates pass. |
+| `live_shadow` | Private situational display of current AIS-reported traffic around the Singapore area. | Read-only and unscored. It cannot steer the simulated ownship or alter a deterministic result. |
+| `synthetic_offline` | Guaranteed fallback and adversarial cases such as AIS dropout, spoofing, crossing, and non-transmitting contacts. | Fully deterministic and suitable for public demos. Clearly label it synthetic. |
+
+Do not implement a `live_control` mode in v1. Internet timing, incomplete coverage, unauthenticated identities, and changing traffic would make results irreproducible and would confuse AIS reports with physical truth.
+
+### End-to-end data path
+
+```text
+AISStream receiver -> validated per-MMSI track cache
+                               |
+                               +-> live_shadow console layer
+                               |
+                               +-> capture compiler -> hash-pinned TrafficSnapshot
+                                                        |
+OSM/GEBCO snapshot -> GeographyBundle -------------------+-> scenario compiler
+                                                                |
+                                                                v
+                                                deterministic traffic plants
+                                               /         |          \
+                                      simulated radar  camera     simulated AIS
+                                               \         |          /
+                                                fusion -> RTA -> gate -> ownship
+```
+
+This separation is deliberate. An AIS report may initialize a traffic vessel's position, velocity, reported dimensions, and class. Once a `recorded_mirror` episode starts, the simulator plant is the truth source and independently produces radar, camera, and AIS observations with different error/dropout models. The RTA avoids the resulting fused contact; it never treats the original AIS marker as guaranteed obstacle truth or guaranteed free water.
+
+### Capture-to-traffic compiler
+
+Create a deterministic compiler, proposed at `tools/traffic/build_ais_snapshot.py`, with the following behavior:
+
+1. Read an external, rights-approved capture and verify its artifact manifest and SHA-256 before parsing it.
+2. Select a declared UTC instant or replay window. Resolve one newest valid dynamic report per MMSI at that instant and join static data only inside its independent TTL.
+3. Exclude configured ownship MMSIs, aids to navigation, SAR aircraft, invalid coordinates, stale reports, and contacts outside the area of interest. Record every exclusion reason and count.
+4. Convert WGS84 position to the scenario's pinned local NED frame. Convert speed over ground from knots to metres per second and course over ground from degrees true to a north/east velocity. Heading remains separate from course.
+5. Use reported bow/stern/port/starboard dimensions only when valid. Otherwise assign an explicit conservative scenario-class hull assumption and set `dimensions_assumed=true`; never infer size from a vessel name.
+6. Rank contacts deterministically by distance to ownship and then MMSI. Keep a configurable bounded number for the interactive simulation while preserving the total/excluded counts in the manifest.
+7. Emit a versioned `TrafficSnapshot` with the capture hash, selection time/window, local-frame hash, compiler version, vessel states, motion-model assumptions, age and uncertainty, and rights status. Do not emit names or destinations unless the demo needs them and display rights are resolved.
+
+For a snapshot episode, use a constant-course/constant-speed traffic model only over its declared short horizon, with turn and acceleration stress variants added synthetically. For replay, interpolate only between valid reports from the same identity generation; never interpolate across an impossible jump, reconnect ambiguity, or long gap. Do not use the free-text AIS destination as a route. Smooth a live visual marker if useful, but preserve the raw report time and uncertainty ring so smoothing does not imply fresh evidence.
+
+The first bounded implementation should target 32 rendered vessels and retain a hard configurable ceiling of 64. These are demo-performance limits, not traffic-density claims. A deterministic spatial filter should retain every contact inside the ownship risk radius before filling remaining visual slots by distance.
+
+### Traffic uncertainty and failure injection
+
+Every mirrored vessel carries report age, last-receipt time, identity generation, position uncertainty, dimensions status, and source-health state. Propagation between reports increases the uncertainty envelope as a declared function of age and motion uncertainty and stops at a finite horizon. A stale contact becomes `unknown/degraded`; it does not vanish from the collision picture merely because AIS stopped.
+
+The scenario compiler must be able to layer reproducible faults over the AIS-derived initial scene:
+
+- complete AIS dropout for one target while simulated radar continues;
+- stale, delayed, duplicated, and out-of-order reports;
+- false MMSI identity or impossible geographic jump;
+- wrong course/speed or dimensions;
+- a radar-only non-transmitting contact; and
+- dense traffic that exceeds the UI display cap but not the safety-track cap.
+
+These cases make the demo relevant to RTA: the protected vessel should remain conservative when cooperative data disappears or conflicts with onboard sensing.
+
+## Singapore geography bundle
+
+Use a versioned, offline `GeographyBundle` rather than depending on public map servers during a demo. Keep visual geography and safety geometry as different artifacts:
+
+```json
+{
+  "bundle_id": "singapore-area-demo-v1",
+  "wgs84_bbox": [103.55, 1.10, 104.15, 1.50],
+  "local_ned_origin": {"latitude_deg": 1.25, "longitude_deg": 103.85},
+  "visual_layers": ["land.geojson", "shoreline.geojson", "seamarks.geojson", "bathymetry-contours.geojson"],
+  "safety_layers": ["reviewed-water-envelope.geojson", "synthetic-no-go.geojson"],
+  "source_manifest": "sources.json",
+  "assurance_status": "simulation-only"
+}
+```
+
+The bundle manifest records source URL, source/version date, download time, licence, attribution text, original and derived SHA-256, extraction command, bounds, coordinate reference system, simplification tolerance, and reviewer status. Large PBF, raster, tile, and raw AIS files remain under external `horizon-data/`; Git stores only acquisition/configuration code, compact derived fixtures when their licences permit redistribution, and manifests.
+
+### Recommended open layers
+
+| Layer | Source and use | Decision |
+|---|---|---|
+| Land, coastline, roads and context | OpenStreetMap regional PBF from the Geofabrik Malaysia/Singapore/Brunei extract; extract the small demo box with Osmium and render locally. OSM data is ODbL and requires attribution. | **Primary visual base.** Pin a dated extract and hash. Do not bulk-download `tile.openstreetmap.org`; its public tiles are best-effort and prohibit bulk/offline scraping. |
+| Seamarks and aids to navigation | `seamark:*` features already present in the OSM extract and associated with OpenSeaMap conventions. | **Visual/context layer only.** Retain OSM/OpenSeaMap attribution and never describe it as an official electronic navigational chart. |
+| Bathymetry and terrain shading | A subset of the current GEBCO grid plus its Type Identifier grid. GEBCO permits reuse with attribution but explicitly says the grid must not be used for navigation or safety at sea. | **Visual depth context only.** At 15 arc-seconds, the grid is hundreds of metres per cell near Singapore and is too coarse for harbour grounding protection. |
+| Singapore national basemap | OneMap, the Singapore Land Authority's authoritative national map, subject to token, API terms, individual dataset conditions, and attribution. | **Optional visual cross-check.** Do not make the demo dependent on it and do not treat a land basemap as a nautical chart. |
+| Low-detail offline fallback | Natural Earth public-domain land/coastline. | **Locator/inset only.** Its scale is unsuitable for local obstacle or shoreline decisions. |
+| Navigational safety geometry | Official ENC/chart material, when separately licensed and used under its terms. Singapore ENC distribution is not an open-data substitute for the sources above. | **Future field-work requirement.** Excluded from the open-source hackathon bundle unless the proper product and licence are obtained. |
+
+For the hackathon, generate `land.geojson`, `shoreline.geojson`, and selected seamarks from a dated OSM PBF; optionally derive visually labelled GEBCO contours; then produce a separately reviewed, conservative `reviewed-water-envelope.geojson` for the simulation. The RTA and plant may query only the reviewed safety layers. They must never query a display tile, OneMap response, raw OSM coastline, or GEBCO depth as if it were certified clearance.
+
+The cross-border Singapore Strait view requires one consistent regional layer covering Singapore, southern Johor, and nearby Indonesian islands. OneMap alone cannot provide that regional context. The default renderer should therefore use the offline OSM-derived bundle, with visible `© OpenStreetMap contributors` attribution and a link to the ODbL notice. Render the local NED scene and a MapLibre 2D inset from the same bundle and origin so selecting a contact highlights the same vessel in both views.
+
+### Map build and serving plan
+
+1. Add `configs/geography/singapore-area-demo.json` with bounds, origin, required tags/layers, source versions, and allowed simplification error.
+2. Add `scripts/fetch_geography.py --manifest-only` and an explicit `--download` action. The normal launcher never downloads map data. The fetcher verifies expected hashes, emits licence/attribution metadata, and refuses an unpinned `latest` source for reproducible runs.
+3. Extract the area with Osmium, convert the bounded visual layers to GeoJSON, validate/fix polygon topology, simplify only within the declared visual tolerance, and create optional low-resolution depth contours from a GEBCO subset.
+4. Build a compact same-origin bundle for the console. Start with bounded GeoJSON; move to PMTiles/vector tiles only if measured size or frame time requires it.
+5. Validate that the map's WGS84-to-NED transform matches the simulator at the origin and corners. Check that all safety polygons have source, review status, uncertainty/buffer, and hash before they can be enabled.
+6. Serve files read-only through the console proxy with immutable cache keys. The console shows bundle version, `SIMULATION ONLY`, source attribution, and whether shoreline/grounding constraints are visual or reviewed.
+
+The first success scene should be a west-to-east or east-to-west Singapore-area transit with several AIS-derived commercial contacts, one synthetic radar-only contact, and one stale AIS contact. The unprotected branch follows the autonomy proposal into a closest-point-of-approach violation; the protected branch modifies speed or heading through the existing gate and shows the intervention, uncertainty envelopes, CPA/TCPA, source conflict, and paired counterfactual.
 
 ## Normalized observation contract
 
@@ -217,19 +325,23 @@ The coordinator should allocate implementation after reviewing this plan:
 | Owner | Files | Work |
 |---|---|---|
 | A01 | `AGENTS.md`, root Python dependency/lock files, `packages/contracts/schema/horizon.schema.json`, generated contract types, `configs/maritime/aisstream-singapore-demo.json`, `scripts/launch.py`, `scripts/console_proxy.py`, `docs/architecture/local-runtime.md` | Register ownership/config, add the WebSocket dependency, typed bounded payload, `--aisstream` opt-in launch, secret-safe run metadata, and explicit read-only proxy route. Default launch remains offline. |
+| A03 | `services/simulator/`, scenario schemas and fixtures, `tools/traffic/build_ais_snapshot.py`, simulator tests | Compile hash-pinned traffic snapshots, instantiate deterministic vessel plants, generate independent synthetic radar/camera/AIS observations, and add mirrored-traffic scenarios and fault injection. |
 | A05 | `adapters/maritime/aisstream.py`, `services/collector/horizon_collector/aisstream_poller.py`, collector diagnostics/API, `services/fusion/horizon_fusion/core.py`, `tests/ingestion/test_aisstream_adapter.py`, `tests/ingestion/test_aisstream_fusion.py` | Pure frame normalization and geodesy; backend WSS client; queues/cache/health; collector ingestion; identity/conflict rules; conservative fusion policy. |
-| A06 | `apps/console/src/hooks/useConsoleFeed.ts`, console types/components/styles, `docs/demo/` | Singapore-area map/scene overlay with `AIS REPORTED`, age, source health, uncertainty/conflict state, availability fallback, and no key or raw provider payload in browser responses. Do not mix markers into recorded replay outcomes. |
+| A06 | `apps/console/src/hooks/useConsoleFeed.ts`, console types/components/styles, `docs/demo/` | Synchronized 2D Singapore map and 3D scene; `AIS REPORTED`, age, source health, uncertainty/conflict, CPA/TCPA, map attribution, availability fallback, and no key/raw payload in browser responses. Visually separate live context from recorded/synthetic protected traffic. |
+| A09/A10 | `configs/geography/`, geography acquisition/build tooling, asset registry, marine visual layers | Build the pinned OSM/GEBCO geography bundle, preserve licensing/provenance, align it with the NED scene, and keep bathymetry/shoreline display separate from reviewed safety geometry. |
 | A08 | `tests/system/test_live_ais_boundary.py`, `tests/system/test_aisstream_resilience.py`, `docs/verification/` | Mock WebSocket system tests, authority/isolation tests, recording/replay separation, failure/reconnect tests, and an opt-in manual live-test procedure. No real key in CI. |
 
 If a separate `services/ais-ingest/` process is preferred for fault isolation, A01 must first add that ownership boundary and launcher lifecycle. The smaller v1 uses an isolated collector thread: its exception can only degrade AIS and must not terminate collection of simulator/sensor inputs. In either design, the browser never opens the provider socket.
 
 ### Phased handoff
 
-1. **A01 contract/platform:** freeze the payload/config schemas, dependency version, opt-in flag, diagnostics route, secret redaction, and generated types. Provide schema-valid fixtures before downstream work.
-2. **A05 adapter/collector:** implement pure parsing/geodesy first, then the mocked transport, bounded queue/cache, static-message join, staleness, lineage, counters, and external recorder. Keep fusion disabled.
-3. **A06 overlay:** consume only the allowlisted normalized endpoint. Add source-state and synthetic/offline fallback indicators. Visually separate live context from protected simulated traffic.
-4. **A05 fusion experiment:** add AIS as conservative untrusted evidence behind a second opt-in flag. Preserve radar tracks and uncertainty; record conflicts. Do not route live AIS into scored deterministic runs.
-5. **A08 verification:** run the matrix below, then a short private live smoke only when a key and rights decision exist. Publish no positions or screenshots until the display gate is cleared.
+1. **A01 contract/platform:** freeze the observation, `TrafficSnapshot`, `GeographyBundle`, config, diagnostics, and secret-redaction contracts. Provide schema-valid fixtures before downstream work.
+2. **A05 adapter/collector:** implement pure parsing/geodesy first, then mocked transport, bounded queue/cache, static-message join, staleness, lineage, counters, and external recorder. Keep fusion and traffic injection disabled.
+3. **A09/A10 geography:** build one dated, hash-pinned offline OSM visual bundle and optional GEBCO contours. Produce a distinct conservative simulation water envelope with visible review status.
+4. **A03 recorded mirror:** compile a permitted capture into a deterministic traffic snapshot, instantiate traffic plants, and generate separate sensor observations. Add dropout, stale, spoofed, and radar-only contacts.
+5. **A06 synchronized display:** consume only allowlisted normalized endpoints. Align the 2D map and 3D NED scene; show source state, age, uncertainty, CPA/TCPA, provenance, attribution, and synthetic/offline fallback.
+6. **A05 fusion experiment:** add AIS as conservative untrusted evidence behind a second opt-in flag. Preserve radar tracks and uncertainty; record conflicts. Never route live AIS into scored deterministic runs.
+7. **A08 verification:** run the matrix below and a paired recorded-mirror collision case. Perform a short private live-shadow smoke only when a key and rights decision exist. Publish no live positions or screenshots until the display gate is cleared.
 
 ## Test matrix and acceptance criteria
 
@@ -243,6 +355,9 @@ If a separate `services/ais-ingest/` process is preferred for fault isolation, A
 | Resilience | disconnects, invalid key, silent open socket, no confirmation, slow parser, queue overflow, recorder overflow, DNS/TLS failure, clean shutdown | Backoff has jitter/cap; memory remains bounded; AIS degrades independently; no automatic unbounded restart loop. |
 | Safety boundary | AIS agrees/disagrees with radar, spoofed extra target, spoofed removal, AIS dropout, MMSI collision, clock uncertainty above gate | Radar-supported track cannot be deleted or relaxed; AIS never establishes clear water or directly changes actuator authority. |
 | Experiment isolation | replay with network disabled, live flag during scored run, artifact hash mismatch, missing capture frames | Deterministic runs refuse live input; replay is hash-verified and visibly marked recorded/incomplete. |
+| Traffic compiler | fixed capture/window, ownship exclusion, stale/static joins, unknown dimensions, cap overflow, cross-generation gaps | Byte-identical snapshot for identical inputs; deterministic selection; every assumption and exclusion is counted. |
+| Geography | source/hash/license manifest, topology, transform at origin/corners, 2D/3D alignment, safety-layer allowlist | Offline bundle renders without network; attribution is visible; only reviewed safety layers can enter plant/RTA queries. |
+| Mirrored encounter | same traffic snapshot and observation tape in protected/unprotected branches; AIS dropout and radar-only target | Counterfactual collision/CPA violation is reproducible; protected intervention is joined to the gate and preserves declared clearance without trusting AIS as truth. |
 | UI/security | browser network inspection, source-state transitions, stale/conflict styling, secret scan, proxy route allowlist | Browser receives normalized minimum fields only; no key/raw subscription; markers show source and age; unavailable feed has an honest fallback. |
 | Live smoke (manual) | one bounded Singapore-area session after gates, then forced reconnect | Confirmation and messages, or explicit silent/unavailable result, are recorded locally with zero secret leakage and complete counters. |
 
@@ -256,3 +371,9 @@ Completion means the offline test suite passes, memory and cardinality are bound
 - [Official message-model repository](https://github.com/aisstream/ais-message-models) and [OpenAPI type definition](https://github.com/aisstream/ais-message-models/blob/master/type-definition.yaml) — envelope and typed message fields; repository states MIT for its code/models; inspected 2026-09-22.
 - [Official issue: public-display licensing question](https://github.com/aisstream/aisstream/issues/24) and [official issue: commercial-use clarification](https://github.com/aisstream/aisstream/issues/18) — evidence that users were still seeking data-use clarification; inspected 2026-09-22. These questions do not themselves grant or deny rights.
 - [Official issue tracker report: silent stream from 2026-08-05](https://github.com/aisstream/issues/issues/269) — availability risk reported by a user; inspected 2026-09-22. This is not an official uptime determination.
+- [Geofabrik Malaysia, Singapore and Brunei extract](https://download.geofabrik.de/asia/malaysia-singapore-brunei.html) — downloadable regional OSM PBF suitable for an offline, pinned extract; inspected 2026-09-22.
+- [OpenStreetMap copyright and licence](https://www.openstreetmap.org/copyright) and [OSMF tile-usage policy](https://operations.osmfoundation.org/policies/tiles/) — ODbL attribution obligations and the reason not to scrape or depend on public raster tiles for an offline demo; inspected 2026-09-22.
+- [OpenSeaMap FAQ](https://www.openseamap.org/index.php?L=1&id=faq) — seamark/chart data provenance and licence context; inspected 2026-09-22. Treat it as community map context, not an official chart.
+- [GEBCO gridded bathymetry](https://www.gebco.net/data-products/gridded-bathymetry-data) and [terms of use](https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use) — current global grid/TID availability, attribution, varying source quality, and explicit prohibition on navigation or safety-at-sea use; inspected 2026-09-22.
+- [OneMap API documentation](https://www.onemap.gov.sg/apidocs/) and [API terms](https://www.onemap.gov.sg/legal/apitermsofservice.html) — authoritative Singapore national-map API, token requirements, open-data/API terms, and service limitations; inspected 2026-09-22.
+- [MapLibre GL JS documentation](https://maplibre.org/maplibre-gl-js/docs/) — open WebGL renderer for local GeoJSON/vector/raster sources; inspected 2026-09-22.

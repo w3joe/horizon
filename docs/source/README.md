@@ -2,7 +2,9 @@
 
 These are the only parent-workspace sources copied into Horizon. They are design and research inputs, not implementation evidence. No datasets, model weights, generated runs, or unrelated Desktop files are included.
 
-[`aisstream_integration_plan.md`](aisstream_integration_plan.md) is a 2026-09-22 planning-only handoff for an optional backend-only Singapore-area civilian AIS overlay. It records protocol, safety, provenance, data-rights, resilience, ownership, and verification gates, plus a sanitized summary of a separate bounded connectivity smoke. No key or raw vessel record is stored in the repository.
+[`aisstream_integration_plan.md`](aisstream_integration_plan.md) is a 2026-09-22 planning-only handoff for a backend-only Singapore-area civilian AIS overlay, deterministic AIS-derived traffic mirror, and offline geography bundle. It records protocol, safety, provenance, data-rights, resilience, ownership, and verification gates, plus a sanitized summary of a separate bounded connectivity smoke. No key or raw vessel record is stored in the repository.
+
+[`../../experiment/protocol/next-robustness-plan.md`](../../experiment/protocol/next-robustness-plan.md) orders the next research gates: repair experimental validity, freeze splits and assumptions, calibrate uncertainty, run the held-out A1-A5 tournament, test neural health methods, and stress the selected stack with AIS-derived Singapore traffic.
 
 `horizon_agent_implementation_plan.reviewed-original.md` is the byte-for-byte plan reviewed before execution. `horizon_agent_implementation_plan.md` records the accepted 2026-09-21 execution status and fixes links for this repository. The other Markdown copies preserve their substantive content while fixing links to deliberately external sample files.
 
