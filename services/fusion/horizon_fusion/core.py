@@ -126,6 +126,12 @@ class FusionEngine:
         self.common_ancestry_suppressed = 0
         self.collection_interruptions = 0
         self.last_collection_interruption: str | None = None
+        # Bounded, private copies of completed fusion contexts let a delayed
+        # decision be assembled against exactly the snapshot it consumed.  A
+        # context is never an evidence refresh: every retained observation is
+        # rechecked against the assembly clock before use.
+        self._decision_contexts: dict[str, FusionEngine] = {}
+        self._maximum_decision_contexts = 32
 
     def update_batch(self, batch: dict[str, Any], *, now_ns: int | None = None) -> None:
         current = time.monotonic_ns() if now_ns is None else now_ns
@@ -187,6 +193,33 @@ class FusionEngine:
         self.peer_intents.clear()
         self.snapshot = None
         self.last_tick = -1
+        self._decision_contexts.clear()
+
+    def _archive_decision_context(self, snapshot_id: str) -> None:
+        """Save a bounded immutable input view for delayed AI assembly."""
+
+        if snapshot_id in self._decision_contexts:
+            return
+        archived = copy.copy(self)
+        # Observation payloads are immutable after collector ingestion.  Copy
+        # their indexes, rather than deep-copying the complete bounded history
+        # on every 5 Hz decision; the archived index can expire entries without
+        # mutating live state or the observation values it references.
+        archived.observations = dict(self.observations)
+        archived.latest_by_source = dict(self.latest_by_source)
+        archived.snapshot = copy.deepcopy(self.snapshot)
+        archived.reference = copy.deepcopy(self.reference)
+        archived.tracks = copy.deepcopy(self.tracks)
+        archived.health_records = copy.deepcopy(self.health_records)
+        archived.perception_health = copy.deepcopy(self.perception_health)
+        archived.perception_health_observation_ids = list(self.perception_health_observation_ids)
+        archived.peer_intents = list(self.peer_intents)
+        archived.last_evidence = copy.deepcopy(self.last_evidence)
+        archived._decision_contexts = {}
+        if len(self._decision_contexts) >= self._maximum_decision_contexts:
+            oldest = next(iter(self._decision_contexts))
+            del self._decision_contexts[oldest]
+        self._decision_contexts[snapshot_id] = archived
 
     def invalidate_collection(self, reason: str) -> None:
         """Discard partial lineage after collector history loss."""
@@ -387,7 +420,7 @@ class FusionEngine:
         assert self.snapshot is not None
         run, branch = str(self.snapshot["run_id"]), str(self.snapshot["branch_id"])
         snapshot_id = f"{run}:{branch}:epoch-{self.epoch}:fusion:snapshot:{self.snapshot['tick_index']}"
-        return {
+        result = {
             "contract_type": "SimulationSnapshot",
             "schema_version": "0.1.0",
             "snapshot_id": snapshot_id,
@@ -416,6 +449,8 @@ class FusionEngine:
             "active_command_id": self.snapshot.get("active_command_id", "unknown"),
             "display_only": True,
         }
+        self._archive_decision_context(str(result["snapshot_id"]))
+        return result
 
     def _bound_perception_health(
         self, now_ns: int
@@ -757,6 +792,21 @@ class FusionEngine:
         request_started = current if request_monotonic_ns is None else request_monotonic_ns
         if request_started > current:
             raise NotReady(["AI_REQUEST_TIME_IN_FUTURE"])
+        origin_snapshot_id = str(proposal.get("origin_snapshot_id", ""))
+        archived = self._decision_contexts.get(origin_snapshot_id)
+        if archived is not None:
+            # Use the exact completed snapshot the AI named.  The archived
+            # engine re-runs normal freshness, source-health, proposal-expiry,
+            # and schema checks at `current`; it cannot revive expired inputs.
+            result = archived.assemble(
+                proposal,
+                trace,
+                now_ns=current,
+                request_monotonic_ns=request_started,
+                requested_perception_context=requested_perception_context,
+            )
+            self.last_evidence = copy.deepcopy(archived.last_evidence)
+            return result
         gnss, imu, actuator = self._require_inputs(current)
         assert self.snapshot is not None and self.reference is not None and self.last_run_branch is not None
         decision_snapshot = self.decision_snapshot(now_ns=current)

@@ -320,7 +320,7 @@ def test_production_candidate_deadline_failure_sets_completion_floor(monkeypatch
     assert "DECISION_INVALID_OR_LATE" in bundle["gate_receipts"][0]["reason_codes"]
 
 
-def test_nonzero_front_end_stages_fail_closed_before_candidate_evaluation() -> None:
+def test_nonzero_front_end_stages_preserve_the_completed_fusion_snapshot() -> None:
     all_nonzero = _request("A1")
     all_nonzero.update(
         {
@@ -332,23 +332,24 @@ def test_nonzero_front_end_stages_fail_closed_before_candidate_evaluation() -> N
             "modeled_gate_service_ns": 20_000_000,
         }
     )
-    ai_stale = run_assured_episode(all_nonzero)
-    assert ai_stale["decisions"] == []
-    assert ai_stale["proposals"] == []
-    assert ai_stale["gate_receipts"] == []
+    delayed = run_assured_episode(all_nonzero)
+    assert delayed["decisions"]
+    assert delayed["proposals"]
+    assert delayed["gate_receipts"] == []  # horizon expires during queued service
+    assert delayed["cadence"]["fresh_proposals"] == len(delayed["decisions"])
     assert any(
         event["stage"] == "ai" and event["plant_steps"] == 1
-        for event in ai_stale["timing_model"]["events"]
+        for event in delayed["timing_model"]["events"]
     )
 
     prime_nonzero = _request("A1")
     prime_nonzero["max_simulation_time_s"] = 0.5
     prime_nonzero["modeled_recovery_prime_service_ns"] = 20_000_000
-    prime_stale = run_assured_episode(prime_nonzero)
-    assert prime_stale["cadence"]["post_prime_expired_inputs"] > 0
-    assert prime_stale["decisions"] == []
-    assert prime_stale["proposals"] == []
-    assert prime_stale["gate_receipts"] == []
+    delayed_prime = run_assured_episode(prime_nonzero)
+    assert delayed_prime["cadence"]["post_prime_expired_inputs"] == 0
+    assert delayed_prime["decisions"]
+    assert delayed_prime["proposals"]
+    assert len(delayed_prime["gate_receipts"]) == len(delayed_prime["decisions"])
 
 
 def test_stage_latency_must_be_finite_fixed_step_multiple() -> None:

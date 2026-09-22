@@ -262,6 +262,39 @@ def test_ai_transport_delay_is_subtracted_from_proposal_lifetime() -> None:
         )
 
 
+def test_delayed_assembly_uses_archived_named_snapshot_but_rechecks_freshness() -> None:
+    now_ns = time.monotonic_ns()
+    batch, _ = live_batch(now_ns)
+    engine = FusionEngine()
+    engine.update_batch(batch, now_ns=now_ns)
+    decision_snapshot = engine.decision_snapshot(now_ns=now_ns)
+    proposal, trace = FixturePolicy().propose(decision_snapshot)
+
+    # The plant/fusion input advances before the delayed proposal arrives.
+    newer_snapshot = deepcopy(batch["snapshot"])
+    newer_snapshot["tick_index"] += 1
+    newer_snapshot["simulation_time_s"] += 0.02
+    engine.update_batch({"snapshot": newer_snapshot, "observations": []}, now_ns=now_ns + 20_000_000)
+    trace["completed_monotonic_ns"] = now_ns + 20_000_000
+    governor = engine.assemble(
+        proposal,
+        trace,
+        request_monotonic_ns=now_ns,
+        now_ns=now_ns + 20_000_000,
+    )
+    assert governor["snapshot"]["snapshot_id"] == decision_snapshot["snapshot_id"]
+    assert governor["proposal"]["origin_snapshot_id"] == decision_snapshot["snapshot_id"]
+
+    # An archived view cannot revive an expired source.
+    with pytest.raises(NotReady, match="GNSS_MISSING_OR_STALE"):
+        engine.assemble(
+            proposal,
+            trace,
+            request_monotonic_ns=now_ns,
+            now_ns=now_ns + 10_000_000_000,
+        )
+
+
 def test_claimed_tiny_ais_sigma_cannot_displace_radar_supported_geometry() -> None:
     now_ns = time.monotonic_ns()
     engine = FusionEngine(association_gate_m=20.0)
