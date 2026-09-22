@@ -384,9 +384,6 @@ def test_expired_decision_and_plant_command_are_rejected_before_actuation(tmp_pa
             {"candidate_id": "A1", "input": governor},
         )
         assert status == 200
-        _, before, _ = request_json(
-            stack.url("simulator", "/v1/public/snapshot?branch=protected")
-        )
         expired = copy.deepcopy(decision)
         expired["expires_monotonic_ns"] = time.monotonic_ns() - 1
         status, receipt, _ = request_json(
@@ -397,10 +394,11 @@ def test_expired_decision_and_plant_command_are_rejected_before_actuation(tmp_pa
         assert status == 422
         assert receipt["accepted"] is False
         assert "DECISION_EXPIRED_AT_GATE" in receipt["reason_codes"]
+        assert receipt["actual_command"] is None
         _, snapshot, _ = request_json(
             stack.url("simulator", "/v1/public/snapshot?branch=protected")
         )
-        assert snapshot["active_command_id"] == before["active_command_id"]
+        assert snapshot["active_command_id"] != receipt["command_id"]
 
         _, plant_health, _ = request_json(stack.url("simulator", "/health"))
         stale_envelope = {
@@ -423,10 +421,13 @@ def test_expired_decision_and_plant_command_are_rejected_before_actuation(tmp_pa
         assert status == 422
         assert plant_rejection["accepted"] is False
         assert "HOST_DEADLINE_EXPIRED" in plant_rejection["reason_codes"]
+        assert plant_rejection["actual_command"] is None
         _, after_plant_rejection, _ = request_json(
             stack.url("simulator", "/v1/public/snapshot?branch=protected")
         )
-        assert after_plant_rejection["active_command_id"] == before["active_command_id"]
+        # The plant may already have advanced from its deterministic neutral
+        # target to a watchdog target by the time this snapshot is read.
+        assert after_plant_rejection["active_command_id"] != stale_envelope["command_id"]
     finally:
         stack.close()
 
