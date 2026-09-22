@@ -61,6 +61,32 @@ class ActuatorCapability(TypedDict):
     status: Literal['nominal', 'degraded', 'invalid']
     degradation_reasons: NotRequired[list[str]]
 
+class AisContactPayload(TypedDict):
+    payload_version: Literal['aisstream-contact-v1']
+    provider_message_type: Literal['PositionReport', 'StandardClassBPositionReport', 'ExtendedClassBPositionReport']
+    mmsi: str
+    reported_name: str | None
+    latitude_deg: float
+    longitude_deg: float
+    position_ne_m: Vector2
+    sog_mps: float | None
+    cog_rad: float | None
+    true_heading_rad: float | None
+    navigation_status_code: int | None
+    position_accuracy_reported: bool | None
+    raim_reported: bool | None
+    provider_valid: Literal[True]
+    provider_event_utc: str | None
+    receiver_utc: str
+    ais_utc_second: int | None
+    connection_epoch: int
+    source_frame_sha256: Sha256
+    identity_generation: int
+    conflict_flags: list[str]
+    position_sigma_m: float
+    hull: Hull | None
+    _collector: dict[str, Any]
+
 class Observation(TypedDict):
     contract_type: Literal['Observation']
     schema_version: SchemaVersion
@@ -75,7 +101,7 @@ class Observation(TypedDict):
     frame: str
     capability: CapabilityStatus
     provenance: Provenance
-    payload: dict[str, Any]
+    payload: AisContactPayload | dict[str, Any]
 
 class NetworkObservation(TypedDict):
     contract_type: Literal['NetworkObservation']
@@ -364,6 +390,52 @@ class SimulationSnapshot(TypedDict):
     marine_environment: NotRequired[MarineEnvironment]
     active_command_id: str | None
     display_only: Literal[True]
+
+class TrafficSnapshotOrigin(TypedDict):
+    latitude_deg: float
+    longitude_deg: float
+    height_m: float
+    sha256: Sha256
+
+class TrafficSnapshotCounts(TypedDict):
+    frames_total: int
+    dynamic_valid: int
+    static_valid: int
+    candidates: int
+    selected: int
+    exclusions: dict[str, int]
+
+class TrafficVessel(TypedDict):
+    mmsi: str
+    identity_generation: int
+    source_frame_sha256: Sha256
+    position_ne_m: Vector2
+    velocity_ne_mps: Vector2
+    speed_mps: float
+    course_rad: float
+    true_heading_rad: float | None
+    hull: Hull
+    dimensions_assumed: bool
+    report_age_s: float
+    position_uncertainty_m: float
+    source_health: Literal['recorded', 'degraded']
+    motion_model: Literal['constant_course_speed']
+
+class TrafficSnapshot(TypedDict):
+    contract_type: Literal['TrafficSnapshot']
+    schema_version: SchemaVersion
+    snapshot_id: str
+    mode: Literal['recorded_mirror']
+    capture_sha256: Sha256
+    selection_utc: str
+    selection_window_s: float
+    local_frame: TrafficSnapshotOrigin
+    compiler_version: str
+    motion_model: dict[str, Any]
+    rights_status: Literal['approved_private', 'approved_public', 'restricted']
+    source_completeness: Literal['incomplete']
+    counts: TrafficSnapshotCounts
+    vessels: list[TrafficVessel]
 
 class EvaluationRecord(TypedDict):
     contract_type: Literal['EvaluationRecord']

@@ -67,6 +67,33 @@ export interface ActuatorCapability {
   degradation_reasons?: Array<string>;
 }
 
+export interface AisContactPayload {
+  payload_version: "aisstream-contact-v1";
+  provider_message_type: "PositionReport" | "StandardClassBPositionReport" | "ExtendedClassBPositionReport";
+  mmsi: string;
+  reported_name: string | null;
+  latitude_deg: number;
+  longitude_deg: number;
+  position_ne_m: Vector2;
+  sog_mps: number | null;
+  cog_rad: number | null;
+  true_heading_rad: number | null;
+  navigation_status_code: number | null;
+  position_accuracy_reported: boolean | null;
+  raim_reported: boolean | null;
+  provider_valid: true;
+  provider_event_utc: string | null;
+  receiver_utc: string;
+  ais_utc_second: number | null;
+  connection_epoch: number;
+  source_frame_sha256: Sha256;
+  identity_generation: number;
+  conflict_flags: Array<string>;
+  position_sigma_m: number;
+  hull: Hull | null;
+  _collector: Record<string, unknown>;
+}
+
 export interface Observation {
   contract_type: "Observation";
   schema_version: SchemaVersion;
@@ -81,7 +108,7 @@ export interface Observation {
   frame: string;
   capability: CapabilityStatus;
   provenance: Provenance;
-  payload: Record<string, unknown>;
+  payload: AisContactPayload | Record<string, unknown>;
 }
 
 export interface NetworkObservation {
@@ -394,6 +421,56 @@ export interface SimulationSnapshot {
   marine_environment?: MarineEnvironment;
   active_command_id: string | null;
   display_only: true;
+}
+
+export interface TrafficSnapshotOrigin {
+  latitude_deg: number;
+  longitude_deg: number;
+  height_m: number;
+  sha256: Sha256;
+}
+
+export interface TrafficSnapshotCounts {
+  frames_total: number;
+  dynamic_valid: number;
+  static_valid: number;
+  candidates: number;
+  selected: number;
+  exclusions: Record<string, number>;
+}
+
+export interface TrafficVessel {
+  mmsi: string;
+  identity_generation: number;
+  source_frame_sha256: Sha256;
+  position_ne_m: Vector2;
+  velocity_ne_mps: Vector2;
+  speed_mps: number;
+  course_rad: number;
+  true_heading_rad: number | null;
+  hull: Hull;
+  dimensions_assumed: boolean;
+  report_age_s: number;
+  position_uncertainty_m: number;
+  source_health: "recorded" | "degraded";
+  motion_model: "constant_course_speed";
+}
+
+export interface TrafficSnapshot {
+  contract_type: "TrafficSnapshot";
+  schema_version: SchemaVersion;
+  snapshot_id: string;
+  mode: "recorded_mirror";
+  capture_sha256: Sha256;
+  selection_utc: string;
+  selection_window_s: number;
+  local_frame: TrafficSnapshotOrigin;
+  compiler_version: string;
+  motion_model: Record<string, unknown>;
+  rights_status: "approved_private" | "approved_public" | "restricted";
+  source_completeness: "incomplete";
+  counts: TrafficSnapshotCounts;
+  vessels: Array<TrafficVessel>;
 }
 
 export interface EvaluationRecord {

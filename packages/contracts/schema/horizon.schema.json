@@ -17,6 +17,7 @@
     { "$ref": "#/$defs/AssuranceDecision" },
     { "$ref": "#/$defs/GateReceipt" },
     { "$ref": "#/$defs/SimulationSnapshot" },
+    { "$ref": "#/$defs/TrafficSnapshot" },
     { "$ref": "#/$defs/EvaluationRecord" },
     { "$ref": "#/$defs/RunManifest" },
     { "$ref": "#/$defs/ArtifactManifest" }
@@ -144,7 +145,48 @@
         "frame": { "type": "string", "minLength": 1 },
         "capability": { "$ref": "#/$defs/CapabilityStatus" },
         "provenance": { "$ref": "#/$defs/Provenance" },
-        "payload": { "type": "object" }
+        "payload": {
+          "oneOf": [
+            { "$ref": "#/$defs/AisContactPayload" },
+            {
+              "type": "object",
+              "properties": {
+                "payload_version": { "not": { "const": "aisstream-contact-v1" } }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "AisContactPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payload_version", "provider_message_type", "mmsi", "reported_name", "latitude_deg", "longitude_deg", "position_ne_m", "sog_mps", "cog_rad", "true_heading_rad", "navigation_status_code", "position_accuracy_reported", "raim_reported", "provider_valid", "provider_event_utc", "receiver_utc", "ais_utc_second", "connection_epoch", "source_frame_sha256", "identity_generation", "conflict_flags", "position_sigma_m", "hull", "_collector"],
+      "properties": {
+        "payload_version": { "const": "aisstream-contact-v1" },
+        "provider_message_type": { "type": "string", "enum": ["PositionReport", "StandardClassBPositionReport", "ExtendedClassBPositionReport"] },
+        "mmsi": { "type": "string", "pattern": "^[0-9]{9}$" },
+        "reported_name": { "type": ["string", "null"], "maxLength": 128 },
+        "latitude_deg": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude_deg": { "type": "number", "minimum": -180, "maximum": 180 },
+        "position_ne_m": { "$ref": "#/$defs/Vector2" },
+        "sog_mps": { "type": ["number", "null"], "minimum": 0 },
+        "cog_rad": { "type": ["number", "null"], "minimum": 0, "exclusiveMaximum": 6.283185307179586 },
+        "true_heading_rad": { "type": ["number", "null"], "minimum": 0, "exclusiveMaximum": 6.283185307179586 },
+        "navigation_status_code": { "type": ["integer", "null"], "minimum": 0, "maximum": 15 },
+        "position_accuracy_reported": { "type": ["boolean", "null"] },
+        "raim_reported": { "type": ["boolean", "null"] },
+        "provider_valid": { "const": true },
+        "provider_event_utc": { "type": ["string", "null"], "format": "date-time" },
+        "receiver_utc": { "type": "string", "format": "date-time" },
+        "ais_utc_second": { "type": ["integer", "null"], "minimum": 0, "maximum": 59 },
+        "connection_epoch": { "type": "integer", "minimum": 1 },
+        "source_frame_sha256": { "$ref": "#/$defs/Sha256" },
+        "identity_generation": { "type": "integer", "minimum": 1 },
+        "conflict_flags": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 128 } },
+        "position_sigma_m": { "type": "number", "minimum": 0 },
+        "hull": { "oneOf": [{ "$ref": "#/$defs/Hull" }, { "type": "null" }] },
+        "_collector": { "type": "object" }
       }
     },
     "NetworkObservation": {
@@ -573,6 +615,82 @@
         "marine_environment": { "$ref": "#/$defs/MarineEnvironment" },
         "active_command_id": { "type": ["string", "null"] },
         "display_only": { "const": true }
+      }
+    },
+    "TrafficSnapshotOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["latitude_deg", "longitude_deg", "height_m", "sha256"],
+      "properties": {
+        "latitude_deg": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude_deg": { "type": "number", "minimum": -180, "maximum": 180 },
+        "height_m": { "type": "number" },
+        "sha256": { "$ref": "#/$defs/Sha256" }
+      }
+    },
+    "TrafficSnapshotCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frames_total", "dynamic_valid", "static_valid", "candidates", "selected", "exclusions"],
+      "properties": {
+        "frames_total": { "type": "integer", "minimum": 0 },
+        "dynamic_valid": { "type": "integer", "minimum": 0 },
+        "static_valid": { "type": "integer", "minimum": 0 },
+        "candidates": { "type": "integer", "minimum": 0 },
+        "selected": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "exclusions": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+      }
+    },
+    "TrafficVessel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mmsi", "identity_generation", "source_frame_sha256", "position_ne_m", "velocity_ne_mps", "speed_mps", "course_rad", "true_heading_rad", "hull", "dimensions_assumed", "report_age_s", "position_uncertainty_m", "source_health", "motion_model"],
+      "properties": {
+        "mmsi": { "type": "string", "pattern": "^[0-9]{9}$" },
+        "identity_generation": { "type": "integer", "minimum": 1 },
+        "source_frame_sha256": { "$ref": "#/$defs/Sha256" },
+        "position_ne_m": { "$ref": "#/$defs/Vector2" },
+        "velocity_ne_mps": { "$ref": "#/$defs/Vector2" },
+        "speed_mps": { "type": "number", "minimum": 0 },
+        "course_rad": { "type": "number", "minimum": 0, "exclusiveMaximum": 6.283185307179586 },
+        "true_heading_rad": { "type": ["number", "null"], "minimum": 0, "exclusiveMaximum": 6.283185307179586 },
+        "hull": { "$ref": "#/$defs/Hull" },
+        "dimensions_assumed": { "type": "boolean" },
+        "report_age_s": { "type": "number", "minimum": 0 },
+        "position_uncertainty_m": { "type": "number", "minimum": 0 },
+        "source_health": { "type": "string", "enum": ["recorded", "degraded"] },
+        "motion_model": { "const": "constant_course_speed" }
+      }
+    },
+    "TrafficSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_type", "schema_version", "snapshot_id", "mode", "capture_sha256", "selection_utc", "selection_window_s", "local_frame", "compiler_version", "motion_model", "rights_status", "source_completeness", "counts", "vessels"],
+      "properties": {
+        "contract_type": { "const": "TrafficSnapshot" },
+        "schema_version": { "$ref": "#/$defs/SchemaVersion" },
+        "snapshot_id": { "type": "string", "minLength": 1 },
+        "mode": { "const": "recorded_mirror" },
+        "capture_sha256": { "$ref": "#/$defs/Sha256" },
+        "selection_utc": { "type": "string", "format": "date-time" },
+        "selection_window_s": { "type": "number", "minimum": 0 },
+        "local_frame": { "$ref": "#/$defs/TrafficSnapshotOrigin" },
+        "compiler_version": { "type": "string", "minLength": 1 },
+        "motion_model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "horizon_s", "acceleration_mps2", "turn_rate_rps"],
+          "properties": {
+            "kind": { "const": "constant_course_speed" },
+            "horizon_s": { "type": "number", "exclusiveMinimum": 0 },
+            "acceleration_mps2": { "const": 0.0 },
+            "turn_rate_rps": { "const": 0.0 }
+          }
+        },
+        "rights_status": { "type": "string", "enum": ["approved_private", "approved_public", "restricted"] },
+        "source_completeness": { "const": "incomplete" },
+        "counts": { "$ref": "#/$defs/TrafficSnapshotCounts" },
+        "vessels": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/TrafficVessel" } }
       }
     },
     "EvaluationRecord": {

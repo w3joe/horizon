@@ -1,0 +1,27 @@
+{
+  "schema_version": "0.1.0",
+  "endpoint": "wss://stream.aisstream.io/v0/stream",
+  "region_id": "singapore-area-demo-v1",
+  "bounding_boxes_lat_lon_deg": [
+    [[1.10, 103.55], [1.50, 104.15]]
+  ],
+  "local_ned_origin_wgs84": {
+    "latitude_deg": 1.25,
+    "longitude_deg": 103.85,
+    "height_m": 0.0
+  },
+  "message_types": [
+    "PositionReport",
+    "StandardClassBPositionReport",
+    "ExtendedClassBPositionReport",
+    "ShipStaticData",
+    "StaticDataReport"
+  ],
+  "position_ttl_s": 30,
+  "static_ttl_s": 21600,
+  "silence_degraded_s": 30,
+  "silence_reconnect_s": 90,
+  "raw_queue_capacity": 4096,
+  "track_capacity": 4096,
+  "recording_enabled": false
+}

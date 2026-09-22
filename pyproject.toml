@@ -11,6 +11,7 @@ dependencies = ["jsonschema[format]==4.23.0"]
 
 [project.optional-dependencies]
 dev = ["pytest==8.3.5", "ruff==0.9.10", "numpy==2.5.3"]
+aisstream = ["websockets==15.0.1"]
 perception = [
   "torch==2.5.1",
   "torchvision==0.20.1",

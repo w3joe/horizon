@@ -1,0 +1,50 @@
+{
+  "contract_type": "TrafficSnapshot",
+  "schema_version": "0.1.0",
+  "snapshot_id": "synthetic-traffic-fixture-v1",
+  "mode": "recorded_mirror",
+  "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "selection_utc": "2026-09-22T12:00:00Z",
+  "selection_window_s": 30.0,
+  "local_frame": {
+    "latitude_deg": 1.25,
+    "longitude_deg": 103.85,
+    "height_m": 0.0,
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "compiler_version": "ais-snapshot-compiler-v1",
+  "motion_model": {
+    "kind": "constant_course_speed",
+    "horizon_s": 120.0,
+    "acceleration_mps2": 0.0,
+    "turn_rate_rps": 0.0
+  },
+  "rights_status": "restricted",
+  "source_completeness": "incomplete",
+  "counts": {
+    "frames_total": 1,
+    "dynamic_valid": 1,
+    "static_valid": 0,
+    "candidates": 1,
+    "selected": 1,
+    "exclusions": {}
+  },
+  "vessels": [
+    {
+      "mmsi": "000000001",
+      "identity_generation": 1,
+      "source_frame_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "position_ne_m": [100.0, 20.0],
+      "velocity_ne_mps": [0.0, 3.0],
+      "speed_mps": 3.0,
+      "course_rad": 1.5707963267948966,
+      "true_heading_rad": 1.5707963267948966,
+      "hull": {"length_m": 30.0, "beam_m": 8.0},
+      "dimensions_assumed": true,
+      "report_age_s": 1.0,
+      "position_uncertainty_m": 102.0,
+      "source_health": "recorded",
+      "motion_model": "constant_course_speed"
+    }
+  ]
+}
