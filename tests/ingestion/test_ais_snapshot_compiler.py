@@ -7,7 +7,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator, FormatChecker
 import pytest
 
-from aisstream import AISStreamConfig
+from adapters.maritime.aisstream import AISStreamConfig
 from tools.traffic.build_ais_snapshot import build_snapshot, canonical_snapshot_bytes
 
 

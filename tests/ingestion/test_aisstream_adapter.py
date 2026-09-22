@@ -10,7 +10,7 @@ from dataclasses import replace
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 
-from aisstream import (
+from adapters.maritime.aisstream import (
     AISStreamConfig,
     AISStreamError,
     AISTrackCache,
@@ -378,7 +378,7 @@ def test_live_traffic_projection_is_bounded_hashed_and_secret_free(config: AISSt
         sequence=1,
     )
     assert entry is not None
-    from aisstream import observation_from_track
+    from adapters.maritime.aisstream import observation_from_track
     mirror._accept(observation_from_track(entry, run_id="live", branch_id="protected", event_time_s=0.0, valid_until_monotonic_ns=now + 30_000_000_000))
     mirror.client.diagnostics.confirmation_state = "confirmed"
     mirror.client.diagnostics.connection_state = "connected"
