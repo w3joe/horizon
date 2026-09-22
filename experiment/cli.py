@@ -87,7 +87,8 @@ def _run_adapter(args: argparse.Namespace) -> int:
         args.run_id,
         args.max_simulation_time_s,
         plan.get("timing_profile_id", "idealized-front-zero-v1"),
-        {
+        episode_contract=plan.get("episode_contract"),
+        study_metadata={
             "study_id": plan.get("study_id"),
             "study_plan_hash": sha256_json(plan),
             "protocol_frozen": plan.get("protocol_frozen") is True,

@@ -145,6 +145,42 @@ def validate_study_plan(plan: dict[str, Any], splits: dict[str, Any]) -> None:
     if plan["split"] == "heldout":
         _require(plan.get("protocol_frozen") is True, "heldout execution requires frozen protocol")
         _require(plan.get("calibration_hash") is not None, "heldout execution requires calibration hash")
+    if plan.get("protocol_frozen") is True and "frozen_artifact_hashes" in plan:
+        frozen_hashes = plan.get("frozen_artifact_hashes")
+        _require(
+            isinstance(frozen_hashes, dict) and bool(frozen_hashes),
+            "frozen protocol requires frozen_artifact_hashes",
+        )
+        required_artifacts = {
+            "candidate_capabilities",
+            "selection_rule",
+            "contract_schema",
+            "scoring_protocol",
+            "scenario_bundle",
+            "data_partition_manifest",
+        }
+        _require(
+            required_artifacts.issubset(frozen_hashes),
+            "frozen protocol omits required artifact hashes",
+        )
+        _require(
+            all(
+                isinstance(value, str)
+                and len(value) == 64
+                and "pending" not in value.lower()
+                for value in frozen_hashes.values()
+            ),
+            "frozen artifact hashes must be complete SHA-256 values",
+        )
+        expected_hash = plan.get("content_hash")
+        unhashed = dict(plan)
+        unhashed.pop("content_hash", None)
+        _require(
+            isinstance(expected_hash, str) and sha256_json(unhashed) == expected_hash,
+            "frozen study content_hash mismatch",
+        )
+        contract = plan.get("episode_contract")
+        _require(isinstance(contract, dict), "frozen protocol requires episode_contract")
     _require(bool(plan["candidate_ids"]), "at least one candidate is required")
     _require(bool(plan["health_ids"]), "at least one health method is required")
     split = splits["splits"][plan["split"]]
@@ -152,6 +188,16 @@ def validate_study_plan(plan: dict[str, Any], splits: dict[str, Any]) -> None:
     occupied_offsets: set[int] = set()
     unique_episode_keys: set[tuple[str, int, str, str, str]] = set()
     for scenario in plan["scenarios"]:
+        if plan.get("protocol_frozen") is True and "frozen_artifact_hashes" in plan:
+            _require(
+                isinstance(scenario.get("scenario_family"), str),
+                "frozen scenario requires scenario_family",
+            )
+            _require(
+                scenario.get("expected_recoverability_class")
+                in {"declared_recoverable", "initially_unrecoverable", "out_of_domain"},
+                "frozen scenario requires expected recoverability class",
+            )
         _require(scenario["seed_count"] > 0, "scenario seed_count must be positive")
         seed_offset = int(scenario.get("seed_offset", 0))
         seed_count = int(scenario["seed_count"])

@@ -10,6 +10,7 @@ from experiment.evaluation.scoring import score_closed_loop, score_replay
 from experiment.harness.closed_loop import MODELED_LATENCY_PROFILES_NS
 from experiment.harness.fixture import FIXTURE_CANDIDATES, run_fixture
 from experiment.harness.manifests import Job
+from experiment.harness.validity import odd_case_classification, paired_branch_invariants
 from experiment.io import write_json
 
 
@@ -87,6 +88,9 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
         "cadence": bundle.get("cadence"),
         "gate_recovery": bundle.get("gate_recovery"),
         "authority_audit": bundle.get("authority_audit"),
+        "terminal_outcome": bundle.get("terminal_outcome"),
+        "predeclared_censoring": bundle.get("predeclared_censoring"),
+        "case_classification": odd_case_classification(bundle),
         "decision_action_counts": dict(
             sorted(Counter(str(item.get("action", "unknown")) for item in decisions).items())
         ),
@@ -151,13 +155,14 @@ def build_episode_request(
     run_id: str,
     max_simulation_time_s: float,
     timing_profile_id: str = "idealized-front-zero-v1",
+    episode_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         timing_profile = MODELED_LATENCY_PROFILES_NS[timing_profile_id]
     except KeyError as exc:
         raise ValueError(f"unknown modeled timing profile: {timing_profile_id}") from exc
     branch_id = f"{job.candidate_id.lower()}-{job.health_id.lower()}-{job.key.pair_key[:16]}"
-    return {
+    request = {
         "run_id": run_id,
         "episode_id": job.key.pair_key,
         "branch_id": branch_id,
@@ -177,6 +182,9 @@ def build_episode_request(
             for stage, latency in timing_profile.items()
         },
     }
+    if episode_contract:
+        request.update(episode_contract)
+    return request
 
 
 def run_adapter_jobs(
@@ -186,6 +194,7 @@ def run_adapter_jobs(
     run_id: str,
     max_simulation_time_s: float,
     timing_profile_id: str = "idealized-front-zero-v1",
+episode_contract: dict[str, Any] | None = None,
     study_metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not jobs:
@@ -196,7 +205,9 @@ def run_adapter_jobs(
     if index_path.exists():
         raise FileExistsError(f"refusing to overwrite existing output: {index_path}")
     requests = [
-        build_episode_request(job, run_id, max_simulation_time_s, timing_profile_id)
+        build_episode_request(
+            job, run_id, max_simulation_time_s, timing_profile_id, episode_contract
+        )
         for job in jobs
     ]
     collisions = [
@@ -215,6 +226,7 @@ def run_adapter_jobs(
     adapter_provenances: list[str] = []
     assumption_audits: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
+    closed_loop_bundles: list[dict[str, Any]] = []
     for job, request in zip(jobs, requests):
         bundle = run_episode(request)
         for field in (
@@ -240,6 +252,7 @@ def run_adapter_jobs(
             raise ValueError("adapter response lacks explicit provenance")
         adapter_provenances.append(str(bundle["adapter_provenance"]))
         if job.mode == "full_pipeline_closed_loop":
+            closed_loop_bundles.append(bundle)
             record = score_closed_loop(bundle)
         else:
             record = {
@@ -280,11 +293,19 @@ def run_adapter_jobs(
         required = {"study_plan_hash", "protocol_frozen", "split"}
         missing_metadata = sorted(required - set(metadata))
         if missing_metadata:
-            raise ValueError(
-                "study metadata missing: " + ", ".join(missing_metadata)
-            )
+            raise ValueError("study metadata missing: " + ", ".join(missing_metadata))
         if metadata["split"] != jobs[0].split:
             raise ValueError("study metadata split does not match jobs")
+    production_closed_loop_bundles = [
+        bundle
+        for bundle in closed_loop_bundles
+        if bundle.get("adapter_provenance") == "production_integration"
+    ]
+    paired_invariants = (
+        paired_branch_invariants(production_closed_loop_bundles)
+        if production_closed_loop_bundles
+        else []
+    )
     write_json(
         index_path,
         {
@@ -295,6 +316,7 @@ def run_adapter_jobs(
             "assumption_audits": assumption_audits,
             "diagnostics": diagnostics,
             **metadata,
+            "paired_branch_invariants": paired_invariants,
         },
     )
     return records

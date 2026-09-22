@@ -9,6 +9,7 @@ from experiment.harness.closed_loop import (
     run_assured_episode,
     scenario_identity,
 )
+from experiment.harness.validity import odd_case_classification, paired_branch_invariants
 
 
 def _request(candidate_id: str) -> dict:
@@ -435,3 +436,50 @@ def test_one_thousand_minimal_episodes_close_workers_and_bound_local_records() -
         assert bundle["gate_recovery"]["remaining_worker_count"] == 0
         assert len(bundle["truth_frames"]) <= 2
         assert not bundle["protected_command_trace"]
+
+
+def test_predeclared_early_censoring_is_required_when_requested() -> None:
+    request = _request("A1")
+    request["require_predeclared_censoring"] = True
+    try:
+        run_assured_episode(request)
+    except ValueError as exc:
+        assert "predeclared_censoring" in str(exc)
+    else:
+        raise AssertionError("unpredeclared early censoring was accepted")
+
+
+def test_odd_and_pairing_audits_keep_out_of_domain_cases_visible() -> None:
+    left = {
+        "episode_id": "pair-1",
+        "recoverability_class": "declared_recoverable",
+        "assumption_audit": {
+            "bounded_assumption_available": True,
+            "violated_component_count": 1,
+            "unsupported_component_count": 0,
+        },
+        "paired_branch_lineage": {
+            "initial_state_hash": "initial",
+            "scenario_hash": "scenario",
+            "seed": 1,
+            "observation_tape_hash": "observation",
+            "fault_schedule_hash": "fault",
+            "ai_policy_version": "policy",
+            "autonomy_proposal_trace": [
+                {
+                    "source_id": "fixture",
+                    "origin_snapshot_time_s": 0.0,
+                    "command": {"heading_rad": 0.0, "speed_mps": 2.0},
+                }
+            ],
+        },
+        "gate_receipts": [],
+    }
+    right = {**left, "branch_id": "right"}
+    assert odd_case_classification(left) == {
+        "operating_domain": "out_of_domain",
+        "case_class": "out_of_domain",
+    }
+    report = paired_branch_invariants([left, right])
+    assert report[0]["pairing_status"] == "complete"
+    assert report[0]["common_autonomy_proposal_prefix_count"] == 1

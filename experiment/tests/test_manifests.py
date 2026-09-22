@@ -177,3 +177,16 @@ def test_frozen_r6_plan_covers_all_singapore_ais_fault_modes(tmp_path: Path) -> 
         "singapore-ais-overloaded-v1",
         "singapore-radar-only-v1",
     }
+
+
+def test_r1_r2_frozen_completion_plan_has_immutable_partitions_and_hashes() -> None:
+    splits = load_splits(ROOT / "manifests" / "r2-frozen-splits.json")
+    plan = load_json(ROOT / "manifests" / "r1-r2-complete-development.json")
+    jobs = expand_jobs(plan, splits)
+
+    assert len(jobs) == 10
+    assert plan["protocol_frozen"] is True
+    assert plan["timing_profile_id"] == "conservative-service-v1"
+    assert plan["episode_contract"]["require_predeclared_censoring"] is True
+    assert all(len(value) == 64 for value in plan["frozen_artifact_hashes"].values())
+    assert splits["splits"]["development"]["frozen"] is True

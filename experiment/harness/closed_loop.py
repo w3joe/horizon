@@ -12,18 +12,36 @@ from typing import Any
 
 SCHEDULER_MODEL_VERSION = "fixed-step-discrete-service-v1"
 DEFAULT_MODELED_STAGE_LATENCIES_NS = {
+    "sensing": 0,
+    "fusion": 0,
     "ai": 0,
     "recovery_prime": 0,
     "candidate": 20_000_000,
     "gate": 20_000_000,
+    "actuator": 0,
 }
 MODELED_LATENCY_PROFILES_NS = {
     "idealized-front-zero-v1": DEFAULT_MODELED_STAGE_LATENCIES_NS,
     "all-stages-20ms-v1": {
+        "sensing": 20_000_000,
+        "fusion": 20_000_000,
         "ai": 20_000_000,
         "recovery_prime": 20_000_000,
         "candidate": 20_000_000,
         "gate": 20_000_000,
+        "actuator": 20_000_000,
+    },
+    # A deliberately conservative, grid-quantized service contract derived
+    # from the prior development host timing envelope, rounded upward.  It is
+    # a simulation assumption, not a production latency measurement.
+    "conservative-service-v1": {
+        "sensing": 20_000_000,
+        "fusion": 20_000_000,
+        "ai": 40_000_000,
+        "recovery_prime": 20_000_000,
+        "candidate": 60_000_000,
+        "gate": 60_000_000,
+        "actuator": 20_000_000,
     },
 }
 
@@ -39,7 +57,12 @@ def _stage_latencies(request: dict[str, Any], plant_period_ns: int) -> dict[str,
     result: dict[str, int] = {}
     for stage, default in DEFAULT_MODELED_STAGE_LATENCIES_NS.items():
         key = f"modeled_{stage}_service_ns"
-        value = request.get(key, default)
+        value = request.get(
+            key,
+            MODELED_LATENCY_PROFILES_NS[profile_id][stage]
+            if profile_id is not None
+            else default,
+        )
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{key} must be an integer")
         if not 0 <= value <= 2_000_000_000:
@@ -486,6 +509,16 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         branch_id=str(request["branch_id"]),
         monotonic_ns=clock,
     )
+    initial_truth = copy.deepcopy(simulator.truth_log[0])
+    initial_state_hash = _hash_json(
+        {
+            "scenario_hash": initial_truth["scenario_hash"],
+            "seed": initial_truth["seed"],
+            "ownship": initial_truth["ownship"],
+            "traffic": initial_truth["traffic"],
+            "signed_margins": initial_truth["signed_margins"],
+        }
+    )
     public_reference = simulator.public_reference()
     reference = NavigationReference.from_simulator_reference(public_reference)
     assurance_config = AssuranceConfig()
@@ -527,6 +560,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         "watchdog": [],
     }
     source_health_audit: list[dict[str, Any]] = []
+    autonomy_proposal_trace: list[dict[str, Any]] = []
     saved_snapshots: list[tuple[int, dict[str, Any]]] = []
     planner_opportunities = 0
     fresh_proposal_count = 0
@@ -669,6 +703,21 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                     policy_snapshot = None
                 if policy_snapshot is not None:
                     proposal, trace = policy.propose(policy_snapshot)
+                    autonomy_proposal_trace.append(
+                        {
+                            "simulation_time_s": simulator.simulation_time_s,
+                            "source_id": proposal["source_id"],
+                            "origin_snapshot_time_s": policy_snapshot["simulation_time_s"],
+                            "command": copy.deepcopy(proposal["command"]),
+                        }
+                    )
+                    # The proposal consumes the last completed fusion snapshot.
+                    # The declared sensing/fusion service intervals model the
+                    # age of that evidence while the plant and watchdog keep
+                    # running; a later, fresher observation cannot silently
+                    # replace the frozen input for this proposal.
+                    if not advance_stage("sensing") or not advance_stage("fusion"):
+                        break
                     if not advance_stage("ai"):
                         break
                     trace["completed_monotonic_ns"] = clock()
@@ -807,6 +856,18 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                     }
                                 )
                                 break
+                            if not advance_stage("actuator"):
+                                disposition.update(
+                                    {
+                                        "disposition": "censored",
+                                        "stage": "actuator",
+                                        "reason_codes": [
+                                            "SIMULATION_HORIZON_DURING_ACTUATOR_SERVICE"
+                                        ],
+                                        "completed_monotonic_ns": clock(),
+                                    }
+                                )
+                                break
                             with gate.lock:
                                 stale = (
                                     gate.epoch != queued_epoch
@@ -893,6 +954,37 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         math.hypot(b[0] - a[0], b[1] - a[1])
         for a, b in zip(scenario.waypoints_ne_m, scenario.waypoints_ne_m[1:])
     )
+    reached_scenario_horizon = simulator.simulation_time_s >= scenario.duration_s
+    recovery_contract = request.get("independent_recovery_boundary")
+    if recovery_contract is not None:
+        from experiment.harness.recovery_boundary import sampled_recovery_reference
+
+        recovery_reference = sampled_recovery_reference(
+            scenario=scenario,
+            seed=int(request["seed"]),
+            run_id=str(request["run_id"]),
+            contract=recovery_contract,
+            initial_state_hash=initial_state_hash,
+        )
+    else:
+        recovery_reference = None
+    predeclared_censoring = request.get("predeclared_censoring")
+    if (
+        not reached_scenario_horizon
+        and request.get("require_predeclared_censoring") is True
+        and not isinstance(predeclared_censoring, dict)
+    ):
+        raise ValueError(
+            "early episode termination requires a predeclared_censoring object"
+        )
+    if reached_scenario_horizon:
+        terminal_outcome = "mission_completed" if final_remaining <= 15.0 else "route_incomplete"
+    else:
+        terminal_outcome = (
+            str(predeclared_censoring.get("reason", "invalid"))
+            if isinstance(predeclared_censoring, dict)
+            else "legacy_unpredeclared_censoring"
+        )
     return {
         **request,
         "adapter_provenance": "production_integration",
@@ -913,6 +1005,15 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
             "optional_source_ids": fixed["optional_source_ids"],
         },
         "source_health_audit": source_health_audit,
+        "paired_branch_lineage": {
+            "initial_state_hash": initial_state_hash,
+            "scenario_hash": scenario.sha256,
+            "seed": int(request["seed"]),
+            "observation_tape_hash": identity["observation_tape_hash"],
+            "fault_schedule_hash": identity["fault_schedule_hash"],
+            "ai_policy_version": str(request["ai_policy_version"]),
+            "autonomy_proposal_trace": autonomy_proposal_trace,
+        },
         "cadence": {
             "plant_period_s": simulator.parameters.fixed_step_s,
             "ai_proposal_period_s": planner_period_ticks
@@ -953,14 +1054,16 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
             "closed_and_joined": gate_closed,
             "remaining_worker_count": len(gate._cache_threads),
         },
-        "completed": simulator.simulation_time_s >= scenario.duration_s,
+        "completed": reached_scenario_horizon,
         "mission_completed": final_remaining <= 15.0,
+        "terminal_outcome": terminal_outcome,
+        "predeclared_censoring": copy.deepcopy(predeclared_censoring),
         "recoverability_class": scenario.recoverability_class,
         "truth_source_id": "authoritative-simulator-private-v1",
         "nominal_duration_s": scenario.duration_s,
         "nominal_distance_m": nominal_distance,
         "truth_frames": truth_frames,
-        "recovery_reference": None,
+        "recovery_reference": recovery_reference,
         "violation_events": [
             {
                 "event_id": item["event_id"],
@@ -983,6 +1086,11 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
             "observation_tape": identity["observation_tape_hash"],
             "assurance_configuration": reference.digest(),
             "fusion_evidence": _hash_json(fusion.last_evidence),
+            **(
+                {"recovery_boundary_contract": _hash_json(recovery_contract)}
+                if recovery_contract is not None
+                else {}
+            ),
         },
         "assumption_audit": _audit_engineering_bounds(
             saved_snapshots, simulator.truth_log, assurance_config

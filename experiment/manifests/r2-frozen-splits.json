@@ -1,0 +1,29 @@
+{
+  "schema_version": "0.1.0",
+  "split_unit": "scenario_session_source_provenance_group",
+  "partition_rule": "A simulator scenario family/seed band, recorded video session, AIS snapshot capture, and source provenance group are atomic. Adjacent frames, the same capture, and derived samples never cross partitions.",
+  "splits": {
+    "development": {
+      "frozen": true,
+      "episode_count": 300,
+      "paired_seeds_per_stochastic_cell": 30,
+      "seed_range": {"start": 1000, "count": 300},
+      "provenance_groups": ["sim-development-r1-r2", "recorded-development-sessions-v1", "ais-development-snapshots-v1"]
+    },
+    "calibration": {
+      "frozen": true,
+      "episode_count": 300,
+      "paired_seeds_per_stochastic_cell": 30,
+      "seed_range": {"start": 10000, "count": 300},
+      "provenance_groups": ["sim-calibration-r1-r2", "recorded-calibration-sessions-v1", "ais-calibration-snapshots-v1"]
+    },
+    "heldout": {
+      "frozen": true,
+      "episode_count": 1200,
+      "paired_seeds_per_stochastic_cell": 30,
+      "seed_range": {"start": 20000, "count": 1200},
+      "provenance_groups": ["sim-heldout-r1-r2", "recorded-heldout-sessions-v1", "ais-heldout-snapshots-v1"]
+    }
+  },
+  "content_hash": "c6c77cf480819897a1adc2c61b66807b816a9dbeb5ad1f41e0212c85f3c8916c"
+}

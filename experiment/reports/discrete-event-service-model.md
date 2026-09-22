@@ -4,18 +4,20 @@ The controller-isolation harness uses `fixed-step-discrete-service-v1`. This is 
 simulation model, not a measurement of production end-to-end latency. Safety outcomes from this
 harness are conditional on the frozen stage latencies in each episode request and result.
 
-Two development profiles are registered before execution:
+Three development profiles are registered before execution:
 
-| Profile | AI | Recovery prime | Candidate | Gate |
+| Profile | Sensing | Fusion | AI | Recovery prime | Candidate | Gate | Actuator |
 |---|---:|---:|---:|---:|
-| `idealized-front-zero-v1` | 0 ms | 0 ms | 20 ms | 20 ms |
-| `all-stages-20ms-v1` | 20 ms | 20 ms | 20 ms | 20 ms |
+| `idealized-front-zero-v1` | 0 ms | 0 ms | 0 ms | 0 ms | 20 ms | 20 ms | 0 ms |
+| `all-stages-20ms-v1` | 20 ms | 20 ms | 20 ms | 20 ms | 20 ms | 20 ms | 20 ms |
+| `conservative-service-v1` | 20 ms | 20 ms | 40 ms | 20 ms | 60 ms | 60 ms | 20 ms |
 
 The first profile is an explicitly idealized diagnostic reference. It cannot support a headline
 architecture conclusion. The second profile exposes proposal and evidence loss caused by a plant
-event during front-end service; those fail-closed outcomes remain in the results. Profiles are
-selected in the study plan before execution, and the harness rejects per-stage values that do not
-match the selected profile.
+event during front-end service; those fail-closed outcomes remain in the results. The third rounds
+the earlier host-development envelope upward to fixed plant-grid service assumptions. It remains a
+simulation contract, not a production latency measurement. Profiles are selected in the study plan
+before execution, and the harness rejects per-stage values that do not match the selected profile.
 
 Nonzero stage times are bounded to two seconds and must be multiples of the 20 ms plant period.
 The candidate completion time is the first plant-grid event at or after both its declared service
