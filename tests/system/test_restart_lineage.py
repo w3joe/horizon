@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import re
 
-from .horizon_stack import HorizonStack, request_json, wait_for
+from .horizon_stack import (
+    HorizonStack,
+    is_fully_joined_evidence,
+    request_json,
+    wait_for,
+)
 
 
 def _stack(tmp_path) -> HorizonStack:
     stack = HorizonStack(
         tmp_path,
-        scenario="crossing_recoverable.json",
+        # Restart lineage is independent of encounter geometry.  Keep the
+        # plant in a cheap nominal state so a loaded hosted runner tests the
+        # restart boundary rather than repeatedly exhausting recovery search.
+        scenario="normal_transit.json",
         policy="nominal",
     )
     try:
-        return stack.start()
+        stack.start()
+        stack.pause_simulation()
+        return stack
     except BaseException:
         stack.close()
         raise
@@ -23,7 +33,7 @@ def _latest_evidence(stack: HorizonStack, *, timeout_s: float = 15.0) -> dict:
         status, payload, _ = request_json(
             stack.url("assurance", "/v1/evidence/latest"), timeout_s=0.7
         )
-        return payload if status == 200 else None
+        return payload if status == 200 and is_fully_joined_evidence(payload) else None
 
     return wait_for(accepted, timeout_s=timeout_s)
 
@@ -38,7 +48,12 @@ def _evidence_after(
         if status != 200:
             return None
         receipt_time = int(payload.get("receipt", {}).get("received_monotonic_ns", -1))
-        return payload if receipt_time > received_monotonic_ns else None
+        return (
+            payload
+            if receipt_time > received_monotonic_ns
+            and is_fully_joined_evidence(payload)
+            else None
+        )
 
     return wait_for(newer, timeout_s=timeout_s)
 
@@ -97,6 +112,17 @@ def _new_watchdog_receipt(stack: HorizonStack, existing_ids: set[str]) -> dict |
     )
 
 
+def _acknowledge_watchdog_recovery(stack: HorizonStack) -> None:
+    """Exercise the real release handshake before requiring autonomy again."""
+
+    status, payload, _ = request_json(
+        stack.url("gate", "/v1/operator/acknowledge"),
+        {},
+        bearer=stack.token("gate-operator.token"),
+    )
+    assert status == 200 and payload["accepted"] is True
+
+
 def test_s09_decision_ai_restart_never_reuses_stale_accepted_lineage(tmp_path) -> None:
     stack = _stack(tmp_path)
     try:
@@ -129,6 +155,7 @@ def test_s09_decision_ai_restart_never_reuses_stale_accepted_lineage(tmp_path) -
             receipt["receipt_id"] for receipt in _gate_telemetry(stack)["receipts"]
         }
 
+        _acknowledge_watchdog_recovery(stack)
         stack.restart_process("decision_ai")
         after = _evidence_after(stack, watchdog["received_monotonic_ns"])
         _assert_current_joined_chain(after)
@@ -177,8 +204,9 @@ def test_s12_assurance_restart_requires_fresh_joined_chain(tmp_path) -> None:
             lambda: _new_watchdog_receipt(stack, existing_receipt_ids), timeout_s=3.0
         )
 
+        _acknowledge_watchdog_recovery(stack)
         stack.restart_process("assurance")
-        after = _latest_evidence(stack)
+        after = _evidence_after(stack, watchdog["received_monotonic_ns"])
         _assert_current_joined_chain(after)
 
         assert after["decision"]["decision_id"] != before_decision_id
