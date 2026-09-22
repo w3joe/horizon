@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "fixture_id": "singapore-ais-console-demo-v1",
+  "captured_at": "2026-09-22T12:00:00Z",
+  "origin": { "latitude_deg": 1.25, "longitude_deg": 103.85 },
+  "map": {
+    "bundle_id": "singapore-area-demo-v1",
+    "bundle_version": "2026-09-22.synthetic.1",
+    "bbox": [103.8484, 1.2487, 103.8517, 1.2514],
+    "attribution": "Bundled Horizon schematic GeoJSON fixture",
+    "notice": "SIMULATION ONLY · visual coastline is not a navigational chart"
+  },
+  "source_lifecycle": ["connecting", "healthy", "degraded", "stale", "unavailable"],
+  "states": {
+    "overview": {
+      "label": "Singapore traffic overview",
+      "time_s": 18,
+      "source_state": "healthy",
+      "source_age_s": 0.8,
+      "headline": "Recorded mirror and synthetic safety traffic are aligned",
+      "ownship": { "north_m": -54, "east_m": -42, "heading_rad": 0.24, "speed_mps": 3.1 },
+      "contacts": [
+        { "id": "mirror-031", "label": "Track 031", "north_m": 42, "east_m": -12, "heading_rad": 3.45, "speed_mps": 5.4, "length_m": 34, "beam_m": 9, "provenance": "recorded", "source_label": "AIS-reported format · recorded synthetic fixture", "health": "healthy", "age_s": 0.8, "uncertainty_m": 10, "conflict": [], "cpa_m": 31.4, "tcpa_s": 48, "role": "protected_simulation" },
+        { "id": "mirror-774", "label": "Track 774", "north_m": 74, "east_m": 52, "heading_rad": 4.71, "speed_mps": 4.2, "length_m": 28, "beam_m": 8, "provenance": "recorded", "source_label": "AIS-reported format · recorded synthetic fixture", "health": "degraded", "age_s": 12.6, "uncertainty_m": 24, "conflict": ["STALE_REPORT"], "cpa_m": 54.8, "tcpa_s": 73, "role": "protected_simulation" },
+        { "id": "radar-208", "label": "Radar-only 208", "north_m": -8, "east_m": 58, "heading_rad": 5.65, "speed_mps": 2.7, "length_m": 18, "beam_m": 6, "provenance": "synthetic", "source_label": "Synthetic radar-only contact", "health": "healthy", "age_s": 0.1, "uncertainty_m": 8, "conflict": ["NON_TRANSMITTING"], "cpa_m": 42.1, "tcpa_s": 62, "role": "protected_simulation" },
+        { "id": "shadow-512", "label": "Shadow 512", "north_m": 18, "east_m": 83, "heading_rad": 2.90, "speed_mps": 6.1, "length_m": 42, "beam_m": 11, "provenance": "ais_reported", "source_label": "AIS-reported · live-shadow fixture placeholder", "health": "healthy", "age_s": 1.6, "uncertainty_m": 15, "conflict": [], "cpa_m": 86.0, "tcpa_s": 91, "role": "shadow_only" }
+      ],
+      "branches": {
+        "protected": { "label": "RTA protected", "status": "MONITORING", "cpa_m": 31.4, "tcpa_s": 48, "path": [[-54, -42], [-12, -28], [28, -7], [66, 20]] },
+        "counterfactual": { "label": "Without RTA", "status": "EVALUATION ONLY", "cpa_m": 31.4, "tcpa_s": 48, "path": [[-54, -42], [-12, -28], [28, -7], [66, 20]] }
+      }
+    },
+    "conflict": {
+      "label": "RTA intervention / source conflict",
+      "time_s": 31,
+      "source_state": "degraded",
+      "source_age_s": 18.4,
+      "headline": "Radar geometry contradicts stale AIS; protection stays conservative",
+      "ownship": { "north_m": -18, "east_m": -24, "heading_rad": 0.56, "speed_mps": 2.0 },
+      "contacts": [
+        { "id": "mirror-031", "label": "Track 031", "north_m": 24, "east_m": -2, "heading_rad": 3.45, "speed_mps": 5.4, "length_m": 34, "beam_m": 9, "provenance": "recorded", "source_label": "AIS-reported format · recorded synthetic fixture", "health": "degraded", "age_s": 18.4, "uncertainty_m": 36, "conflict": ["RADAR_AIS_DISAGREEMENT", "STALE_REPORT"], "cpa_m": 5.2, "tcpa_s": 11.8, "role": "protected_simulation" },
+        { "id": "mirror-774", "label": "Track 774", "north_m": 62, "east_m": 30, "heading_rad": 4.71, "speed_mps": 4.2, "length_m": 28, "beam_m": 8, "provenance": "recorded", "source_label": "AIS-reported format · recorded synthetic fixture", "health": "stale", "age_s": 31.2, "uncertainty_m": 44, "conflict": ["STALE_REPORT"], "cpa_m": 47.6, "tcpa_s": 55, "role": "protected_simulation" },
+        { "id": "radar-208", "label": "Radar-only 208", "north_m": -2, "east_m": 48, "heading_rad": 5.65, "speed_mps": 2.7, "length_m": 18, "beam_m": 6, "provenance": "synthetic", "source_label": "Synthetic radar-only contact", "health": "healthy", "age_s": 0.1, "uncertainty_m": 8, "conflict": ["NON_TRANSMITTING"], "cpa_m": 29.4, "tcpa_s": 36, "role": "protected_simulation" },
+        { "id": "shadow-512", "label": "Shadow 512", "north_m": 12, "east_m": 80, "heading_rad": 2.90, "speed_mps": 6.1, "length_m": 42, "beam_m": 11, "provenance": "ais_reported", "source_label": "AIS-reported · live-shadow fixture placeholder", "health": "unavailable", "age_s": 94.0, "uncertainty_m": 60, "conflict": ["LIVE_SOURCE_UNAVAILABLE"], "cpa_m": 81.2, "tcpa_s": 88, "role": "shadow_only" }
+      ],
+      "branches": {
+        "protected": { "label": "RTA protected", "status": "INTERVENTION ISSUED", "cpa_m": 27.8, "tcpa_s": 29, "path": [[-54, -42], [-18, -24], [8, -1], [18, 32], [12, 68]] },
+        "counterfactual": { "label": "Without RTA", "status": "CPA VIOLATION", "cpa_m": 5.2, "tcpa_s": 11.8, "path": [[-54, -42], [-18, -24], [15, -7], [48, 9], [78, 24]] }
+      }
+    }
+  }
+}

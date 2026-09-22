@@ -1,0 +1,31 @@
+{
+  "type": "FeatureCollection",
+  "name": "singapore-area-demo-v1-local-schematic",
+  "bbox": [103.8484, 1.2487, 103.8517, 1.2514],
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "layer": "visual_land", "name": "Singapore southern shore (schematic)", "safety_use": false },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[103.8484, 1.2514], [103.8517, 1.2514], [103.8517, 1.25093], [103.85108, 1.25088], [103.85062, 1.25099], [103.85008, 1.25083], [103.84958, 1.25092], [103.84907, 1.25078], [103.8484, 1.25086], [103.8484, 1.2514]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "visual_terminal", "name": "Demo terminal (schematic)", "safety_use": false },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[103.84920, 1.25087], [103.84977, 1.25087], [103.84977, 1.25063], [103.84920, 1.25063], [103.84920, 1.25087]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "layer": "reviewed_water_envelope", "name": "Synthetic reviewed water envelope", "safety_use": true, "review_status": "fixture-only" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[103.84863, 1.24901], [103.85145, 1.24901], [103.85145, 1.25050], [103.84863, 1.25050], [103.84863, 1.24901]]]
+      }
+    }
+  ]
+}

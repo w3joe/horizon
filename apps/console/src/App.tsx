@@ -6,6 +6,7 @@ import { GuidedStageSelector } from "./components/GuidedStageSelector";
 import { MaritimeScene } from "./components/MaritimeScene";
 import { NeuralView } from "./components/NeuralView";
 import { OperatorControls } from "./components/OperatorControls";
+import { SingaporeTrafficConsole } from "./components/SingaporeTrafficConsole";
 import { Timeline } from "./components/Timeline";
 import { useConsoleFeed } from "./hooks/useConsoleFeed";
 import { useOperatorControls } from "./hooks/useOperatorControls";
@@ -21,15 +22,19 @@ function HorizonMark() {
 }
 
 export function App() {
-  const [experience, setExperience] = useState<"demo" | "live">("demo");
+  const [experience, setExperience] = useState<"demo" | "singapore" | "live">(() => {
+    if (new URLSearchParams(window.location.search).get("view") === "singapore") return "singapore";
+    return "demo";
+  });
 
   return (
     <>
       <nav className="experience-switcher" aria-label="Console experience">
         <button type="button" aria-pressed={experience === "demo"} onClick={() => setExperience("demo")}>Guided demo</button>
+        <button type="button" aria-pressed={experience === "singapore"} onClick={() => setExperience("singapore")}>Singapore AIS</button>
         <button type="button" aria-pressed={experience === "live"} onClick={() => setExperience("live")}>Live console</button>
       </nav>
-      {experience === "demo" ? <DemoExperience /> : <LiveConsole />}
+      {experience === "demo" ? <DemoExperience /> : experience === "singapore" ? <SingaporeTrafficConsole /> : <LiveConsole />}
     </>
   );
 }

@@ -11,6 +11,7 @@ interface Props {
   selectedContactId: string;
   onSelectContact: (id: string) => void;
   showBranch: boolean;
+  frozen?: boolean;
 }
 
 const CARGO_STACK_PLACEMENTS: ReadonlyArray<{
@@ -29,12 +30,12 @@ const BUOY_PLACEMENTS: ReadonlyArray<[number, number, number]> = [
   [68, -0.12, -91],
 ];
 
-function Ocean() {
+function Ocean({ frozen = false }: { frozen?: boolean }) {
   const geometry = useMemo(() => new THREE.PlaneGeometry(360, 300, 72, 60), []);
   const original = useMemo(() => Float32Array.from(geometry.attributes.position.array), [geometry]);
   useFrame(({ clock }) => {
     const positions = geometry.attributes.position;
-    const t = clock.elapsedTime;
+    const t = frozen ? 0 : clock.elapsedTime;
     for (let i = 0; i < positions.count; i += 1) {
       const x = original[i * 3];
       const y = original[i * 3 + 1];
@@ -152,7 +153,7 @@ function PathLine({ points, color, dashed = false, opacity = 1 }: { points: Path
   return <primitive object={line} />;
 }
 
-function SceneContents({ packet, selectedContactId, onSelectContact, showBranch }: Omit<Props, "cameraMode">) {
+function SceneContents({ packet, selectedContactId, onSelectContact, showBranch, frozen }: Omit<Props, "cameraMode">) {
   const contact = packet.snapshot.traffic[0];
   const own = packet.snapshot.ownship;
   const branchGhost = showBranch && packet.branchPath.length > 0
@@ -162,7 +163,7 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
   const uncertaintyRef = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
     if (uncertaintyRef.current) {
-      const pulse = 1 + Math.sin(clock.elapsedTime * 2.2) * 0.035;
+      const pulse = frozen ? 1 : 1 + Math.sin(clock.elapsedTime * 2.2) * 0.035;
       uncertaintyRef.current.scale.setScalar(pulse);
     }
   });
@@ -175,7 +176,7 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
       <ambientLight intensity={1.05} color="#a8cfda" />
       <directionalLight position={[60, 90, 25]} intensity={3.2} color="#ffe5ba" castShadow shadow-mapSize={[2048, 2048]} />
       <hemisphereLight args={["#a0d7e5", "#10242b", 1.35]} />
-      <Ocean />
+      <Ocean frozen={frozen} />
       <Harbor />
       {packet.proposedPath.length > 1 && <PathLine points={packet.proposedPath} color="#fb6674" dashed />}
       {packet.acceptedPath.length > 1 && <PathLine points={packet.acceptedPath} color="#4ce1de" />}
@@ -210,6 +211,8 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
           lengthM={vessel.hull.length_m}
           beamM={vessel.hull.beam_m}
           detailed={index < 2}
+          selected={selectedContactId === vessel.vessel_id}
+          onClick={() => onSelectContact(vessel.vessel_id)}
         />
       ))}
       {branchGhost && <GhostVessel position={nedToScene(branchGhost, 0.42)} heading={0.08} />}
@@ -229,6 +232,7 @@ export function MaritimeScene(props: Props) {
         orthographic={isTactical}
         camera={isTactical ? { position: [0, 180, 0.01], zoom: 4, near: 0.1, far: 500 } : { position: [67, 50, 42], fov: 40, near: 0.1, far: 600 }}
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
+        frameloop={props.frozen ? "demand" : "always"}
       >
         <CameraAim mode={props.cameraMode} />
         <SceneContents {...props} />
