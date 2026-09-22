@@ -167,11 +167,15 @@ class HorizonStack:
         policy: str = "nominal",
         assurance_loop: bool = True,
         collector_link_proxy: bool = False,
+        candidate: str = "A1",
+        marine_config: Path | str | None = None,
     ):
         self.directory = directory
         self.scenario = scenario
         self.policy = policy
         self.assurance_loop = assurance_loop
+        self.candidate = candidate
+        self.marine_config = None if marine_config is None else Path(marine_config)
         self.ports = {
             name: _port()
             for name in ("simulator", "decision_ai", "collector", "fusion", "gate", "assurance")
@@ -240,28 +244,28 @@ class HorizonStack:
 
     def start(self) -> "HorizonStack":
         python = sys.executable
-        self._start_process(
-            "simulator",
-            [
-                python,
-                "-m",
-                "horizon_sim.http_api",
-                "--scenario",
-                str(ROOT / "scenarios" / self.scenario),
-                "--run-id",
-                self.run_id,
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(self.ports["simulator"]),
-                "--gate-token-file",
-                str(self.capabilities / "plant.token"),
-                "--evaluation-token-file",
-                str(self.capabilities / "evaluation.token"),
-                "--operator-token-file",
-                str(self.capabilities / "simulator-operator.token"),
-            ],
-        )
+        simulator = [
+            python,
+            "-m",
+            "horizon_sim.http_api",
+            "--scenario",
+            str(ROOT / "scenarios" / self.scenario),
+            "--run-id",
+            self.run_id,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(self.ports["simulator"]),
+            "--gate-token-file",
+            str(self.capabilities / "plant.token"),
+            "--evaluation-token-file",
+            str(self.capabilities / "evaluation.token"),
+            "--operator-token-file",
+            str(self.capabilities / "simulator-operator.token"),
+        ]
+        if self.marine_config is not None:
+            simulator.extend(["--marine-config", str(self.marine_config)])
+        self._start_process("simulator", simulator)
         self._start_process(
             "decision_ai",
             [
@@ -361,7 +365,7 @@ class HorizonStack:
                     "--gate-url",
                     self.url("gate"),
                     "--candidate",
-                    "A1",
+                    self.candidate,
                     "--gate-decision-token-file",
                     str(self.capabilities / "gate-decision.token"),
                     "--gate-operator-token-file",
