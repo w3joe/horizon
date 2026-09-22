@@ -18,6 +18,9 @@ from urllib.request import Request, urlopen
 from .candidates import Candidate
 
 
+GATE_RECEIPT_TIMEOUT_S = 0.25
+
+
 @dataclass(frozen=True)
 class GateReadinessCache:
     """One gate-issued startup certificate, bounded by its original host expiry."""
@@ -477,7 +480,14 @@ class AssuranceControlLoop:
             receipt = self.gate.submit(
                 governor_input,
                 decision,
-                timeout_s=self._remaining_s(deadline_ns),
+                # The gate enforces decision/source deadlines before plant
+                # mutation.  Keep waiting briefly for the receipt after that
+                # deadline so an already-actuated command is never orphaned
+                # from the assurance evidence chain by HTTP response latency.
+                timeout_s=max(
+                    GATE_RECEIPT_TIMEOUT_S,
+                    self._remaining_s(deadline_ns),
+                ),
             )
         except EndpointError as exc:
             self._invalidate_gate_readiness()

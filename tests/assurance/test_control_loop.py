@@ -64,6 +64,7 @@ class FakeGate:
         self.ready = ready
         self.primes = []
         self.submissions = []
+        self.submit_timeouts = []
         self.resets = 0
         self.prime_accepted = prime_accepted
         self.submit_accepted = submit_accepted
@@ -118,7 +119,7 @@ class FakeGate:
         }
 
     def submit(self, governor_input, decision, *, timeout_s):
-        del timeout_s
+        self.submit_timeouts.append(timeout_s)
         self.submissions.append((governor_input, decision))
         if self.submit_transport_error:
             self.submit_transport_error = False
@@ -210,6 +211,7 @@ def test_loop_primes_before_first_autonomy_and_skips_duplicate(reference, govern
         "command"
     ]
     assert len(gate.submissions) == 1
+    assert gate.submit_timeouts == [pytest.approx(0.25)]
     assert evidence == [
         {
             "governor_input": second,
