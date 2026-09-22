@@ -10,9 +10,11 @@ from .horizon_stack import HorizonStack
 
 @pytest.mark.skipif(
     sys.platform != "linux" or os.environ.get("HORIZON_GATE_CPU_ISOLATION") != "required",
-    reason="CI exercises required Linux shared assurance-control lane isolation",
+    reason="separate CI smoke exercises required Linux process affinity",
 )
-def test_assurance_control_lane_is_separate_without_priority_change(tmp_path) -> None:
+def test_required_affinity_starts_services_and_matches_declared_lanes(tmp_path) -> None:
+    """Verify startup and kernel affinity without making safety-timing claims."""
+
     stack = HorizonStack(tmp_path, scenario="normal_transit.json", assurance_loop=False)
     try:
         stack.start()
