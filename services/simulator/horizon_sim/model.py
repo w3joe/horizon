@@ -15,7 +15,14 @@ TAU = 2.0 * math.pi
 
 
 def clamp(value: float, low: float, high: float) -> float:
-    return min(max(value, low), high)
+    # Control-path inputs are validated as finite before integration. Direct
+    # comparisons preserve the same bounded result while avoiding two nested
+    # Python min/max calls at every plant substep.
+    if value < low:
+        return low
+    if value > high:
+        return high
+    return value
 
 
 def wrap_angle(angle_rad: float) -> float:
@@ -88,7 +95,7 @@ class PlantParameters:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class VesselState:
     north_m: float = 0.0
     east_m: float = 0.0
