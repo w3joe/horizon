@@ -164,15 +164,17 @@ def point_segment_distance(point: Point, a: Point, b: Point) -> float:
 def signed_boundary_margin(hull_points: Sequence[Point], boundary: Sequence[Point]) -> float:
     minimum_margin = math.inf
     boundary_count = len(boundary)
+    edges = []
+    for index in range(boundary_count):
+        start_n, start_e = boundary[index]
+        end_n, end_e = boundary[(index + 1) % boundary_count]
+        dn = end_n - start_n
+        de = end_e - start_e
+        edges.append((start_n, start_e, dn, de, dn * dn + de * de))
     for point_n, point_e in hull_points:
         best_squared = math.inf
         best_distance = math.inf
-        for index in range(boundary_count):
-            start_n, start_e = boundary[index]
-            end_n, end_e = boundary[(index + 1) % boundary_count]
-            dn = end_n - start_n
-            de = end_e - start_e
-            length_sq = dn * dn + de * de
+        for start_n, start_e, dn, de, length_sq in edges:
             if length_sq == 0.0:
                 offset_n = point_n - start_n
                 offset_e = point_e - start_e
@@ -185,8 +187,18 @@ def signed_boundary_margin(hull_points: Sequence[Point], boundary: Sequence[Poin
             if distance_squared < best_squared:
                 best_squared = distance_squared
                 best_distance = math.hypot(offset_n, offset_e)
-        point = (point_n, point_e)
-        margin = best_distance if point_in_polygon(point, boundary) else -best_distance
+        inside = False
+        previous = boundary[-1]
+        for current in boundary:
+            crosses = (current[1] > point_e) != (previous[1] > point_e)
+            if crosses:
+                crossing_north = (previous[0] - current[0]) * (point_e - current[1]) / (
+                    previous[1] - current[1]
+                ) + current[0]
+                if point_n < crossing_north:
+                    inside = not inside
+            previous = current
+        margin = best_distance if inside else -best_distance
         if margin < minimum_margin:
             minimum_margin = margin
     return minimum_margin
@@ -211,13 +223,15 @@ def _disjoint_polygon_clearance(a: Sequence[Point], b: Sequence[Point]) -> float
     best_distance = math.inf
     for points, edges in ((a, b), (b, a)):
         edge_count = len(edges)
+        prepared_edges = []
+        for index in range(edge_count):
+            start_n, start_e = edges[index]
+            end_n, end_e = edges[(index + 1) % edge_count]
+            dn = end_n - start_n
+            de = end_e - start_e
+            prepared_edges.append((start_n, start_e, dn, de, dn * dn + de * de))
         for point_n, point_e in points:
-            for index in range(edge_count):
-                start_n, start_e = edges[index]
-                end_n, end_e = edges[(index + 1) % edge_count]
-                dn = end_n - start_n
-                de = end_e - start_e
-                length_sq = dn * dn + de * de
+            for start_n, start_e, dn, de, length_sq in prepared_edges:
                 if length_sq == 0.0:
                     offset_n = point_n - start_n
                     offset_e = point_e - start_e
