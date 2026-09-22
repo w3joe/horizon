@@ -17,10 +17,9 @@ numbered CPU to a trusted recovery lane containing the gate and fusion processes
 Simulator, decision AI, collector, assurance, console, and optional perception
 processes are confined to the remaining support-lane CPUs. This keeps fresh recovery
 input assembly and independent validation together while preventing high-rate plant,
-ingestion, autonomy, UI, and test-driver work from consuming that CPU. Every process
-retains its inherited default scheduling priority. The system-test harness is also
-confined to the support lane for each stack and restores its original affinity at
-teardown.
+ingestion, autonomy, and UI services from consuming that CPU. Every child process
+retains its inherited default scheduling priority. The system-test orchestrator
+retains its host-provided affinity and is not assigned to either child-process lane.
 
 `required` fails before the run starts when the host is not Linux, fewer than two
 CPUs are allowed, `taskset` is unavailable, or the kernel-observed child

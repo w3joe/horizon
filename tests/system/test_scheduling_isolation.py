@@ -13,17 +13,10 @@ from .horizon_stack import HorizonStack
     reason="CI exercises required Linux trusted recovery lane isolation",
 )
 def test_trusted_recovery_lane_is_separate_without_priority_change(tmp_path) -> None:
-    original_test_affinity = tuple(sorted(os.sched_getaffinity(0)))
     stack = HorizonStack(tmp_path, scenario="normal_transit.json", assurance_loop=False)
     try:
         stack.start()
         assert stack.scheduling.status == "enabled"
-        assert stack.test_harness_scheduling == {
-            "status": "verified",
-            "lane": "support",
-            "cpu_affinity": list(stack.scheduling.support_lane_cpus),
-            "restored_on_close": True,
-        }
         for name, observed in stack.process_scheduling.items():
             assert observed["status"] == "verified"
             if name in {"gate", "fusion"}:
@@ -35,4 +28,3 @@ def test_trusted_recovery_lane_is_separate_without_priority_change(tmp_path) -> 
             assert observed["priority_policy"] == "inherited_default"
     finally:
         stack.close()
-    assert tuple(sorted(os.sched_getaffinity(0))) == original_test_affinity
