@@ -27,8 +27,16 @@ def hull_polygon(state: VesselState, hull: Hull) -> list[Point]:
 
 
 def _projection(points: Sequence[Point], axis: Point) -> tuple[float, float]:
-    values = [p[0] * axis[0] + p[1] * axis[1] for p in points]
-    return min(values), max(values)
+    first = points[0][0] * axis[0] + points[0][1] * axis[1]
+    low = first
+    high = first
+    for point in points[1:]:
+        value = point[0] * axis[0] + point[1] * axis[1]
+        if value < low:
+            low = value
+        if value > high:
+            high = value
+    return low, high
 
 
 def polygons_intersect(a: Sequence[Point], b: Sequence[Point]) -> bool:
@@ -50,17 +58,28 @@ def convex_hull(points: Iterable[Point]) -> list[Point]:
     if len(unique) <= 1:
         return unique
 
-    def cross(origin: Point, a: Point, b: Point) -> float:
-        return (a[0] - origin[0]) * (b[1] - origin[1]) - (a[1] - origin[1]) * (b[0] - origin[0])
-
     lower: list[Point] = []
     for point in unique:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0.0:
+        while len(lower) >= 2:
+            origin = lower[-2]
+            previous = lower[-1]
+            cross = (previous[0] - origin[0]) * (point[1] - origin[1]) - (
+                previous[1] - origin[1]
+            ) * (point[0] - origin[0])
+            if cross > 0.0:
+                break
             lower.pop()
         lower.append(point)
     upper: list[Point] = []
     for point in reversed(unique):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0.0:
+        while len(upper) >= 2:
+            origin = upper[-2]
+            previous = upper[-1]
+            cross = (previous[0] - origin[0]) * (point[1] - origin[1]) - (
+                previous[1] - origin[1]
+            ) * (point[0] - origin[0])
+            if cross > 0.0:
+                break
             upper.pop()
         upper.append(point)
     return lower[:-1] + upper[:-1]
@@ -143,31 +162,81 @@ def point_segment_distance(point: Point, a: Point, b: Point) -> float:
 
 
 def signed_boundary_margin(hull_points: Sequence[Point], boundary: Sequence[Point]) -> float:
-    margins: list[float] = []
-    for point in hull_points:
-        distance = min(
-            point_segment_distance(point, boundary[index], boundary[(index + 1) % len(boundary)])
-            for index in range(len(boundary))
-        )
-        margins.append(distance if point_in_polygon(point, boundary) else -distance)
-    return min(margins)
+    minimum_margin = math.inf
+    boundary_count = len(boundary)
+    for point_n, point_e in hull_points:
+        best_squared = math.inf
+        best_distance = math.inf
+        for index in range(boundary_count):
+            start_n, start_e = boundary[index]
+            end_n, end_e = boundary[(index + 1) % boundary_count]
+            dn = end_n - start_n
+            de = end_e - start_e
+            length_sq = dn * dn + de * de
+            if length_sq == 0.0:
+                offset_n = point_n - start_n
+                offset_e = point_e - start_e
+            else:
+                fraction = ((point_n - start_n) * dn + (point_e - start_e) * de) / length_sq
+                fraction = max(0.0, min(1.0, fraction))
+                offset_n = point_n - (start_n + fraction * dn)
+                offset_e = point_e - (start_e + fraction * de)
+            distance_squared = offset_n * offset_n + offset_e * offset_e
+            if distance_squared < best_squared:
+                best_squared = distance_squared
+                best_distance = math.hypot(offset_n, offset_e)
+        point = (point_n, point_e)
+        margin = best_distance if point_in_polygon(point, boundary) else -best_distance
+        if margin < minimum_margin:
+            minimum_margin = margin
+    return minimum_margin
 
 
 def polygon_clearance(a: Sequence[Point], b: Sequence[Point]) -> float:
     if polygons_intersect(a, b):
         return 0.0
-    distances: list[float] = []
-    for point in a:
-        distances.extend(point_segment_distance(point, b[i], b[(i + 1) % len(b)]) for i in range(len(b)))
-    for point in b:
-        distances.extend(point_segment_distance(point, a[i], a[(i + 1) % len(a)]) for i in range(len(a)))
-    return min(distances)
+    return _disjoint_polygon_clearance(a, b)
+
+
+def _disjoint_polygon_clearance(a: Sequence[Point], b: Sequence[Point]) -> float:
+    """Return exact vertex-edge clearance after separation is established.
+
+    Convex polygon distance is attained by a vertex-edge pair. The previous
+    implementation materialized every distance and called a helper for each
+    pair. Tracking the best pair in place retains the same projection and
+    ``hypot`` arithmetic while removing the dominant allocation/call cost in
+    the deadline-bounded predictive checker.
+    """
+    best_squared = math.inf
+    best_distance = math.inf
+    for points, edges in ((a, b), (b, a)):
+        edge_count = len(edges)
+        for point_n, point_e in points:
+            for index in range(edge_count):
+                start_n, start_e = edges[index]
+                end_n, end_e = edges[(index + 1) % edge_count]
+                dn = end_n - start_n
+                de = end_e - start_e
+                length_sq = dn * dn + de * de
+                if length_sq == 0.0:
+                    offset_n = point_n - start_n
+                    offset_e = point_e - start_e
+                else:
+                    fraction = ((point_n - start_n) * dn + (point_e - start_e) * de) / length_sq
+                    fraction = max(0.0, min(1.0, fraction))
+                    offset_n = point_n - (start_n + fraction * dn)
+                    offset_e = point_e - (start_e + fraction * de)
+                distance_squared = offset_n * offset_n + offset_e * offset_e
+                if distance_squared < best_squared:
+                    best_squared = distance_squared
+                    best_distance = math.hypot(offset_n, offset_e)
+    return best_distance
 
 
 def signed_polygon_clearance(a: Sequence[Point], b: Sequence[Point]) -> float:
     """Positive separation, zero contact, or conservative negative penetration."""
     if not polygons_intersect(a, b):
-        return polygon_clearance(a, b)
+        return _disjoint_polygon_clearance(a, b)
     minimum_overlap = math.inf
     for polygon in (a, b):
         for index, current in enumerate(polygon):
