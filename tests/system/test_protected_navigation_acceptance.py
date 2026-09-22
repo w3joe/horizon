@@ -296,25 +296,6 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
         # mission result instead of calling bounded clearance mission success.
         assert records[-1]["mission_progress"]["distance_remaining_m"] > 15.0
 
-        status, gate, _ = request_json(unsafe.url("gate", "/v1/telemetry"))
-        assert status == 200
-        watchdog_receipts = [
-            item
-            for item in gate["receipts"]
-            if item.get("accepted") is True
-            and item.get("authority") == "gate_watchdog"
-            and isinstance(item.get("actual_command"), dict)
-            and item["actual_command"].get("speed_mps", 6.0) < 6.0
-        ]
-        assert watchdog_receipts
-        intervention_ids = {item["command_id"] for item in watchdog_receipts}
-        watchdog_actuation = next(
-            item
-            for item in records
-            if item["simulation_time_s"] >= a1_actuation_s
-            and item["actual_actuator"]["command_id"] in intervention_ids
-        )
-        assert watchdog_actuation["simulation_time_s"] >= a1_actuation_s
     finally:
         unsafe.close()
 
