@@ -79,6 +79,114 @@ def _collision_margin_constraint(governor_input: dict[str, Any]) -> tuple[float,
     return float(strictest["minimum_margin"]), str(strictest["assumption_id"])
 
 
+def _axis_aligned_sweep_clearance(
+    own_centers: list[dict[str, float]],
+    contact_start: tuple[float, float],
+    contact_end: tuple[float, float],
+) -> float:
+    """Lower-bound center-sweep clearance using enclosing axis-aligned boxes.
+
+    The ownship box contains the convex hull of every sampled center in the
+    chunk and the contact box contains its complete constant-velocity segment.
+    Distance between those supersets cannot exceed the distance between the
+    enclosed sweeps, so a non-negative inflated margin is a conservative proof.
+    """
+
+    first = own_centers[0]
+    own_north_min = own_north_max = float(first["north_m"])
+    own_east_min = own_east_max = float(first["east_m"])
+    for sample in own_centers[1:]:
+        north = float(sample["north_m"])
+        east = float(sample["east_m"])
+        if north < own_north_min:
+            own_north_min = north
+        elif north > own_north_max:
+            own_north_max = north
+        if east < own_east_min:
+            own_east_min = east
+        elif east > own_east_max:
+            own_east_max = east
+
+    contact_north_min = min(contact_start[0], contact_end[0])
+    contact_north_max = max(contact_start[0], contact_end[0])
+    contact_east_min = min(contact_start[1], contact_end[1])
+    contact_east_max = max(contact_start[1], contact_end[1])
+    north_gap = max(
+        0.0,
+        own_north_min - contact_north_max,
+        contact_north_min - own_north_max,
+    )
+    east_gap = max(
+        0.0,
+        own_east_min - contact_east_max,
+        contact_east_min - own_east_max,
+    )
+    return math.hypot(north_gap, east_gap)
+
+
+def _convex_boundary_center_clearance(
+    centers: list[dict[str, float]],
+    boundary: tuple[tuple[float, float], ...],
+) -> float | None:
+    """Return a conservative center clearance for a convex boundary.
+
+    A convex polygon is the intersection of its inward edge half-planes. The
+    signed distance to each supporting line is affine along a segment, so if
+    every fixed-step center clears every line, every interpolated center does
+    too. ``None`` leaves non-convex or degenerate boundaries to full geometry.
+    """
+
+    if len(boundary) < 3:
+        return None
+    twice_area = 0.0
+    for index, current in enumerate(boundary):
+        following = boundary[(index + 1) % len(boundary)]
+        twice_area += current[0] * following[1] - following[0] * current[1]
+    if twice_area == 0.0:
+        return None
+    orientation = 1.0 if twice_area > 0.0 else -1.0
+
+    inward_lines: list[tuple[float, float, float]] = []
+    previous_turn = 0.0
+    for index, current in enumerate(boundary):
+        following = boundary[(index + 1) % len(boundary)]
+        after = boundary[(index + 2) % len(boundary)]
+        edge_north = following[0] - current[0]
+        edge_east = following[1] - current[1]
+        edge_length = math.hypot(edge_north, edge_east)
+        if edge_length == 0.0:
+            return None
+        next_north = after[0] - following[0]
+        next_east = after[1] - following[1]
+        turn = edge_north * next_east - edge_east * next_north
+        if turn != 0.0:
+            directed_turn = orientation * turn
+            if directed_turn < 0.0:
+                return None
+            previous_turn = directed_turn
+        normal_north = orientation * -edge_east / edge_length
+        normal_east = orientation * edge_north / edge_length
+        inward_lines.append(
+            (
+                normal_north,
+                normal_east,
+                -(normal_north * current[0] + normal_east * current[1]),
+            )
+        )
+    if previous_turn == 0.0:
+        return None
+
+    minimum = math.inf
+    for sample in centers:
+        north = float(sample["north_m"])
+        east = float(sample["east_m"])
+        for normal_north, normal_east, offset in inward_lines:
+            distance = normal_north * north + normal_east * east + offset
+            if distance < minimum:
+                minimum = distance
+    return minimum
+
+
 def _state_from_sample(sample: dict[str, float]):
     from horizon_sim.model import VesselState
 
@@ -294,6 +402,36 @@ class BoundedPredictiveChecker:
             else:
                 active_boundary_ids.add(str(constraint["constraint_id"]))
 
+        # Convex chart boundaries admit a cheap complete centerline proof.
+        # The boundary erosion uses the hull circumradius plus the maximum
+        # uncertainty/current inflation over the horizon. Any inconclusive or
+        # non-convex case retains the detailed swept-polygon validation below.
+        certified_boundary_ids: set[str] = set()
+        for constraint in boundary_constraints:
+            constraint_id = str(constraint["constraint_id"])
+            if constraint_id not in active_boundary_ids:
+                continue
+            boundary = self.reference.water_boundaries.get(
+                str(constraint.get("geometry_ref"))
+            )
+            if boundary is None:
+                continue
+            center_clearance = _convex_boundary_center_clearance(rollout, boundary)
+            if center_clearance is None:
+                continue
+            margin = (
+                center_clearance
+                - own_hull_radius
+                - final_own_radius
+                - current_rate * final_elapsed
+                - float(constraint["minimum_margin"])
+            )
+            if math.isfinite(margin) and margin >= 0.0:
+                evidence[constraint_id]["minimum_margin"] = margin
+                minimum_margin = min(minimum_margin, margin)
+                certified_boundary_ids.add(constraint_id)
+        active_boundary_ids.difference_update(certified_boundary_ids)
+
         active_depth_ids: set[str] = set()
         for constraint in depth_constraints:
             ref = str(constraint.get("geometry_ref"))
@@ -422,13 +560,7 @@ class BoundedPredictiveChecker:
                     ):
                         complete = False
                         break
-                    center_hull = convex_hull(
-                        (
-                            float(item["north_m"]),
-                            float(item["east_m"]),
-                        )
-                        for item in rollout[previous_fast_index : sample_index + 1]
-                    )
+                    chunk = rollout[previous_fast_index : sample_index + 1]
                     start_elapsed = (
                         time_offset_s + rollout[previous_fast_index]["time_s"]
                     )
@@ -443,9 +575,8 @@ class BoundedPredictiveChecker:
                         float(contact_position[0]) + float(velocity[0]) * elapsed,
                         float(contact_position[1]) + float(velocity[1]) * elapsed,
                     )
-                    center_clearance = signed_polygon_clearance(
-                        center_hull,
-                        (contact_start, contact_end),
+                    center_clearance = _axis_aligned_sweep_clearance(
+                        chunk, contact_start, contact_end
                     )
                     own_radius, own_assumption = _bounded_radius(
                         own_uncertainty,
@@ -483,6 +614,30 @@ class BoundedPredictiveChecker:
                         - contact_radius
                         - collision_required
                     )
+                    if math.isfinite(margin) and margin < 0.0:
+                        # An overlapping pair of enclosing boxes proves
+                        # nothing. Retain the tighter convex-center proof
+                        # before falling through to rectangular hull checks.
+                        center_hull = convex_hull(
+                            (
+                                float(item["north_m"]),
+                                float(item["east_m"]),
+                            )
+                            for item in chunk
+                        )
+                        center_clearance = signed_polygon_clearance(
+                            center_hull,
+                            (contact_start, contact_end),
+                        )
+                        margin = (
+                            center_clearance
+                            - own_hull_radius
+                            - contact_hull_radius
+                            - own_radius
+                            - current_rate * elapsed
+                            - contact_radius
+                            - collision_required
+                        )
                     fast_margin = min(fast_margin, margin)
                     fast_assumption = "+".join(
                         item

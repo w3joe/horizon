@@ -21,7 +21,11 @@ from horizon_assurance.candidates import (
     candidate,
 )
 from horizon_assurance.configuration import AssuranceConfig, NavigationReference
-from horizon_assurance.predictive import BoundedPredictiveChecker
+from horizon_assurance.predictive import (
+    BoundedPredictiveChecker,
+    _axis_aligned_sweep_clearance,
+    _convex_boundary_center_clearance,
+)
 from horizon_assurance.validation import InputRejected
 
 
@@ -122,21 +126,21 @@ def test_generic_independent_recovery_option_authorizes_finite_library(
     assert selection.option["assumption_id"] == "a04-finite-library-validation-required"
 
 
-def test_distant_contact_uses_conservative_circumscribed_sweep(
+def test_distant_contact_uses_conservative_enclosing_sweep(
     reference, governor_input, monkeypatch
 ) -> None:
     """The fast proof must use enclosing center sweeps, never omit geometry."""
 
-    from horizon_sim import geometry
+    from horizon_assurance import predictive
 
-    calls: list[tuple[int, int]] = []
-    original = geometry.signed_polygon_clearance
+    calls: list[int] = []
+    original = predictive._axis_aligned_sweep_clearance
 
-    def observed(first, second):
-        calls.append((len(first), len(second)))
-        return original(first, second)
+    def observed(centers, contact_start, contact_end):
+        calls.append(len(centers))
+        return original(centers, contact_start, contact_end)
 
-    monkeypatch.setattr(geometry, "signed_polygon_clearance", observed)
+    monkeypatch.setattr(predictive, "_axis_aligned_sweep_clearance", observed)
     message = copy.deepcopy(governor_input)
     message["snapshot"]["contacts"][0]["position_ne_m"] = [180.0, -80.0]
     assessment = BoundedPredictiveChecker(reference).assess(
@@ -146,11 +150,119 @@ def test_distant_contact_uses_conservative_circumscribed_sweep(
 
     assert assessment.safe
     assert calls
-    assert all(second_size == 2 for _, second_size in calls)
+    assert all(size >= 2 for size in calls)
     collision = next(
         item for item in assessment.constraints if item["kind"] == "collision"
     )
     assert collision["minimum_margin"] > 0.0
+
+
+def test_axis_aligned_sweep_clearance_lower_bounds_convex_center_sweep() -> None:
+    from horizon_sim.geometry import convex_hull, signed_polygon_clearance
+
+    centers = [
+        {"north_m": 0.0, "east_m": 0.0},
+        {"north_m": 2.0, "east_m": 1.0},
+        {"north_m": 4.0, "east_m": 0.0},
+    ]
+    contact_start = (8.0, -2.0)
+    contact_end = (8.0, 3.0)
+    box_clearance = _axis_aligned_sweep_clearance(
+        centers, contact_start, contact_end
+    )
+    exact_clearance = signed_polygon_clearance(
+        convex_hull(
+            (float(item["north_m"]), float(item["east_m"])) for item in centers
+        ),
+        (contact_start, contact_end),
+    )
+
+    assert 0.0 <= box_clearance <= exact_clearance
+
+
+def test_convex_boundary_center_clearance_matches_inward_edge_distance() -> None:
+    from horizon_sim.geometry import signed_boundary_margin
+
+    boundary = ((-10.0, -8.0), (12.0, -8.0), (12.0, 9.0), (-10.0, 9.0))
+    centers = [
+        {"north_m": -2.0, "east_m": -1.0},
+        {"north_m": 3.0, "east_m": 4.0},
+        {"north_m": 7.0, "east_m": 2.0},
+    ]
+
+    clearance = _convex_boundary_center_clearance(centers, boundary)
+    exact = signed_boundary_margin(
+        [(item["north_m"], item["east_m"]) for item in centers], boundary
+    )
+
+    assert clearance is not None
+    assert math.isclose(clearance, exact, rel_tol=0.0, abs_tol=1e-12)
+    assert (
+        _convex_boundary_center_clearance(
+            centers,
+            ((0.0, 0.0), (4.0, 0.0), (2.0, 1.0), (4.0, 4.0), (0.0, 4.0)),
+        )
+        is None
+    )
+
+
+def test_convex_boundary_certificate_matches_detailed_safe_result(
+    reference, governor_input, monkeypatch
+) -> None:
+    bounded_reference = replace(
+        reference,
+        water_boundaries={
+            "harbor-water-v1": (
+                (-300.0, -300.0),
+                (300.0, -300.0),
+                (300.0, 300.0),
+                (-300.0, 300.0),
+            )
+        },
+    )
+    checker = BoundedPredictiveChecker(bounded_reference)
+    fast = checker.assess(governor_input, governor_input["proposal"]["command"])
+
+    monkeypatch.setattr(
+        "horizon_assurance.predictive._convex_boundary_center_clearance",
+        lambda *_: None,
+    )
+    detailed = checker.assess(governor_input, governor_input["proposal"]["command"])
+
+    assert fast.status == detailed.status == "safe"
+    assert fast.reason_codes == detailed.reason_codes
+    fast_boundary = next(
+        item for item in fast.constraints if item["kind"] == "boundary"
+    )
+    detailed_boundary = next(
+        item for item in detailed.constraints if item["kind"] == "boundary"
+    )
+    assert 0.0 <= fast_boundary["minimum_margin"] <= detailed_boundary["minimum_margin"]
+
+
+def test_failed_box_proof_falls_back_without_changing_safe_result(
+    reference, governor_input, monkeypatch
+) -> None:
+    message = copy.deepcopy(governor_input)
+    message["snapshot"]["contacts"][0]["position_ne_m"] = [180.0, -80.0]
+    checker = BoundedPredictiveChecker(reference)
+    box_assessment = checker.assess(message, message["proposal"]["command"])
+
+    monkeypatch.setattr(
+        "horizon_assurance.predictive._axis_aligned_sweep_clearance",
+        lambda *_: -1.0e9,
+    )
+    convex_assessment = checker.assess(message, message["proposal"]["command"])
+
+    assert convex_assessment.status == box_assessment.status == "safe"
+    assert convex_assessment.reason_codes == box_assessment.reason_codes
+    box_collision = next(
+        item for item in box_assessment.constraints if item["kind"] == "collision"
+    )
+    convex_collision = next(
+        item for item in convex_assessment.constraints if item["kind"] == "collision"
+    )
+    assert box_collision["minimum_margin"] <= convex_collision["minimum_margin"]
 
 
 def test_a3_collision_envelope_never_returns_unqualified_pass(reference, governor_input) -> None:
