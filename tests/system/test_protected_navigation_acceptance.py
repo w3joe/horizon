@@ -39,6 +39,25 @@ def _assert_joined_chain(evidence: dict) -> None:
     assert receipt["actual_command"] == decision["issued_command"]
 
 
+def _accepted_a1_intervention(stack: HorizonStack) -> dict | None:
+    assurance_status, assurance, _ = request_json(
+        stack.url("assurance", "/v1/telemetry"), timeout_s=0.7
+    )
+    if assurance_status != 200:
+        return None
+    return next(
+        (
+            event
+            for event in assurance["control_events"]
+            if event.get("event_type") == "decision_receipt"
+            and event.get("decision", {}).get("candidate_id") == "A1"
+            and event.get("decision", {}).get("action") in {"modify", "recover"}
+            and event.get("receipt", {}).get("accepted") is True
+        ),
+        None,
+    )
+
+
 def _truth_records(
     stack: HorizonStack, branch: str
 ) -> tuple[list[dict], list[dict]]:
@@ -155,6 +174,9 @@ def test_s22_ungated_counterfactual_physically_collides(tmp_path) -> None:
 
 
 def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
+    scenario = json.loads(
+        (Path(__file__).resolve().parents[2] / "scenarios/static_obstacle_approach.json").read_text()
+    )
     baseline = _stack(
         tmp_path / "counterfactual",
         scenario="static_obstacle_approach.json",
@@ -212,28 +234,67 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
         policy="unsafe_straight",
     )
     try:
-        evidence = _latest_evidence(unsafe, timeout_s=12.0)
-        _assert_joined_chain(evidence)
-        assert evidence["governor_input"]["proposal"]["command"]["speed_mps"] == 6.0
-        first_external_command_s = float(
-            evidence["governor_input"]["simulation_time_s"]
+        intervention_event = wait_for(
+            lambda: _accepted_a1_intervention(unsafe), timeout_s=12.0
         )
+        governor = intervention_event["input_summary"]
+        decision = intervention_event["decision"]
+        a1_receipt = intervention_event["receipt"]
+        assert governor["proposal"]["command"]["speed_mps"] == 6.0
+        assert decision["candidate_id"] == "A1"
+        assert decision["action"] == "recover"
+        assert decision["authority"] == "recovery"
+        assert decision["valid"] is True and decision["deadline_met"] is True
+        assert "CPA_THRESHOLD_CROSSED" in decision["reason_codes"]
+        assert "VALIDATED_RECOVERY_SELECTED" in decision["reason_codes"]
+        assert decision["input_snapshot_id"] == governor["snapshot_id"]
+        assert decision["proposal_id"] == governor["proposal"]["command_id"]
+        assert a1_receipt["decision_id"] == decision["decision_id"]
+        assert a1_receipt["accepted"] is True
+        assert a1_receipt["authority"] == "recovery"
+        assert a1_receipt["actual_command"]["speed_mps"] == pytest.approx(
+            decision["issued_command"]["speed_mps"], abs=1e-12
+        )
+        assert a1_receipt["actual_command"]["heading_rad"] == pytest.approx(
+            decision["issued_command"]["heading_rad"], abs=1e-12
+        )
+        assert a1_receipt["actual_command"] != governor["proposal"]["command"]
+        assert (
+            governor["decision_deadline_monotonic_ns"]
+            - governor["monotonic_time_ns"]
+            == 40_000_000
+        )
+        assert a1_receipt["received_monotonic_ns"] < decision["expires_monotonic_ns"]
 
         def protected_window_complete():
             _, snapshot, _ = request_json(
                 unsafe.url("simulator", "/v1/public/snapshot?branch=protected"),
                 timeout_s=0.5,
             )
-            return snapshot if snapshot["simulation_time_s"] >= 45.0 else None
+            return snapshot if snapshot["simulation_time_s"] >= scenario["duration_s"] else None
 
-        wait_for(protected_window_complete, timeout_s=52.0, interval_s=0.1)
+        wait_for(protected_window_complete, timeout_s=68.0, interval_s=0.1)
 
         records, events = _truth_records(unsafe, "protected")
-        assert records[-1]["simulation_time_s"] >= 45.0
+        assert records[-1]["simulation_time_s"] == scenario["duration_s"]
         assert not [item for item in events if item["kind"] == "collision"]
         assert min(
             item["signed_margins"]["hull_clearance_m"] for item in records
         ) > 0.0
+
+        a1_actuation = next(
+            item
+            for item in records
+            if item["actual_actuator"]["command_id"] == a1_receipt["command_id"]
+        )
+        a1_actuation_s = float(a1_actuation["simulation_time_s"])
+        assert a1_actuation_s < counterfactual_collision_s
+        assert counterfactual_collision_s - a1_actuation_s > 0.0
+
+        # The physical evaluation horizon completed, but the recovery-latched
+        # vessel did not reach the route endpoint. Preserve that censored
+        # mission result instead of calling bounded clearance mission success.
+        assert records[-1]["mission_progress"]["distance_remaining_m"] > 15.0
 
         status, gate, _ = request_json(unsafe.url("gate", "/v1/telemetry"))
         assert status == 200
@@ -247,13 +308,13 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
         ]
         assert watchdog_receipts
         intervention_ids = {item["command_id"] for item in watchdog_receipts}
-        intervention = next(
+        watchdog_actuation = next(
             item
             for item in records
-            if item["simulation_time_s"] >= first_external_command_s
+            if item["simulation_time_s"] >= a1_actuation_s
             and item["actual_actuator"]["command_id"] in intervention_ids
         )
-        assert intervention["simulation_time_s"] < counterfactual_collision_s
+        assert watchdog_actuation["simulation_time_s"] >= a1_actuation_s
     finally:
         unsafe.close()
 
