@@ -34,6 +34,11 @@ paired safe, recoverable, and no-valid-recovery fixtures. In the short paired
 closed-loop diagnostic, A3, A4, and A5 selected gate-accepted recoveries; A1 and
 A2 passed commands that the independent gate rejected during final collision
 revalidation. This is useful disagreement evidence, not an architecture ranking.
+A subsequent 60-episode development run retained all 15 initially-unrecoverable
+collisions and recorded no declared-recoverable collision or unsafe/stale gate
+acceptance. All missions were censored, 40 branches exceeded at least one declared
+engineering bound, and A2–A5 retained some compute deadline misses, so the
+independent evidence gate correctly withheld architecture selection.
 A2 remains an uncalibrated analytic Gaussian method; A4 is a finite discrete
 plant-map barrier search rather than a formal robust maritime CBF; and A3/A5 are
 finite sampled engineering checks rather than reachability or viability proofs.
