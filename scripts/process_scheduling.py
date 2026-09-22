@@ -14,6 +14,7 @@ from typing import Callable, Sequence
 
 
 ISOLATION_MODES = ("off", "best-effort", "required")
+TRUSTED_RECOVERY_LANE_SERVICES = frozenset({"gate", "fusion"})
 
 
 class SchedulingIsolationError(RuntimeError):
@@ -25,8 +26,8 @@ class ProcessSchedulingPlan:
     requested_mode: str
     status: str
     reason: str
-    gate_cpu: int | None = None
-    service_cpus: tuple[int, ...] = ()
+    recovery_lane_cpu: int | None = None
+    support_lane_cpus: tuple[int, ...] = ()
     taskset_path: str | None = None
 
     @property
@@ -39,19 +40,19 @@ class ProcessSchedulingPlan:
         original = list(command)
         if not self.enabled:
             return original
-        assert self.gate_cpu is not None
+        assert self.recovery_lane_cpu is not None
         assert self.taskset_path is not None
-        if service == "gate":
+        if service in TRUSTED_RECOVERY_LANE_SERVICES:
             return [
                 self.taskset_path,
                 "--cpu-list",
-                str(self.gate_cpu),
+                str(self.recovery_lane_cpu),
                 *original,
             ]
         return [
             self.taskset_path,
             "--cpu-list",
-            ",".join(str(cpu) for cpu in self.service_cpus),
+            ",".join(str(cpu) for cpu in self.support_lane_cpus),
             *original,
         ]
 
@@ -60,9 +61,12 @@ class ProcessSchedulingPlan:
             "requested_mode": self.requested_mode,
             "status": self.status,
             "reason": self.reason,
-            "mechanism": "linux-taskset-affinity" if self.enabled else None,
-            "gate_process_cpu": self.gate_cpu,
-            "other_service_cpus": list(self.service_cpus),
+            "mechanism": "linux-taskset-two-lane-affinity" if self.enabled else None,
+            "topology": "trusted_recovery_lane" if self.enabled else None,
+            "recovery_lane_services": sorted(TRUSTED_RECOVERY_LANE_SERVICES),
+            "recovery_lane_cpu": self.recovery_lane_cpu,
+            "support_lane_services": "all_other_horizon_services",
+            "support_lane_cpus": list(self.support_lane_cpus),
             "service_priority_policy": "inherited_default",
             "hard_realtime": False,
             "operating_system_cpu_exclusive": False,
@@ -79,8 +83,15 @@ class ProcessSchedulingPlan:
             raise SchedulingIsolationError(
                 f"could not verify scheduling for {service}: {type(exc).__name__}"
             ) from exc
+        lane = (
+            "trusted_recovery"
+            if service in TRUSTED_RECOVERY_LANE_SERVICES
+            else "support"
+        )
         expected_cpus = (
-            (self.gate_cpu,) if service == "gate" else self.service_cpus
+            (self.recovery_lane_cpu,)
+            if lane == "trusted_recovery"
+            else self.support_lane_cpus
         )
         if observed_cpus != expected_cpus:
             raise SchedulingIsolationError(
@@ -89,6 +100,7 @@ class ProcessSchedulingPlan:
             )
         return {
             "status": "verified",
+            "lane": lane,
             "cpu_affinity": list(observed_cpus),
             "priority_policy": "inherited_default",
         }
@@ -135,12 +147,12 @@ def build_process_scheduling_plan(
             "missing_tool",
             "required_executable_missing:taskset",
         )
-    gate_cpu = ordered[-1]
+    recovery_lane_cpu = ordered[-1]
     return ProcessSchedulingPlan(
         requested_mode=mode,
         status="enabled",
-        reason="process_affinity_partition_applied",
-        gate_cpu=gate_cpu,
-        service_cpus=ordered[:-1],
+        reason="trusted_recovery_lane_affinity_applied",
+        recovery_lane_cpu=recovery_lane_cpu,
+        support_lane_cpus=ordered[:-1],
         taskset_path=taskset_path,
     )

@@ -609,8 +609,9 @@ def main() -> int:
         choices=ISOLATION_MODES,
         default=os.environ.get("HORIZON_GATE_CPU_ISOLATION", "off"),
         help=(
-            "Linux child-process affinity policy: reserve one allowed CPU for the gate, "
-            "and confine other services to the remaining CPUs; this is not hard real time"
+            "Linux child-process affinity policy: place gate and fusion on one trusted "
+            "recovery CPU and other services on the remaining CPUs; this is "
+            "not hard real time"
         ),
     )
     args = parser.parse_args()
@@ -824,7 +825,7 @@ def main() -> int:
 
         print(f"Horizon run {run_id} ready: http://{host}:{ports['console']}", flush=True)
         print(
-            "gate CPU isolation "
+            "trusted recovery lane isolation "
             f"{scheduling.status}: {scheduling.reason}; hard real time=false",
             flush=True,
         )

@@ -20,7 +20,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from scripts.process_scheduling import build_process_scheduling_plan
+from scripts.process_scheduling import SchedulingIsolationError, build_process_scheduling_plan
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -184,6 +184,11 @@ class HorizonStack:
             self.env.get("HORIZON_GATE_CPU_ISOLATION", "off")
         )
         self.process_scheduling: dict[str, dict[str, object]] = {}
+        self._test_harness_original_affinity: tuple[int, ...] | None = None
+        self.test_harness_scheduling: dict[str, object] = {
+            "status": "not_applied",
+            "reason": self.scheduling.reason,
+        }
         self.capabilities = directory / "capabilities"
         self.logs = directory / "logs"
         self.capabilities.mkdir(parents=True)
@@ -204,6 +209,30 @@ class HorizonStack:
         self.env["PYTHONPATH"] = os.pathsep.join(
             [*(str(path) for path in paths), *([existing] if existing else [])]
         )
+        if self.scheduling.enabled:
+            original: tuple[int, ...] | None = None
+            try:
+                original = tuple(sorted(os.sched_getaffinity(0)))
+                os.sched_setaffinity(0, set(self.scheduling.support_lane_cpus))
+                observed = tuple(sorted(os.sched_getaffinity(0)))
+            except (AttributeError, OSError) as exc:
+                if original is not None:
+                    os.sched_setaffinity(0, set(original))
+                raise SchedulingIsolationError(
+                    f"could not confine system-test harness: {type(exc).__name__}"
+                ) from exc
+            if observed != self.scheduling.support_lane_cpus:
+                os.sched_setaffinity(0, set(original))
+                raise SchedulingIsolationError(
+                    "system-test harness affinity did not match the support lane"
+                )
+            self._test_harness_original_affinity = original
+            self.test_harness_scheduling = {
+                "status": "verified",
+                "lane": "support",
+                "cpu_affinity": list(observed),
+                "restored_on_close": True,
+            }
 
     def url(self, service: str, path: str = "") -> str:
         return f"http://127.0.0.1:{self.ports[service]}{path}"
@@ -393,6 +422,9 @@ class HorizonStack:
         self._start_process(name, list(command))
 
     def close(self) -> None:
+        if self._test_harness_original_affinity is not None:
+            os.sched_setaffinity(0, set(self._test_harness_original_affinity))
+            self._test_harness_original_affinity = None
         diagnostic_root = os.environ.get("HORIZON_SYSTEM_DIAGNOSTICS_DIR")
         if diagnostic_root and self.processes:
             # Public fixture telemetry only: never capabilities or evaluator data.
@@ -401,6 +433,7 @@ class HorizonStack:
                 "scenario": self.scenario,
                 "scheduling": self.scheduling.public_record(),
                 "process_scheduling": self.process_scheduling,
+                "test_harness_scheduling": self.test_harness_scheduling,
             }
             for service, endpoint in (
                 ("assurance", "/v1/telemetry"),
