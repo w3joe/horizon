@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .model import Environment, PlantParameters, TargetCommand, VesselState, integrate_step
+from .model import Environment, PlantParameters, prepare_value_integrator
 
 
 def rollout_from_estimate(
@@ -23,34 +23,41 @@ def rollout_from_estimate(
     clone is accepted by this API.
     """
     params = parameters or PlantParameters()
-    state = VesselState(
-        north_m=float(estimated_ownship["position_ne_m"][0]),
-        east_m=float(estimated_ownship["position_ne_m"][1]),
-        heading_rad=float(estimated_ownship["heading_rad"]),
-        surge_mps=float(estimated_ownship["velocity_body_mps"][0]),
-        sway_mps=float(estimated_ownship["velocity_body_mps"][1]),
-        yaw_rate_rps=float(estimated_ownship["yaw_rate_rps"]),
-        rudder_rad=float(actuator_capability["rudder_rad"]),
-        thrust_fraction=float(actuator_capability["thrust_fraction"]),
+    state = (
+        float(estimated_ownship["position_ne_m"][0]),
+        float(estimated_ownship["position_ne_m"][1]),
+        float(estimated_ownship["heading_rad"]),
+        float(estimated_ownship["velocity_body_mps"][0]),
+        float(estimated_ownship["velocity_body_mps"][1]),
+        float(estimated_ownship["yaw_rate_rps"]),
+        float(actuator_capability["rudder_rad"]),
+        float(actuator_capability["thrust_fraction"]),
     )
-    target = TargetCommand(float(command["heading_rad"]), float(command["speed_mps"]), "rollout")
+    command_heading_rad = float(command["heading_rad"])
+    command_speed_mps = float(command["speed_mps"])
     env = environment or Environment()
+    integrate = prepare_value_integrator(
+        command_heading_rad,
+        command_speed_mps,
+        env,
+        params,
+    )
     steps = max(0, round(horizon_s / params.fixed_step_s))
     output: list[dict[str, float]] = []
     for index in range(steps + 1):
         output.append(
             {
                 "time_s": index * params.fixed_step_s,
-                "north_m": state.north_m,
-                "east_m": state.east_m,
-                "heading_rad": state.heading_rad,
-                "surge_mps": state.surge_mps,
-                "sway_mps": state.sway_mps,
-                "yaw_rate_rps": state.yaw_rate_rps,
-                "rudder_rad": state.rudder_rad,
-                "thrust_fraction": state.thrust_fraction,
+                "north_m": state[0],
+                "east_m": state[1],
+                "heading_rad": state[2],
+                "surge_mps": state[3],
+                "sway_mps": state[4],
+                "yaw_rate_rps": state[5],
+                "rudder_rad": state[6],
+                "thrust_fraction": state[7],
             }
         )
         if index < steps:
-            state = integrate_step(state, target, env, params)
+            state = integrate(*state)
     return output

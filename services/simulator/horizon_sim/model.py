@@ -8,7 +8,9 @@ assumptions, not identified parameters for a real vessel.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 import math
+from typing import Callable
 
 
 TAU = 2.0 * math.pi
@@ -162,6 +164,217 @@ def requested_actuation(
     return requested_rudder, requested_thrust
 
 
+PlantValues = tuple[float, float, float, float, float, float, float, float]
+PlantValueStep = Callable[[float, float, float, float, float, float, float, float], PlantValues]
+
+
+@lru_cache(maxsize=128)
+def prepare_value_integrator(
+    command_heading_rad: float,
+    command_speed_mps: float,
+    environment: Environment,
+    parameters: PlantParameters,
+    controller_enabled: bool = True,
+) -> PlantValueStep:
+    """Bind an exact plant step to one command, environment, and parameter set.
+
+    The authoritative plant normally reuses commands for many ticks and a
+    predictive rollout uses one command for its complete horizon. The bounded
+    cache avoids repeatedly resolving immutable configuration while retaining
+    a single implementation of the numerical step.
+    """
+    dt = parameters.fixed_step_s
+    speed_command_limit_mps = parameters.speed_command_limit_mps
+    heading_kp = parameters.heading_kp
+    yaw_rate_kd = parameters.yaw_rate_kd
+    speed_kp = parameters.speed_kp
+    rudder_limit_rad = parameters.rudder_limit_rad
+    rudder_lag_s = parameters.rudder_lag_s
+    rudder_rate_delta = parameters.rudder_rate_limit_rps * dt
+    thrust_lag_s = parameters.thrust_lag_s
+    thrust_rate_delta = parameters.thrust_rate_limit_per_s * dt
+    damping_surge_linear = parameters.damping_surge_linear
+    damping_surge_quadratic = parameters.damping_surge_quadratic
+    damping_sway_linear = parameters.damping_sway_linear
+    damping_sway_quadratic = parameters.damping_sway_quadratic
+    damping_yaw_linear = parameters.damping_yaw_linear
+    damping_yaw_quadratic = parameters.damping_yaw_quadratic
+    thrust_forward_n = parameters.thrust_forward_n
+    thrust_reverse_n = parameters.thrust_reverse_n
+    rudder_sideforce_gain = parameters.rudder_sideforce_gain
+    rudder_yaw_gain = parameters.rudder_yaw_gain
+    mass_surge_kg = parameters.mass_surge_kg
+    mass_sway_kg = parameters.mass_sway_kg
+    inertia_yaw_kgm2 = parameters.inertia_yaw_kgm2
+    current_north_mps = environment.current_north_mps
+    current_east_mps = environment.current_east_mps
+    environmental_force_n = environment.wind_force_n + environment.wave_force_n
+    environmental_force_e = environment.wind_force_e + environment.wave_force_e
+
+    if controller_enabled:
+        if command_speed_mps < 0.0:
+            target_speed = 0.0
+        elif command_speed_mps > speed_command_limit_mps:
+            target_speed = speed_command_limit_mps
+        else:
+            target_speed = command_speed_mps
+        equilibrium_drag = (
+            damping_surge_linear * target_speed
+            + damping_surge_quadratic * target_speed * abs(target_speed)
+        )
+        equilibrium_thrust = equilibrium_drag / thrust_forward_n
+    else:
+        target_speed = 0.0
+        equilibrium_thrust = 0.0
+
+    def step(
+        north_m: float,
+        east_m: float,
+        heading_rad: float,
+        surge_mps: float,
+        sway_mps: float,
+        yaw_rate_rps: float,
+        rudder_rad: float,
+        thrust_fraction: float,
+    ) -> PlantValues:
+        if controller_enabled:
+            h_error = (command_heading_rad - heading_rad + math.pi) % TAU - math.pi
+            requested_rudder = heading_kp * h_error - yaw_rate_kd * yaw_rate_rps
+            if requested_rudder < -rudder_limit_rad:
+                requested_rudder = -rudder_limit_rad
+            elif requested_rudder > rudder_limit_rad:
+                requested_rudder = rudder_limit_rad
+            requested_thrust = equilibrium_thrust + speed_kp * (target_speed - surge_mps)
+            if requested_thrust < -1.0:
+                requested_thrust = -1.0
+            elif requested_thrust > 1.0:
+                requested_thrust = 1.0
+        else:
+            requested_rudder = 0.0
+            requested_thrust = 0.0
+
+        if rudder_lag_s <= 0.0:
+            rudder_delta = requested_rudder - rudder_rad
+        else:
+            rudder_delta = (requested_rudder - rudder_rad) * dt / rudder_lag_s
+        if rudder_delta < -rudder_rate_delta:
+            rudder_delta = -rudder_rate_delta
+        elif rudder_delta > rudder_rate_delta:
+            rudder_delta = rudder_rate_delta
+        rudder = rudder_rad + rudder_delta
+        if rudder < -rudder_limit_rad:
+            rudder = -rudder_limit_rad
+        elif rudder > rudder_limit_rad:
+            rudder = rudder_limit_rad
+
+        if thrust_lag_s <= 0.0:
+            thrust_delta = requested_thrust - thrust_fraction
+        else:
+            thrust_delta = (requested_thrust - thrust_fraction) * dt / thrust_lag_s
+        if thrust_delta < -thrust_rate_delta:
+            thrust_delta = -thrust_rate_delta
+        elif thrust_delta > thrust_rate_delta:
+            thrust_delta = thrust_rate_delta
+        thrust = thrust_fraction + thrust_delta
+        if thrust < -1.0:
+            thrust = -1.0
+        elif thrust > 1.0:
+            thrust = 1.0
+
+        c = math.cos(heading_rad)
+        s = math.sin(heading_rad)
+        wind_body_x = c * environmental_force_n + s * environmental_force_e
+        wind_body_y = -s * environmental_force_n + c * environmental_force_e
+
+        prop_force = thrust_forward_n * thrust if thrust >= 0.0 else thrust_reverse_n * thrust
+        speed_sq_signed = surge_mps * abs(surge_mps)
+        rudder_side_force = -rudder_sideforce_gain * speed_sq_signed * rudder
+        rudder_yaw_moment = rudder_yaw_gain * speed_sq_signed * rudder
+
+        surge_drag = damping_surge_linear * surge_mps + damping_surge_quadratic * surge_mps * abs(
+            surge_mps
+        )
+        sway_drag = damping_sway_linear * sway_mps + damping_sway_quadratic * sway_mps * abs(
+            sway_mps
+        )
+        yaw_drag = damping_yaw_linear * yaw_rate_rps + damping_yaw_quadratic * yaw_rate_rps * abs(
+            yaw_rate_rps
+        )
+
+        surge_accel = (
+            prop_force + wind_body_x - surge_drag + mass_sway_kg * sway_mps * yaw_rate_rps
+        ) / mass_surge_kg
+        sway_accel = (
+            rudder_side_force + wind_body_y - sway_drag - mass_surge_kg * surge_mps * yaw_rate_rps
+        ) / mass_sway_kg
+        yaw_coriolis = (mass_sway_kg - mass_surge_kg) * surge_mps * sway_mps
+        yaw_accel = (rudder_yaw_moment - yaw_drag - yaw_coriolis) / inertia_yaw_kgm2
+
+        surge = surge_mps + surge_accel * dt
+        sway = sway_mps + sway_accel * dt
+        yaw_rate = yaw_rate_rps + yaw_accel * dt
+        heading = (heading_rad + yaw_rate * dt + math.pi) % TAU - math.pi
+
+        c_new = math.cos(heading)
+        s_new = math.sin(heading)
+        north_rate = c_new * surge - s_new * sway + current_north_mps
+        east_rate = s_new * surge + c_new * sway + current_east_mps
+
+        return (
+            north_m + north_rate * dt,
+            east_m + east_rate * dt,
+            heading,
+            surge,
+            sway,
+            yaw_rate,
+            rudder,
+            thrust,
+        )
+
+    return step
+
+
+def integrate_values(
+    north_m: float,
+    east_m: float,
+    heading_rad: float,
+    surge_mps: float,
+    sway_mps: float,
+    yaw_rate_rps: float,
+    rudder_rad: float,
+    thrust_fraction: float,
+    command_heading_rad: float,
+    command_speed_mps: float,
+    environment: Environment,
+    parameters: PlantParameters,
+    *,
+    controller_enabled: bool = True,
+) -> PlantValues:
+    """Advance the eight horizontal plant values by one fixed step.
+
+    This is the single numerical implementation shared by the authoritative
+    plant and estimated-state predictive rollouts. Keeping scalar values at
+    this boundary lets a rollout avoid allocating a ``VesselState`` at every
+    substep without introducing a second set of dynamics.
+    """
+    return prepare_value_integrator(
+        command_heading_rad,
+        command_speed_mps,
+        environment,
+        parameters,
+        controller_enabled,
+    )(
+        north_m,
+        east_m,
+        heading_rad,
+        surge_mps,
+        sway_mps,
+        yaw_rate_rps,
+        rudder_rad,
+        thrust_fraction,
+    )
+
+
 def integrate_step(
     state: VesselState,
     command: TargetCommand,
@@ -178,102 +391,22 @@ def integrate_step(
     added only in kinematics; hydrodynamic damping acts on through-water body
     velocity.  This is the documented v1 constant-current simplification.
     """
-    dt = parameters.fixed_step_s
-    requested_rudder, requested_thrust = requested_actuation(
-        state,
-        command,
+    values = integrate_values(
+        state.north_m,
+        state.east_m,
+        state.heading_rad,
+        state.surge_mps,
+        state.sway_mps,
+        state.yaw_rate_rps,
+        state.rudder_rad,
+        state.thrust_fraction,
+        command.heading_rad,
+        command.speed_mps,
+        environment,
         parameters,
         controller_enabled=controller_enabled,
     )
-
-    rudder = _rate_limited_first_order(
-        state.rudder_rad,
-        requested_rudder,
-        parameters.rudder_lag_s,
-        parameters.rudder_rate_limit_rps,
-        dt,
-    )
-    rudder = clamp(rudder, -parameters.rudder_limit_rad, parameters.rudder_limit_rad)
-    thrust = _rate_limited_first_order(
-        state.thrust_fraction,
-        requested_thrust,
-        parameters.thrust_lag_s,
-        parameters.thrust_rate_limit_per_s,
-        dt,
-    )
-    thrust = clamp(thrust, -1.0, 1.0)
-
-    c = math.cos(state.heading_rad)
-    s = math.sin(state.heading_rad)
-    environmental_force_n = environment.wind_force_n + environment.wave_force_n
-    environmental_force_e = environment.wind_force_e + environment.wave_force_e
-    wind_body_x = c * environmental_force_n + s * environmental_force_e
-    wind_body_y = -s * environmental_force_n + c * environmental_force_e
-
-    prop_force = (
-        parameters.thrust_forward_n * thrust
-        if thrust >= 0.0
-        else parameters.thrust_reverse_n * thrust
-    )
-    speed_sq_signed = state.surge_mps * abs(state.surge_mps)
-    # A starboard turn requires a port force at the stern and positive yaw.
-    rudder_side_force = -parameters.rudder_sideforce_gain * speed_sq_signed * rudder
-    rudder_yaw_moment = parameters.rudder_yaw_gain * speed_sq_signed * rudder
-
-    surge_drag = (
-        parameters.damping_surge_linear * state.surge_mps
-        + parameters.damping_surge_quadratic * state.surge_mps * abs(state.surge_mps)
-    )
-    sway_drag = (
-        parameters.damping_sway_linear * state.sway_mps
-        + parameters.damping_sway_quadratic * state.sway_mps * abs(state.sway_mps)
-    )
-    yaw_drag = (
-        parameters.damping_yaw_linear * state.yaw_rate_rps
-        + parameters.damping_yaw_quadratic
-        * state.yaw_rate_rps
-        * abs(state.yaw_rate_rps)
-    )
-
-    # Diagonal added-mass approximation with the usual 3-DOF cross terms.
-    surge_accel = (
-        prop_force
-        + wind_body_x
-        - surge_drag
-        + parameters.mass_sway_kg * state.sway_mps * state.yaw_rate_rps
-    ) / parameters.mass_surge_kg
-    sway_accel = (
-        rudder_side_force
-        + wind_body_y
-        - sway_drag
-        - parameters.mass_surge_kg * state.surge_mps * state.yaw_rate_rps
-    ) / parameters.mass_sway_kg
-    yaw_coriolis = (parameters.mass_sway_kg - parameters.mass_surge_kg) * state.surge_mps * state.sway_mps
-    yaw_accel = (rudder_yaw_moment - yaw_drag - yaw_coriolis) / parameters.inertia_yaw_kgm2
-
-    surge = state.surge_mps + surge_accel * dt
-    sway = state.sway_mps + sway_accel * dt
-    yaw_rate = state.yaw_rate_rps + yaw_accel * dt
-    heading = wrap_angle(state.heading_rad + yaw_rate * dt)
-
-    # Semi-implicit kinematics use the newly integrated velocity and heading.
-    c_new = math.cos(heading)
-    s_new = math.sin(heading)
-    north_rate = (
-        c_new * surge - s_new * sway + environment.current_north_mps
-    )
-    east_rate = s_new * surge + c_new * sway + environment.current_east_mps
-
-    return VesselState(
-        north_m=state.north_m + north_rate * dt,
-        east_m=state.east_m + east_rate * dt,
-        heading_rad=heading,
-        surge_mps=surge,
-        sway_mps=sway,
-        yaw_rate_rps=yaw_rate,
-        rudder_rad=rudder,
-        thrust_fraction=thrust,
-    )
+    return VesselState(*values)
 
 
 def actuator_capability(
