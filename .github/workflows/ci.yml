@@ -50,7 +50,11 @@ jobs:
       - name: Start and stop the implemented CPU slice
         env:
           HORIZON_GATE_CPU_ISOLATION: required
-        run: ./scripts/launch_cpu.sh --smoke-seconds 1
+        run: >-
+          ./scripts/launch_cpu.sh
+          --scenario scenarios/normal_transit.json
+          --candidate A1
+          --smoke-seconds 1
       - name: Upload sanitized runtime diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4

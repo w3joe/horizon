@@ -172,3 +172,23 @@ component deadline enforcement, fail-closed scheduling configuration, and
 startup lifecycle behavior. It does not establish the end-to-end 40 ms timing
 claim; that evidence must come from the reserved-host command above and target
 hardware qualification.
+
+## Generic CI launcher smoke boundary
+
+Run `35707477613` passed all core checks but the launcher smoke did not obtain
+a joined A5 recovery receipt on the shared two-vCPU runner. The startup barrier
+worked as designed, but all 15 recovery decisions missed the unchanged 40 ms
+deadline; one recorded evaluation took 60.9 ms. The launcher correctly refused
+to treat those watchdog receipts as successful joined evidence.
+
+The hosted launcher smoke therefore uses `scenarios/normal_transit.json`, A1,
+and a one-second smoke interval. It still starts the complete process slice
+with required Linux affinity, exercises the startup pause and certified resume,
+and requires the unchanged public verification of an accepted receipt joined
+across the governor input, assurance decision, gate receipt, public plant
+snapshot, and later fused actuator observation. This establishes lifecycle,
+topology, routing, and nominal joined-chain behavior on the generic runner.
+
+The launcher defaults remain the A5 crossing scenario. Recovery timing and the
+end-to-end 40 ms integration claim require the reserved-host timing proofs
+above; the nominal hosted launcher smoke does not provide that evidence.
