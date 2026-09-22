@@ -84,6 +84,7 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
         "seed": bundle["seed"],
         "split": bundle["split"],
         "method_provenance": bundle.get("method_provenance"),
+        "paired_branch_lineage": bundle.get("paired_branch_lineage"),
         "timing_model": bundle.get("timing_model"),
         "cadence": bundle.get("cadence"),
         "gate_recovery": bundle.get("gate_recovery"),

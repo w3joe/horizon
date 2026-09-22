@@ -484,3 +484,50 @@ def test_odd_and_pairing_audits_keep_out_of_domain_cases_visible() -> None:
     report = paired_branch_invariants([left, right])
     assert report[0]["pairing_status"] == "complete"
     assert report[0]["common_autonomy_proposal_prefix_count"] == 1
+
+
+def test_pairing_allows_proposal_divergence_after_candidate_service_overrun() -> None:
+    identity = {
+        "initial_state_hash": "initial",
+        "scenario_hash": "scenario",
+        "seed": 1,
+        "observation_tape_hash": "observation",
+        "fault_schedule_hash": "fault",
+        "ai_policy_version": "policy",
+    }
+    common = {
+        "source_id": "fixture",
+        "origin_snapshot_time_s": 0.0,
+        "command": {"heading_rad": 0.0, "speed_mps": 2.0},
+    }
+    event = {
+        "stage": "candidate",
+        "started_monotonic_ns": 100,
+        "declared_service_ns": 20,
+        "scheduled_completion_ns": 140,
+    }
+    branches = []
+    for branch_id, speed in (("left", 1.0), ("right", 3.0)):
+        branches.append(
+            {
+                "episode_id": "pair-latency",
+                "branch_id": branch_id,
+                "paired_branch_lineage": {
+                    **identity,
+                    "autonomy_proposal_trace": [
+                        common,
+                        {
+                            "source_id": "fixture",
+                            "origin_snapshot_time_s": 0.2,
+                            "command": {"heading_rad": 0.0, "speed_mps": speed},
+                        },
+                    ],
+                },
+                "gate_receipts": [],
+                "timing_model": {"events": [event]},
+            }
+        )
+
+    report = paired_branch_invariants(branches)
+    assert report[0]["common_autonomy_proposal_prefix_count"] == 1
+    assert report[0]["first_candidate_service_overrun_proposal_indices"] == [0, 0]

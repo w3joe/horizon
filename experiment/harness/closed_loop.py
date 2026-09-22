@@ -43,6 +43,21 @@ MODELED_LATENCY_PROFILES_NS = {
         "gate": 60_000_000,
         "actuator": 20_000_000,
     },
+    # Local single-process acceptance load.  Sensing, fusion, and AI work are
+    # deliberately nonzero, while the post-assembly path reserves one 20 ms
+    # plant quantum for candidate work.  Recovery priming, gate validation,
+    # and plant dispatch are synchronous in this harness and their measured
+    # wall durations are retained in diagnostics.  This profile is not a
+    # production latency claim.
+    "local-acceptance-load-v1": {
+        "sensing": 20_000_000,
+        "fusion": 20_000_000,
+        "ai": 40_000_000,
+        "recovery_prime": 0,
+        "candidate": 20_000_000,
+        "gate": 0,
+        "actuator": 0,
+    },
 }
 
 

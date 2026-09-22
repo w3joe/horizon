@@ -64,6 +64,29 @@ def _semantic_proposal_prefix(trace: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def _first_candidate_service_overrun(bundle: dict[str, Any]) -> int | None:
+    """Return the proposal index where host work first exceeds declared service.
+
+    Candidate wall time is part of the treatment: the scheduler floors atomic
+    completion at the decision's emitted timestamp.  Once that floor adds a
+    plant quantum, later observations can legitimately differ even before a
+    protected command is accepted.
+    """
+
+    candidate_events = [
+        event
+        for event in bundle.get("timing_model", {}).get("events", [])
+        if event.get("stage") == "candidate"
+    ]
+    for index, event in enumerate(candidate_events):
+        declared_completion = int(event["started_monotonic_ns"]) + int(
+            event["declared_service_ns"]
+        )
+        if int(event["scheduled_completion_ns"]) > declared_completion:
+            return index
+    return None
+
+
 def paired_branch_invariants(bundles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Validate common state/exogenous inputs and record legitimate divergence.
 
@@ -111,16 +134,32 @@ def paired_branch_invariants(bundles: list[dict[str, Any]]) -> list[dict[str, An
         first_divergence = min(
             (len(trace) for trace in traces if len(trace) != common), default=None
         )
-        # A divergence before any command is accepted exposes exogenous or AI
-        # nondeterminism.  A shorter trace caused by terminal censoring is not
-        # judged divergent here; its explicit terminal outcome remains visible.
+        first_service_overruns = [
+            _first_candidate_service_overrun(branch) for branch in branches
+        ]
+        earliest_service_overrun = min(
+            (index for index in first_service_overruns if index is not None),
+            default=None,
+        )
+        # A divergence before any accepted command or architecture-specific
+        # candidate-service overrun exposes exogenous or AI nondeterminism. A
+        # shorter trace caused by terminal censoring is not judged divergent;
+        # its explicit terminal outcome remains visible.
         if first_divergence is not None:
             divergent_times = [
                 trace[first_divergence]
                 for trace in traces
                 if len(trace) > first_divergence
             ]
-            if len(set(divergent_times)) > 1 and all(time is None for time in first_command_times):
+            divergence_precedes_service_effect = (
+                earliest_service_overrun is None
+                or first_divergence <= earliest_service_overrun
+            )
+            if (
+                len(set(divergent_times)) > 1
+                and all(time is None for time in first_command_times)
+                and divergence_precedes_service_effect
+            ):
                 raise ValueError(
                     f"episode {episode_id} autonomy proposals diverged before a command"
                 )
@@ -131,6 +170,7 @@ def paired_branch_invariants(bundles: list[dict[str, Any]]) -> list[dict[str, An
                 "identity_fields": {field: next(iter(values[field])) for field in PAIR_IDENTITY_FIELDS},
                 "common_autonomy_proposal_prefix_count": common,
                 "first_accepted_command_times_s": first_command_times,
+                "first_candidate_service_overrun_proposal_indices": first_service_overruns,
                 "pairing_status": "complete",
             }
         )

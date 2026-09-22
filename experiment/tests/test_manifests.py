@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import json
 
 import pytest
 
@@ -190,3 +192,26 @@ def test_r1_r2_frozen_completion_plan_has_immutable_partitions_and_hashes() -> N
     assert plan["episode_contract"]["require_predeclared_censoring"] is True
     assert all(len(value) == 64 for value in plan["frozen_artifact_hashes"].values())
     assert splits["splits"]["development"]["frozen"] is True
+
+
+def test_r1_r2_local_acceptance_plan_is_versioned_and_self_hashed() -> None:
+    plan = load_json(ROOT / "manifests" / "r1-r2-local-acceptance-development.json")
+    expected = plan.pop("content_hash")
+    actual = hashlib.sha256(
+        json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    assert actual == expected
+    assert plan["protocol_parent_hash"] == (
+        "bc2329681094bcba3f8e769ef6279549e6a9f66c6df2799e43c627acb939252e"
+    )
+    assert plan["timing_profile_id"] == "local-acceptance-load-v1"
+    assert plan["timing_profile_definition_ns"] == {
+        "sensing": 20_000_000,
+        "fusion": 20_000_000,
+        "ai": 40_000_000,
+        "recovery_prime": 0,
+        "candidate": 20_000_000,
+        "gate": 0,
+        "actuator": 0,
+    }

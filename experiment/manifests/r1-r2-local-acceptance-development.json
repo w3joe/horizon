@@ -1,0 +1,119 @@
+{
+  "schema_version": "0.1.0",
+  "study_id": "r1-r2-local-acceptance-development-v1",
+  "execution_status": "frozen_development_local_acceptance_evidence",
+  "experiment_mode": "full_pipeline_closed_loop",
+  "split": "development",
+  "protocol_frozen": true,
+  "calibration_hash": null,
+  "timing_profile_id": "local-acceptance-load-v1",
+  "episode_contract": {
+    "require_predeclared_censoring": true,
+    "predeclared_censoring": {
+      "reason": "scenario_horizon_reached",
+      "purpose": "The simulator horizon is the predeclared terminal boundary; early terminal safety events remain scored."
+    },
+    "independent_recovery_boundary": {
+      "method": "independent-unprotected-finite-library-v1",
+      "source_command": {
+        "heading_offset_rad": 0.0,
+        "speed_mps": 6.0
+      },
+      "sample_times_s": [
+        10.0,
+        20.0,
+        30.0,
+        40.0
+      ],
+      "minimum_hull_clearance_m": 0.0,
+      "command_library": [
+        {
+          "heading_offset_rad": 0.0,
+          "speed_mps": 0.0
+        },
+        {
+          "heading_offset_rad": 0.3490658503988659,
+          "speed_mps": 2.0
+        },
+        {
+          "heading_offset_rad": -0.3490658503988659,
+          "speed_mps": 2.0
+        },
+        {
+          "heading_offset_rad": 0.6108652381980153,
+          "speed_mps": 2.0
+        },
+        {
+          "heading_offset_rad": -0.6108652381980153,
+          "speed_mps": 2.0
+        }
+      ]
+    }
+  },
+  "candidate_ids": [
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5"
+  ],
+  "health_ids": [
+    "H_FIXED"
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "crossing-recoverable-v1",
+      "scenario_family": "crossing",
+      "expected_recoverability_class": "declared_recoverable",
+      "headline": false,
+      "stochastic": true,
+      "seed_count": 1,
+      "seed_offset": 0,
+      "observation_tape_hash": "73c0cc86e4f7f9c3559b63e549a889b8413c5236c5d52d538f15faede80cea04",
+      "fault_schedule_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "ai_policy_version": "decision-ai-fixture-unsafe_straight-v1"
+    },
+    {
+      "scenario_id": "dense-traffic-v1",
+      "scenario_family": "multi_contact",
+      "expected_recoverability_class": "declared_recoverable",
+      "headline": false,
+      "stochastic": true,
+      "seed_count": 1,
+      "seed_offset": 1,
+      "observation_tape_hash": "b6b2b18ba2afff13767278884288077dc4151829c512bf72dba873ba0e2e426d",
+      "fault_schedule_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "ai_policy_version": "decision-ai-fixture-unsafe_straight-v1"
+    }
+  ],
+  "frozen_artifact_hashes": {
+    "candidate_capabilities": "4e82927813e819be3a45a8ebfc5ea6c6c29ecd3b98b1e98dd2f100008363d323",
+    "selection_rule": "11e353ea5f823cc8523c3f6b9d50a3f6d20fb8558344c85ba6fa3c254a36c5a6",
+    "contract_schema": "661b3e5c334010deb33249217a283ae6b7aa7b512e9c6ba1b724f769d8b41b40",
+    "scoring_protocol": "2652bb7b5a9c93c22357b58b9001a90753712796d27fe9a0789a2a403c93e523",
+    "scenario_bundle": "0085b75065e85b65544d9ca3a86a367a0b6764a95405d994234996311d9f48bc",
+    "data_partition_manifest": "d180ba93ddcfe54576a3c7c7feae256061b1e90ea37c12a39a5d463e7805ad74",
+    "harness_code": "77b9e87559e0af87e9db7c224cfc1f8e56dc8e299aa629d3921511e5c329a6f8",
+    "geography_bundle": "67ed950b552dca5925a99b31cc59a48b5075ab0c2fc9a8c28ddd22f2a82de869",
+    "traffic_bundle": "82fe5c70f5ae7389ac7a6335cbad35134dbf16184375e9b7980f174f74542da1",
+    "maritime_data_manifest": "44bebc1c4aa711c1e1e0741846b790f540a25f57d33be27273960b8147415864"
+  },
+  "protocol_parent_hash": "bc2329681094bcba3f8e769ef6279549e6a9f66c6df2799e43c627acb939252e",
+  "claim_scope": "local_single_process_integration_only; conservative-service-v1 remains the overload stress profile",
+  "timing_profile_definition_ns": {
+    "sensing": 20000000,
+    "fusion": 20000000,
+    "ai": 40000000,
+    "recovery_prime": 0,
+    "candidate": 20000000,
+    "gate": 0,
+    "actuator": 0
+  },
+  "local_code_sha256": {
+    "experiment/harness/closed_loop.py": "97cc5c4d087b4380a8b6f0121685350c72d8d7c04af3b255b7c2559496103da5",
+    "experiment/harness/runner.py": "dc3a4ffaaa9eb2b6c249a6a03eb007d5afb3b8528a7a51b04c39c80ad6a7d582",
+    "experiment/harness/validity.py": "9e979faa225bcf65947c9e19a494222cf943c06f6cdceb8e9dcbf1b39dcf78f9",
+    "services/fusion/horizon_fusion/core.py": "b0576edda4337c7d898723af4d8f99e888b61c5a21b70372f242272f5adb0a94"
+  },
+  "content_hash": "58ef4c18326238f5d0f40c741d19e216aa7a79da215ad1a44e81cd7d1bd273d3"
+}

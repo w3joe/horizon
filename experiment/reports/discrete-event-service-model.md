@@ -4,13 +4,14 @@ The controller-isolation harness uses `fixed-step-discrete-service-v1`. This is 
 simulation model, not a measurement of production end-to-end latency. Safety outcomes from this
 harness are conditional on the frozen stage latencies in each episode request and result.
 
-Three development profiles are registered before execution:
+Four development profiles are registered before execution:
 
 | Profile | Sensing | Fusion | AI | Recovery prime | Candidate | Gate | Actuator |
 |---|---:|---:|---:|---:|
 | `idealized-front-zero-v1` | 0 ms | 0 ms | 0 ms | 0 ms | 20 ms | 20 ms | 0 ms |
 | `all-stages-20ms-v1` | 20 ms | 20 ms | 20 ms | 20 ms | 20 ms | 20 ms | 20 ms |
 | `conservative-service-v1` | 20 ms | 20 ms | 40 ms | 20 ms | 60 ms | 60 ms | 20 ms |
+| `local-acceptance-load-v1` | 20 ms | 20 ms | 40 ms | 0 ms | 20 ms | 0 ms | 0 ms |
 
 The first profile is an explicitly idealized diagnostic reference. It cannot support a headline
 architecture conclusion. The second profile exposes proposal and evidence loss caused by a plant
@@ -18,6 +19,15 @@ event during front-end service; those fail-closed outcomes remain in the results
 the earlier host-development envelope upward to fixed plant-grid service assumptions. It remains a
 simulation contract, not a production latency measurement. Profiles are selected in the study plan
 before execution, and the harness rejects per-stage values that do not match the selected profile.
+
+The fourth profile is the declared acceptance load for the current single-process integration. It
+keeps nonzero sensing, fusion, and AI delays from the conservative profile and reserves one 20 ms
+plant quantum after governor-input assembly for candidate work. Recovery priming, gate validation,
+and simulator dispatch are synchronous local calls, so their simulated service is zero and their
+actual wall durations are retained in diagnostics. This can establish local integration behavior
+under the 40 ms decision contract; it cannot establish production network, gate-host, recovery-prime,
+or actuator latency. The conservative profile remains the overload stress condition and is expected
+to fail closed when its post-assembly service exceeds the decision lifetime.
 
 Nonzero stage times are bounded to two seconds and must be multiples of the 20 ms plant period.
 The candidate completion time is the first plant-grid event at or after both its declared service
