@@ -269,7 +269,10 @@ def _drive_to_a1_intervention(stack: HorizonStack) -> dict:
             return attempt
         return None
 
-    accepted = wait_for(next_result, timeout_s=12.0, interval_s=0.001)
+    # Pace fixture requests at the 20 Hz control-loop cadence. Faster polling
+    # only re-serializes the same fusion tick and can starve the service stack
+    # on the two-CPU hosted runner that exercises lane isolation.
+    accepted = wait_for(next_result, timeout_s=12.0, interval_s=0.05)
     # Retain late decisions and gate rejections as non-successful cycles. A
     # missed deadline is never submitted or relabeled as an intervention, and
     # a rejected receipt must carry no actuation.

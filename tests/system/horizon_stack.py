@@ -60,7 +60,7 @@ def wait_for(
     check: Callable[[], Any],
     *,
     timeout_s: float = 12.0,
-    interval_s: float = 0.03,
+    interval_s: float = 0.1,
 ) -> Any:
     deadline = time.monotonic() + timeout_s
     last: Any = None
