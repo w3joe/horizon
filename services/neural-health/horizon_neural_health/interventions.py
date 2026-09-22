@@ -173,7 +173,8 @@ def run_sae_direction_intervention(
             [rng.gauss(0.0, 1.0) for _ in range(direction.numel())], dtype=torch.float32
         )
         random_direction = random_direction / random_direction.norm()
-        perturbation_norm = abs(float(coefficient))
+        signed_coefficient = float(coefficient)
+        perturbation_norm = abs(signed_coefficient)
 
         def direction_factory(selected):
             def factory(count):
@@ -187,7 +188,7 @@ def run_sae_direction_intervention(
                         raise ValueError("decoded SAE direction does not match layer channels")
                     delta = selected.to(output.device, output.dtype)[None, :, None, None]
                     delta = delta.expand_as(output)
-                    delta = delta / delta.norm().clamp_min(1e-12) * perturbation_norm
+                    delta = delta / delta.norm().clamp_min(1e-12) * signed_coefficient
                     return output + delta
 
                 return layer.register_forward_hook(edit)

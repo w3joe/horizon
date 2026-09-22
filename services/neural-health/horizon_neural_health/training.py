@@ -42,6 +42,8 @@ def build_reference(
             l1=float(options.get("l1", 1e-3)),
             seed=int(options.get("seed", 0)),
             tolerance=float(options.get("tolerance", 1e-7)),
+            optimizer=str(options.get("optimizer", "adam")),
+            patience=int(options.get("patience", 25)),
         )
         parameters["offline_intervention_validation"] = intervention_validation or {
             "completed_controls": False,

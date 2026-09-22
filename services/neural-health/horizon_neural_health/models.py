@@ -100,8 +100,15 @@ def fit_h4(
     l1: float = 1e-3,
     seed: int = 0,
     tolerance: float = 1e-7,
+    optimizer: str = "adam",
+    patience: int = 25,
 ) -> dict:
-    """Fit a small ReLU SAE with deterministic vectorized full-batch SGD."""
+    """Fit a small ReLU SAE with deterministic vectorized full-batch updates.
+
+    Adam is the default because the earlier fixed-step SGD reference continued
+    descending at its epoch cap and therefore could not support the H4 claim
+    gate.  Full-batch updates preserve deterministic fitting for a frozen cache.
+    """
     import numpy as np
 
     if type(epochs) is not int or epochs < 1:
@@ -110,6 +117,10 @@ def fit_h4(
         raise ValueError("SAE learning rate must be finite and positive")
     if not math.isfinite(tolerance) or tolerance < 0 or not math.isfinite(l1) or l1 < 0:
         raise ValueError("SAE tolerance and sparsity weight must be finite and nonnegative")
+    if optimizer not in {"adam", "sgd"}:
+        raise ValueError("SAE optimizer must be adam or sgd")
+    if type(patience) is not int or patience < 1:
+        raise ValueError("SAE patience must be a positive integer")
     matrix = _matrix(rows)
     normalized, mean, scale, constant = _standardize(matrix)
     width = normalized.shape[1]
@@ -119,8 +130,15 @@ def fit_h4(
     decoder = encoder.T.copy()
     bias = np.zeros(hidden, dtype=np.float64)
     losses: list[float] = []
-    stable = 0
-    for _ in range(int(epochs)):
+    converged = False
+    adam_m = {
+        "encoder": np.zeros_like(encoder),
+        "decoder": np.zeros_like(decoder),
+        "bias": np.zeros_like(bias),
+    }
+    adam_v = {key: np.zeros_like(value) for key, value in adam_m.items()}
+    beta1, beta2, epsilon = 0.9, 0.999, 1e-8
+    for step in range(1, int(epochs) + 1):
         pre = normalized @ encoder.T + bias
         code = np.maximum(pre, 0.0)
         reconstruction = code @ decoder.T
@@ -135,15 +153,31 @@ def fit_h4(
         gradient_pre = gradient_code * (pre > 0)
         gradient_encoder = gradient_pre.T @ normalized
         gradient_bias = gradient_pre.sum(axis=0)
-        encoder -= learning_rate * gradient_encoder
-        decoder -= learning_rate * gradient_decoder
-        bias -= learning_rate * gradient_bias
-        if len(losses) > 1 and abs(losses[-2] - losses[-1]) <= tolerance:
-            stable += 1
-            if stable >= 10:
+        gradients = {
+            "encoder": gradient_encoder,
+            "decoder": gradient_decoder,
+            "bias": gradient_bias,
+        }
+        parameters = {"encoder": encoder, "decoder": decoder, "bias": bias}
+        for name, parameter in parameters.items():
+            gradient = gradients[name]
+            if optimizer == "adam":
+                adam_m[name] = beta1 * adam_m[name] + (1 - beta1) * gradient
+                adam_v[name] = beta2 * adam_v[name] + (1 - beta2) * gradient**2
+                first = adam_m[name] / (1 - beta1**step)
+                second = adam_v[name] / (1 - beta2**step)
+                parameter -= learning_rate * first / (np.sqrt(second) + epsilon)
+            else:
+                parameter -= learning_rate * gradient
+        if len(losses) > patience:
+            window_start = losses[-patience - 1]
+            window_best = min(losses[-patience:])
+            relative_improvement = max(0.0, window_start - window_best) / max(
+                1.0, abs(window_start)
+            )
+            if relative_improvement <= tolerance:
+                converged = True
                 break
-        else:
-            stable = 0
     final_code = np.maximum(normalized @ encoder.T + bias, 0.0)
     dead = int((np.abs(final_code).max(axis=0) <= 1e-10).sum())
     return {
@@ -154,14 +188,18 @@ def fit_h4(
         "bias": bias.tolist(),
         "l1": float(l1),
         "seed": int(seed),
+        "optimizer": optimizer,
+        "hidden_features": hidden,
         "fit_samples": int(matrix.shape[0]),
         "epochs_completed": len(losses),
         "epochs_requested": epochs,
         "learning_rate": float(learning_rate),
         "convergence_tolerance": float(tolerance),
+        "convergence_patience": patience,
+        "convergence_rule": "relative_objective_improvement_over_patience_window",
         "initial_loss": losses[0],
         "final_loss": losses[-1],
-        "converged": stable >= 10,
+        "converged": converged,
         "dead_features": dead,
         "constant_input_features": constant,
     }

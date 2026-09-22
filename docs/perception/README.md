@@ -26,7 +26,7 @@ All methods return the bounded `PerceptionHealth` record described in `configs/p
 - H1 adds exposure, blur, occlusion, frozen-frame, timestamp, horizon, and temporal-output checks.
 - H2 adds a regularized diagonal-covariance Mahalanobis distance on a fixed pooled embedding.
 - H3 adds PCA reconstruction error and activation novelty.
-- H4 adds a small sparse autoencoder. Fitting may precede causal controls, but runtime H4 remains `unknown` until matched, random-direction, and equal-norm controls pass a separate claim gate.
+- H4 adds a sparse autoencoder. Fitting may precede causal controls, but runtime H4 remains `unknown` until matched, random-direction, and equal-norm controls pass a separate claim gate. The current protocol is documented in [`h4-validation.md`](h4-validation.md).
 
 H2-H4 use cached real hook outputs. The cache reader applies a deterministic fixed grouped projection, normally to 64 dimensions, before fitting so covariance/PCA work stays bounded. The projection dimension, selected layer, source groups, fit split, model pin, and reference hash belong in the immutable artifact.
 
