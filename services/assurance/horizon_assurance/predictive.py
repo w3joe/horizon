@@ -651,6 +651,12 @@ class BoundedPredictiveChecker:
                     )
                     if not math.isfinite(margin) or margin < 0.0:
                         complete = False
+                        # Dense scenes need the original early fall-through so
+                        # deadline checks remain bounded by contact count. The
+                        # partial-certificate scan targets the common single-
+                        # contact recovery case exercised by the system suite.
+                        if len(active_contact_ids) > 1:
+                            break
                     else:
                         contact_chunk_certificates[(contact_id, sample_index)] = (
                             margin,
