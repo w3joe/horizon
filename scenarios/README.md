@@ -32,3 +32,9 @@ kill, transport-delay, and load injection. A07 owns recorded-perception and
 explicit neural fault artifacts. Recipes retain those dependencies instead of
 substituting a simulator fault or copying one physical fixture under a new
 claim.
+
+`singapore_traffic_mirror_synthetic.json` loads its traffic from the checked-in
+CC0 `TrafficSnapshot` fixture under `fixtures/`. It contains no received AIS
+records. The scenario schedules observable stale and dropout behavior while a
+non-transmitting contact remains independently visible to simulated radar and
+camera.

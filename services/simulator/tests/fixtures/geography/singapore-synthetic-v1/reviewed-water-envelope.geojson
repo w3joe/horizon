@@ -1,0 +1,1 @@
+{"features":[{"geometry":{"coordinates":[[[103.58,1.12],[104.12,1.12],[104.12,1.46],[103.58,1.46],[103.58,1.12]]],"type":"Polygon"},"properties":{"buffer_m":50,"kind":"synthetic_reviewed_water","reviewer":"Horizon simulator fixture review v1","source":"generated synthetic","uncertainty_m":25},"type":"Feature"}],"type":"FeatureCollection"}

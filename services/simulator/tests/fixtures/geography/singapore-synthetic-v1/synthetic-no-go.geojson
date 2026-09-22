@@ -1,0 +1,1 @@
+{"features":[{"geometry":{"coordinates":[[[103.82,1.27],[103.88,1.27],[103.88,1.31],[103.82,1.31],[103.82,1.27]]],"type":"Polygon"},"properties":{"buffer_m":20,"kind":"synthetic_no_go","reviewer":"Horizon simulator fixture review v1","source":"generated synthetic","uncertainty_m":10},"type":"Feature"}],"type":"FeatureCollection"}

@@ -108,3 +108,32 @@ and explicit `ActuatorCapability`; it cannot clone online simulator truth.
 normalized runner boundary for the visible `STUB` CPU smoke candidate. A1–A5
 must use the separate assurance/gate integration and intentionally raise until
 that adapter is connected.
+
+## Offline Singapore geography and traffic mirror
+
+`scenarios/singapore_traffic_mirror_synthetic.json` is the licence-safe,
+network-free traffic mirror fixture. Its `traffic_snapshot` reference is
+SHA-256 pinned. `horizon_sim.traffic_snapshot` validates a bounded provisional
+`TrafficSnapshot` record and converts it to the existing `TrafficSpec` plant
+type. After initialization, the simulator plant is truth: radar, camera, and
+AIS observations come from separate seeded noise streams. The fixture includes
+a stale AIS report, a target-specific AIS dropout, and a radar/camera-only
+contact. These affect observations and never delete or move a traffic plant.
+
+The shared contract schema does not yet define `TrafficSnapshot` or
+`GeographyBundle`. The local adapters use schema versions `0.1.0` and
+`horizon.geography-bundle.v1` respectively. Integration must either add
+equivalent bounded types to `packages/contracts/schema/horizon.schema.json` or
+translate a future central type at these adapter boundaries. Required traffic
+fields are: mode and rights provenance, source and local-frame hashes, bounded
+constant-course motion assumptions, counts, unique vessel IDs, finite NED
+state, positive hull dimensions, report age/health/uncertainty, identity
+generation, and simulated-sensor visibility. Required geography fields are:
+disjoint visual/safety layer allowlists, WGS84 bounds and origin, source and
+derived hashes, licence/attribution, extraction and simplification records,
+and explicit simulation review metadata for every enabled safety layer.
+
+`horizon_sim.geography.load_geography_bundle` verifies the complete bundle,
+including GeoJSON bounds/topology, derived hashes, safety review status, and
+static WGS84-to-NED checkpoints. Display-only OSM/GEBCO layers therefore cannot
+be passed into a plant safety query by naming them as safety layers.

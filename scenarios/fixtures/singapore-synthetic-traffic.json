@@ -1,0 +1,94 @@
+{
+  "contract_type": "TrafficSnapshot",
+  "schema_version": "0.1.0",
+  "snapshot_id": "singapore-synthetic-traffic-v1",
+  "mode": "synthetic_offline",
+  "selection_time_utc": "2026-09-22T12:00:00Z",
+  "provenance": {
+    "source_kind": "generated_synthetic",
+    "source_artifact_sha256": "5ac10bc39fe48ad7a62608c5958ffaf530036f352120a49926b1eebe46497de1",
+    "rights": "CC0-1.0; generated Horizon test fixture; no received AIS records",
+    "redistribution_allowed": true
+  },
+  "local_frame": {
+    "frame": "NED",
+    "origin_wgs84": {
+      "latitude_deg": 1.25,
+      "longitude_deg": 103.85,
+      "height_m": 0.0
+    },
+    "sha256": "2c2a62fe9bc551f3192e198c8aeb42aa21472529ed289e839dceb02268348ba2"
+  },
+  "motion_model": {
+    "kind": "constant_course_speed",
+    "horizon_s": 180.0
+  },
+  "counts": {
+    "total_candidates": 4,
+    "selected": 4,
+    "excluded": 0,
+    "exclusion_reasons": {}
+  },
+  "vessels": [
+    {
+      "vessel_id": "synthetic-cargo-eastbound",
+      "position_ne_m": [360.0, -260.0],
+      "heading_rad": 1.5707963267948966,
+      "speed_mps": 4.2,
+      "hull": {"length_m": 120.0, "beam_m": 22.0, "draft_m": 7.0},
+      "dimensions_assumed": false,
+      "report": {
+        "age_s": 2.0,
+        "identity_generation": 1,
+        "position_uncertainty_m": 18.0,
+        "source_health": "healthy"
+      },
+      "simulated_observations": {"radar": true, "camera": true, "ais": true}
+    },
+    {
+      "vessel_id": "synthetic-ais-dropout",
+      "position_ne_m": [220.0, 170.0],
+      "heading_rad": -1.5707963267948966,
+      "speed_mps": 3.5,
+      "hull": {"length_m": 78.0, "beam_m": 15.0, "draft_m": 4.5},
+      "dimensions_assumed": true,
+      "report": {
+        "age_s": 5.0,
+        "identity_generation": 1,
+        "position_uncertainty_m": 30.0,
+        "source_health": "healthy"
+      },
+      "simulated_observations": {"radar": true, "camera": true, "ais": true}
+    },
+    {
+      "vessel_id": "synthetic-stale-ais",
+      "position_ne_m": [440.0, 90.0],
+      "heading_rad": 3.141592653589793,
+      "speed_mps": 2.8,
+      "hull": {"length_m": 64.0, "beam_m": 12.0, "draft_m": 3.8},
+      "dimensions_assumed": true,
+      "report": {
+        "age_s": 35.0,
+        "identity_generation": 2,
+        "position_uncertainty_m": 75.0,
+        "source_health": "degraded"
+      },
+      "simulated_observations": {"radar": true, "camera": true, "ais": true}
+    },
+    {
+      "vessel_id": "synthetic-radar-only",
+      "position_ne_m": [125.0, -110.0],
+      "heading_rad": 0.35,
+      "speed_mps": 1.7,
+      "hull": {"length_m": 18.0, "beam_m": 5.0, "draft_m": 1.5},
+      "dimensions_assumed": true,
+      "report": {
+        "age_s": 0.0,
+        "identity_generation": 1,
+        "position_uncertainty_m": 8.0,
+        "source_health": "unknown"
+      },
+      "simulated_observations": {"radar": true, "camera": true, "ais": false}
+    }
+  ]
+}

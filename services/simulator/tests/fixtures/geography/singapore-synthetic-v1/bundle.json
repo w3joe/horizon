@@ -1,0 +1,37 @@
+{
+  "assurance_status": "simulation-only",
+  "bundle_id": "singapore-area-synthetic-fixture-v1",
+  "local_ned_origin": {
+    "height_m": 0.0,
+    "latitude_deg": 1.25,
+    "longitude_deg": 103.85
+  },
+  "safety_layers": [
+    "reviewed-water-envelope.geojson",
+    "synthetic-no-go.geojson"
+  ],
+  "schema_version": "horizon.geography-bundle.v1",
+  "source_manifest": "sources.json",
+  "transform_checkpoints": [
+    {
+      "ned_m": [0.0, 0.0, 0.0],
+      "wgs84": [1.25, 103.85, 0.0]
+    },
+    {
+      "ned_m": [-16584.285632, -33389.581411, 109.104401],
+      "wgs84": [1.1, 103.55, 0.0]
+    },
+    {
+      "ned_m": [27645.54814, 33384.327344, 147.688552],
+      "wgs84": [1.5, 104.15, 0.0]
+    }
+  ],
+  "transform_tolerance_m": 0.05,
+  "visual_layers": [
+    "land.geojson",
+    "shoreline.geojson",
+    "seamarks.geojson",
+    "bathymetry-contours.geojson"
+  ],
+  "wgs84_bbox": [103.55, 1.1, 104.15, 1.5]
+}

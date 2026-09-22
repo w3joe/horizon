@@ -35,6 +35,7 @@ DEFAULT_SENSORS = (
     SensorDefinition("imu", "navigation_environment", 20.0, 0.02, 0.15, "rad,rad/s", "BODY/NED"),
     SensorDefinition("depth", "navigation_environment", 2.0, 0.08, 1.0, "m", "NED"),
     SensorDefinition("radar", "obstacle_perception", 2.0, 0.12, 1.0, "m,m/s", "NED"),
+    SensorDefinition("camera", "obstacle_perception", 5.0, 0.08, 0.5, "m,m/s", "NED"),
     SensorDefinition("ais", "obstacle_perception", 1.0, 0.60, 3.0, "m,m/s", "NED"),
     SensorDefinition(
         "peer_intent", "inter_ship_communications", 1.0, 0.20, 2.0, "rad,m/s", "NED"
@@ -73,6 +74,7 @@ class SensorSuite:
         self._pending: list[tuple[int, int, dict[str, Any]]] = []
         self._tie_breaker = 0
         self.latest: dict[str, dict[str, Any]] = {}
+        self._stale_ais_positions: dict[tuple[str, str], tuple[float, float]] = {}
         bootstrap = random.Random(_derived_seed(seed, "public-bootstrap-estimate"))
         self._bootstrap_error = {
             "north_m": bootstrap.gauss(0.0, 0.65),
@@ -159,7 +161,9 @@ class SensorSuite:
                     "received_monotonic_ns": received_ns,
                     "valid_until_monotonic_ns": received_ns
                     + round(definition.validity_s * 1e9),
-                    "clock_uncertainty_ms": 2.0 if source_id != "ais" else 100.0,
+                    "clock_uncertainty_ms": (
+                        100.0 if source_id == "ais" else 12.0 if source_id == "camera" else 2.0
+                    ),
                 },
                 "units": definition.units,
                 "frame": definition.frame,
@@ -299,13 +303,47 @@ class SensorSuite:
                     }
                 )
             return {"claims": claims}
-        if source_id in {"radar", "ais"}:
+        if source_id in {"radar", "camera", "ais"}:
             contacts: list[dict[str, Any]] = []
-            sigma = 1.2 if source_id == "radar" else 4.0
+            sigma = {"radar": 1.2, "camera": 6.0, "ais": 4.0}[source_id]
             for spec, state in traffic:
+                if not getattr(spec.observation_profile, source_id):
+                    continue
+                if source_id == "ais" and any(
+                    fault.parameters.get("vessel_id") in {None, spec.vessel_id}
+                    for fault in self._active(faults, "ais_dropout", time_s)
+                ):
+                    continue
+                report_age_s = 0.0
+                source_health = "healthy"
+                stale_key: tuple[str, str] | None = None
+                if source_id == "ais":
+                    matching_stale = [
+                        fault
+                        for fault in self._active(faults, "ais_stale", time_s)
+                        if fault.parameters.get("vessel_id") in {None, spec.vessel_id}
+                    ]
+                    if matching_stale:
+                        source_health = "degraded"
+                        stale_key = (matching_stale[0].fault_id, spec.vessel_id)
+                        report_age_s = max(
+                            time_s
+                            - fault.start_s
+                            + float(fault.parameters.get("initial_age_s", 0.0))
+                            for fault in matching_stale
+                        )
                 north = state.north_m + rng.gauss(0.0, sigma)
                 east = state.east_m + rng.gauss(0.0, sigma)
                 if source_id == "ais":
+                    # A stale report remains at its last constant-course position;
+                    # it is observable as old data and never mutates plant truth.
+                    north -= math.cos(state.heading_rad) * state.surge_mps * report_age_s
+                    east -= math.sin(state.heading_rad) * state.surge_mps * report_age_s
+                    if stale_key is not None:
+                        if stale_key in self._stale_ais_positions:
+                            north, east = self._stale_ais_positions[stale_key]
+                        else:
+                            self._stale_ais_positions[stale_key] = (north, east)
                     for fault in self._active(faults, "ais_spoof", time_s):
                         if fault.parameters.get("vessel_id") in {None, spec.vessel_id}:
                             north += float(fault.parameters.get("north_offset_m", 0.0))
@@ -318,6 +356,8 @@ class SensorSuite:
                         "speed_mps": max(0.0, state.surge_mps + rng.gauss(0.0, 0.08 if source_id == "radar" else 0.2)),
                         "hull": {"length_m": spec.hull.length_m, "beam_m": spec.hull.beam_m},
                         "position_sigma_m": sigma,
+                        "report_age_s": report_age_s,
+                        "source_health": source_health,
                     }
                 )
             return {"contacts": contacts}

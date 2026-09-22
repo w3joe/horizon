@@ -1,0 +1,89 @@
+{
+  "schema_version": "horizon.geography-build-config.v1",
+  "bundle_id": "singapore-area-demo-v1",
+  "wgs84_bbox": [103.55, 1.1, 104.15, 1.5],
+  "local_ned_origin": {
+    "latitude_deg": 1.25,
+    "longitude_deg": 103.85,
+    "height_m": 0.0
+  },
+  "assurance_status": "simulation-only",
+  "maximum_visual_simplification_error_m": 15.0,
+  "sources": [
+    {
+      "source_id": "osm-geofabrik-msb-20260921",
+      "source_version_date": "2026-09-21",
+      "acquisition": "https_download",
+      "url": "https://download.geofabrik.de/asia/malaysia-singapore-brunei-260921.osm.pbf",
+      "artifact": "malaysia-singapore-brunei-260921.osm.pbf",
+      "expected_sha256": null,
+      "license": "ODbL-1.0",
+      "attribution": "© OpenStreetMap contributors",
+      "crs": "EPSG:4326",
+      "use": "offline visual land, shoreline, and seamark extraction only",
+      "pin_status": "external_sha256_required_before_download"
+    },
+    {
+      "source_id": "gebco-subset-2026",
+      "source_version_date": "2026",
+      "acquisition": "manual_subset",
+      "url": "https://www.gebco.net/data-products/gridded-bathymetry-data",
+      "artifact": "gebco-2026-singapore-subset.nc",
+      "expected_sha256": null,
+      "license": "GEBCO terms of use",
+      "attribution": "GEBCO Compilation Group (2026) GEBCO 2026 Grid",
+      "crs": "EPSG:4326",
+      "use": "optional visual depth contours; never navigation or safety at sea",
+      "pin_status": "external_subset_and_sha256_required"
+    }
+  ],
+  "visual_layers": [
+    {
+      "file": "land.geojson",
+      "source_ids": ["osm-geofabrik-msb-20260921"],
+      "required_tags": ["natural=coastline", "place=island", "landuse=*"],
+      "simplification_tolerance_m": 15.0
+    },
+    {
+      "file": "shoreline.geojson",
+      "source_ids": ["osm-geofabrik-msb-20260921"],
+      "required_tags": ["natural=coastline"],
+      "simplification_tolerance_m": 5.0
+    },
+    {
+      "file": "seamarks.geojson",
+      "source_ids": ["osm-geofabrik-msb-20260921"],
+      "required_tags": ["seamark:type=*"],
+      "simplification_tolerance_m": 0.0
+    },
+    {
+      "file": "bathymetry-contours.geojson",
+      "source_ids": ["gebco-subset-2026"],
+      "required_tags": [],
+      "simplification_tolerance_m": 15.0
+    }
+  ],
+  "safety_layers": [
+    {
+      "file": "reviewed-water-envelope.geojson",
+      "source_ids": ["simulation-review"],
+      "required_review_status": "reviewed_for_simulation",
+      "required_fields": ["source", "reviewer", "uncertainty_m", "buffer_m", "sha256"]
+    },
+    {
+      "file": "synthetic-no-go.geojson",
+      "source_ids": ["generated-synthetic"],
+      "required_review_status": "reviewed_for_simulation",
+      "required_fields": ["source", "reviewer", "uncertainty_m", "buffer_m", "sha256"]
+    }
+  ],
+  "network_policy": {
+    "launcher_downloads_allowed": false,
+    "public_tile_hosts_forbidden": [
+      "tile.openstreetmap.org",
+      "a.tile.openstreetmap.org",
+      "b.tile.openstreetmap.org",
+      "c.tile.openstreetmap.org"
+    ]
+  }
+}

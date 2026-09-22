@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from .model import Environment, Hull, VesselState
+from .traffic_snapshot import TrafficObservationProfile
 
 
 SUPPORTED_FAULT_KINDS = frozenset(
     {
         "ais_spoof",
+        "ais_dropout",
+        "ais_stale",
         "gnss_bias",
         "gnss_dropout",
         "peer_intent_conflict",
@@ -40,6 +43,8 @@ def _finite_parameter(parameters: dict[str, Any], key: str, default: float) -> f
 def _validate_fault_parameters(fault_id: str, kind: str, parameters: dict[str, Any]) -> None:
     allowed = {
         "ais_spoof": {"vessel_id", "north_offset_m", "east_offset_m"},
+        "ais_dropout": {"vessel_id"},
+        "ais_stale": {"vessel_id", "initial_age_s"},
         "gnss_bias": {"north_m", "east_m"},
         "gnss_dropout": set(),
         "peer_intent_conflict": {"vessel_id", "claimed_heading_rad", "claimed_speed_mps"},
@@ -55,6 +60,9 @@ def _validate_fault_parameters(fault_id: str, kind: str, parameters: dict[str, A
     if kind == "ais_spoof":
         _finite_parameter(parameters, "north_offset_m", 0.0)
         _finite_parameter(parameters, "east_offset_m", 0.0)
+    elif kind == "ais_stale":
+        if _finite_parameter(parameters, "initial_age_s", 0.0) < 0.0:
+            raise ValueError(f"fault {fault_id} initial age must be nonnegative")
     elif kind == "gnss_bias":
         _finite_parameter(parameters, "north_m", 0.0)
         _finite_parameter(parameters, "east_m", 0.0)
@@ -87,6 +95,7 @@ class TrafficSpec:
     vessel_id: str
     state: VesselState
     hull: Hull
+    observation_profile: TrafficObservationProfile = TrafficObservationProfile()
 
 
 @dataclass(frozen=True)
@@ -165,18 +174,55 @@ def load_scenario(path: str | Path) -> Scenario:
     boundary = tuple((float(p[0]), float(p[1])) for p in raw["water_boundary_ne_m"])
     if len(boundary) < 3:
         raise ValueError("water boundary needs at least three vertices")
-    traffic = tuple(
-        TrafficSpec(
-            vessel_id=item["vessel_id"],
-            state=_state(item),
-            hull=Hull(
-                length_m=float(item["hull"]["length_m"]),
-                beam_m=float(item["hull"]["beam_m"]),
-                draft_m=float(item["hull"].get("draft_m", 1.0)),
-            ),
+    if raw.get("traffic") and raw.get("traffic_snapshot"):
+        raise ValueError("scenario cannot combine inline traffic and a traffic_snapshot")
+    if raw.get("traffic_snapshot"):
+        snapshot_ref = raw["traffic_snapshot"]
+        if not isinstance(snapshot_ref, dict):
+            raise ValueError("traffic_snapshot must be an object")
+        allowed_snapshot_fields = {"path", "sha256", "maximum_vessels"}
+        unknown_snapshot_fields = set(snapshot_ref) - allowed_snapshot_fields
+        if unknown_snapshot_fields:
+            raise ValueError(
+                f"traffic_snapshot has unsupported fields: {sorted(unknown_snapshot_fields)}"
+            )
+        snapshot_relative = snapshot_ref.get("path")
+        if not isinstance(snapshot_relative, str) or not snapshot_relative:
+            raise ValueError("traffic_snapshot.path must be a nonempty relative path")
+        snapshot_path = Path(snapshot_relative)
+        if snapshot_path.is_absolute() or ".." in snapshot_path.parts:
+            raise ValueError("traffic_snapshot.path must stay below the scenario directory")
+        from .traffic_snapshot import load_traffic_snapshot, traffic_specs
+
+        traffic_snapshot = load_traffic_snapshot(
+            source_path.parent / snapshot_path,
+            expected_sha256=snapshot_ref.get("sha256"),
+            maximum_vessels=snapshot_ref.get("maximum_vessels", 64),
         )
-        for item in raw.get("traffic", [])
-    )
+        traffic = traffic_specs(traffic_snapshot)
+    else:
+        traffic_items: list[TrafficSpec] = []
+        for item in raw.get("traffic", []):
+            profile_raw = item.get("simulated_observations", {})
+            if not isinstance(profile_raw, dict):
+                raise ValueError("simulated_observations must be an object")
+            traffic_items.append(
+                TrafficSpec(
+                    vessel_id=item["vessel_id"],
+                    state=_state(item),
+                    hull=Hull(
+                        length_m=float(item["hull"]["length_m"]),
+                        beam_m=float(item["hull"]["beam_m"]),
+                        draft_m=float(item["hull"].get("draft_m", 1.0)),
+                    ),
+                    observation_profile=TrafficObservationProfile(
+                        radar=profile_raw.get("radar", True),
+                        camera=profile_raw.get("camera", True),
+                        ais=profile_raw.get("ais", True),
+                    ),
+                )
+            )
+        traffic = tuple(traffic_items)
     faults_list: list[FaultSpec] = []
     fault_ids: set[str] = set()
     for item in raw.get("faults", []):
