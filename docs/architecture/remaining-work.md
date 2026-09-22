@@ -7,9 +7,10 @@ Horizon compute cap. Three workers can run alongside the coordinator.
 | Workstream | Owner / worktree | Current deliverable |
 | --- | --- | --- |
 | Marine physics | A10, `a10-marine-physics` | First implementation merged: versioned wave/current/wind response, heave/roll/pitch, effective draft, characterization, and public operating-mode qualification. Fusion enforcement is in the live-evidence packet. |
-| Maritime assets | A09, `a09-maritime-assets` | Active successor to A10: licensed civilian/patrol vessels and harbor props, normalized GLBs, provenance and browser-size validation. |
-| Live neural evidence | A07/A05, `a07-live-perception` | Actual recorded-camera inference streamed through collector/fusion with frame and health lineage, bounded queues/expiry, explicit geometry/risk unknowns, and a finite CUDA development extractor. |
-| Research and verification | A02, `a02-research` | Frozen drift/calibration/evidence-gate implementation merged; score the bounded CUDA development result when available. Additional scope: S09/S12 process restart and lineage tests, plus an explicit S01–S22 gap audit. |
+| Maritime assets | A11, `a11-asset-renderer` | Merged licensed RIB, cargo vessel, cargo stacks and buoys with normalized GLBs, provenance, browser budgets, loading fallbacks and role-appropriate placement in both 3D views. |
+| Live neural evidence | A13, `a13-live-launch` | Core recorded-camera inference, health lineage, bounded queues and fail-closed fusion policy are merged. Active packet makes it an explicit coordinated launch mode. |
+| Research and verification | A12, `a12-acceptance` | Frozen 296-frame CUDA/MPS drift comparison complete. S09/S12 restart lineage tests and the S01–S22 gap audit are merged; S02/S22 evidence strengthening remains active. |
+| Deadline performance | A14, `a14-deadline` | Preserve the exact 40 ms control deadline while removing predictive-rollout allocation overhead; prove numerical equivalence and rerun Linux end-to-end tests. |
 | Integration/platform | Coordinator, integrated `main` | Shared contracts, launch modes, Modal reservations and artifact recovery, UI integration, Linux timing diagnosis, merges and private remote. |
 
 Three Sol/high workers run concurrently in isolated worktrees, with the
@@ -23,12 +24,12 @@ guided replay remains the baseline encounter. A new marine demonstration still
 needs its own recorded run and visual verification; it must not reuse the
 baseline safety outcome. Full S01–S22 acceptance and Linux timing remain open.
 
-The integrated local check passed 351 Python tests, contract checks, TypeScript
-checks and a production console build before the subsequent small renderer and
-Modal image-order changes. The renderer build also passed and the existing
-guided scene was checked visually. Linux run 35645774997 still failed four live
-chain tests because recovery could not finish within the original deadline;
-the deadline has not been relaxed.
+The integrated local check passes 377 Python tests, contract checks, the maritime
+asset registry, TypeScript checks and a production console build. The guided
+collision comparison and live harbor were checked visually after asset
+integration. Linux run 35677708977 still failed six live-chain tests because
+recovery requests took about 48–59 ms under shared-runner load. The 40 ms
+deadline has not been relaxed; A14 is optimizing the same fixed-step equations.
 
 ## Completion evidence
 
@@ -61,17 +62,21 @@ These are integration measurements, not an end-to-end 20 Hz or held-out claim.
 The platform run metadata supplies clean launch provenance because the inference
 container does not contain the repository's Git metadata.
 
-Artifacts remain under `horizon-runs/compute/a07-wasrt-sequence-003/`. The USD 1.50
-job reservation and USD 0.10 successful-probe reservation remain charged against
-the budget until provider billing is reconciled. Reconciled earlier spend is
-USD 0.00515378; prior rejected probes 003–005 reported USD 0 through the completed
-19:00 UTC billing interval. Reservations are ceilings, not measured charges.
+Artifacts remain under `horizon-runs/compute/a07-wasrt-sequence-003/`. Provider
+billing is reconciled for the probe, this job, and both failed pre-inference
+alignment attempts.
 
-The next 296-frame development alignment job has a USD 1.50 reservation per
-attempt. Attempt 001 stopped during image configuration before inference;
-its exact app was verified stopped, its empty temporary Volume was deleted,
-and its reservation remains pending billing reconciliation. Attempt 002 fixes
-the ordering of image environment configuration before the runtime checkpoint
-mount and is launched under its own USD 1.50 reservation. Artifacts will be
-validated before A02 scores drift. No calibration or held-out data is part of
-either attempt. The external ledger is authoritative for current spending.
+The successful development alignment is
+`a07-modd2-dev-runtime-alignment-003`: 296 MODD2 left-camera frames, 296 masks,
+296 previews, all feature records and five fixed spatial probes. Exact app
+`ap-vGQLUF8L91XBN77IWg3xb5` is stopped and its bounded Volume is deleted. Median
+CUDA/fp16 forward time was 34.907 ms; CPU health features took 108.308 ms, so no
+20 Hz end-to-end claim is made. Relative feature drift against the frozen MPS
+reference was nonzero (p95: encoder 0.003637, temporal 0.009944, decoder 0.002857)
+and mask-disagreement p95 was 0.000174. This remains descriptive development
+evidence: equivalence and calibration thresholds are not established.
+
+All completed provider charges total USD 0.04250377. There are no active compute
+reservations, leaving USD 79.957496 of the USD 80 working budget and the full
+USD 20 protected reserve. No calibration or held-out partition was opened. The
+external ledger remains authoritative for current spending.
