@@ -20,7 +20,7 @@ from urllib.request import urlopen
 
 from .aisstream_poller import AISStreamClient
 from .store import CollectorStore
-from aisstream import AISStreamConfig
+from adapters.maritime.aisstream import AISStreamConfig
 
 
 class LiveTrafficMirror:

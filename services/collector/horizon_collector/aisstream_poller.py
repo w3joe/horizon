@@ -18,7 +18,7 @@ import random
 import time
 from typing import Any, Protocol
 
-from aisstream import (
+from adapters.maritime.aisstream import (
     AISStreamConfig,
     AISStreamError,
     AISTrackCache,
