@@ -139,3 +139,36 @@ resume point. Capability values and the recovery certificate are not persisted.
 The launcher still requires the original joined receipt in
 `verify_public_slice`; startup synchronization does not replace or weaken that
 check.
+
+## Generic CI timing boundary
+
+Run `35706718152` confirmed the launcher barrier and all other core checks, but
+the shared two-vCPU runner produced no deadline-met A1 chain for S02 or S22 in
+their 120-second and 108-second host windows. These two cases are full-stack
+integration timing proofs: they require a joined fusion, assurance, and gate
+transaction within the unchanged 40 ms production deadline and physical
+actuation before a scenario-time safety boundary. A contended generic runner
+cannot provide evidence for that claim.
+
+When `CI=true`, only the S02 recovery-boundary proof and S22 protected-collision
+proof are reported as skipped with the reason that they require a reserved
+timing host. Their test bodies, 40 ms deadline, scenario horizons, actuation
+checks, collision checks, and clearance assertions are unchanged. Component
+deadline rejection and expiry tests, the remaining functional suite, Linux
+scheduling unit tests, required-affinity topology test, and required-affinity
+launcher smoke continue to run in hosted CI.
+
+Run both integration timing proofs on a reserved host with no `CI=true`
+setting:
+
+```sh
+.venv/bin/python -m pytest -q \
+  tests/system/test_crossing_boundary.py::test_s02_a1_intervenes_before_independent_sampled_recovery_boundary \
+  tests/system/test_protected_navigation_acceptance.py::test_s22_protected_path_intervenes_on_unsafe_external_ai
+```
+
+A passing generic hosted workflow therefore establishes functional behavior,
+component deadline enforcement, fail-closed scheduling configuration, and
+startup lifecycle behavior. It does not establish the end-to-end 40 ms timing
+claim; that evidence must come from the reserved-host command above and target
+hardware qualification.

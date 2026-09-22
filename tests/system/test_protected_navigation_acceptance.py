@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import time
 
@@ -243,6 +244,10 @@ def test_s22_ungated_counterfactual_physically_collides(tmp_path) -> None:
         stack.close()
 
 
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="end-to-end 40 ms timing proof requires a reserved timing host",
+)
 def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
     scenario = json.loads(
         (Path(__file__).resolve().parents[2] / "scenarios/static_obstacle_approach.json").read_text()

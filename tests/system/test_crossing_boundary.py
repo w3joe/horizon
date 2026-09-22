@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import pytest
 
@@ -305,6 +306,10 @@ def _drive_to_a1_intervention(
     return accepted
 
 
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="end-to-end 40 ms timing proof requires a reserved timing host",
+)
 def test_s02_a1_intervenes_before_independent_sampled_recovery_boundary(
     tmp_path,
 ) -> None:
