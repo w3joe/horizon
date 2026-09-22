@@ -8,6 +8,7 @@ from .horizon_stack import HorizonStack, request_json, wait_for
 
 
 FIXED_STEP_S = 0.02
+HOST_PROGRESS_WATCHDOG_S = 120.0
 REFERENCE_SAMPLE_TIMES_S = (25.0, 30.0, 35.0)
 RECOVERY_LIBRARY = (
     {"heading_rad": -math.pi / 4.0, "speed_mps": 1.0},
@@ -212,7 +213,9 @@ def _sample_unprotected_recovery_boundary(tmp_path) -> dict:
         stack.close()
 
 
-def _drive_to_a1_intervention(stack: HorizonStack) -> dict:
+def _drive_to_a1_intervention(
+    stack: HorizonStack, *, safety_horizon_s: float
+) -> dict:
     """Drive the real HTTP chain while retaining every deadline outcome."""
 
     def recovery_ready():
@@ -232,6 +235,11 @@ def _drive_to_a1_intervention(stack: HorizonStack) -> dict:
         if status != 200 or int(governor["tick_index"]) == last_tick:
             return None
         last_tick = int(governor["tick_index"])
+        simulation_time_s = float(governor["simulation_time_s"])
+        assert simulation_time_s < safety_horizon_s, (
+            "A1 did not intervene before the sampled recovery boundary: "
+            f"simulation_time_s={simulation_time_s}, horizon_s={safety_horizon_s}"
+        )
         evaluate_status, decision, _ = request_json(
             stack.url("assurance", "/v1/evaluate"),
             {"candidate_id": "A1", "input": governor},
@@ -272,7 +280,11 @@ def _drive_to_a1_intervention(stack: HorizonStack) -> dict:
     # Pace fixture requests at the 20 Hz control-loop cadence. Faster polling
     # only re-serializes the same fusion tick and can starve the service stack
     # on the two-CPU hosted runner that exercises lane isolation.
-    accepted = wait_for(next_result, timeout_s=12.0, interval_s=0.05)
+    accepted = wait_for(
+        next_result,
+        timeout_s=HOST_PROGRESS_WATCHDOG_S,
+        interval_s=0.05,
+    )
     # Retain late decisions and gate rejections as non-successful cycles. A
     # missed deadline is never submitted or relabeled as an intervention, and
     # a rejected receipt must carry no actuation.
@@ -296,9 +308,13 @@ def test_s02_a1_intervenes_before_independent_sampled_recovery_boundary(
     assert reference["last_sampled_recovery_opportunity_s"] == 30.0
     assert reference["hazard_window_end_s"] == 42.2
 
+    boundary = float(reference["last_sampled_recovery_opportunity_s"])
     protected = _stack(tmp_path / "protected", assurance_loop=False)
     try:
-        event = _drive_to_a1_intervention(protected)
+        event = _drive_to_a1_intervention(
+            protected,
+            safety_horizon_s=boundary,
+        )
         governor = event["governor_input"]
         decision = event["decision"]
         receipt = event["receipt"]
@@ -338,7 +354,6 @@ def test_s02_a1_intervenes_before_independent_sampled_recovery_boundary(
 
         actuation = wait_for(actuated, timeout_s=2.0)
         intervention_time = float(actuation["simulation_time_s"])
-        boundary = float(reference["last_sampled_recovery_opportunity_s"])
         assert intervention_time < boundary
         assert boundary - intervention_time > 0.0
 

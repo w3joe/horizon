@@ -27,9 +27,22 @@ gate, assurance, simulator, and fusion work being measured.
 ## Harness correction
 
 System-test probes now use a 10 Hz default cadence. S02 uses the control-loop
-cadence of 20 Hz. The change leaves all wall-clock test bounds, watchdog
-expectations, lineage assertions, actuation checks, and the 40 ms runtime
-decision deadline unchanged.
+cadence of 20 Hz. This correction left the original wall-clock bounds and all
+runtime safety checks unchanged. Follow-up hosted run `35693340995` passed the
+watchdog and both restart-lineage cases, but still failed S02 and S22. Their
+protected simulations had reached only about 13.5 simulated seconds when the
+12-second host wait expired, before either scenario's intervention window.
+Recorded decisions remained valid and met the unchanged 40 ms deadline.
+
+S02 and S22 now bound intervention by the safety-relevant simulation horizon:
+the independently sampled recovery boundary for S02 and the counterfactual
+collision time for S22. If simulation time reaches either horizon without an
+accepted intervention, the test fails immediately. A 120-second host watchdog
+only bounds a stalled fixture; it is not used as safety evidence. S22 retains
+its exact scenario-duration horizon, and both tests still require the accepted
+command's physical actuation before the corresponding boundary or collision.
+Watchdog expectations, lineage assertions, and the exact 40 ms runtime decision
+deadline remain unchanged.
 
 Local verification on macOS cannot reproduce Linux CPU affinity. Three repeated
 runs of the five affected cases passed 15/15 in 73.97, 74.28, and 75.56 seconds.

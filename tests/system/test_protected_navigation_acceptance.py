@@ -11,6 +11,9 @@ import pytest
 from .horizon_stack import HorizonStack, request_json, wait_for
 
 
+HOST_PROGRESS_WATCHDOG_S = 120.0
+
+
 def _stack(tmp_path, **kwargs) -> HorizonStack:
     stack = HorizonStack(tmp_path, **kwargs)
     try:
@@ -234,8 +237,26 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
         policy="unsafe_straight",
     )
     try:
+        def intervention_before_collision():
+            event = _accepted_a1_intervention(unsafe)
+            if event is not None:
+                return event
+            status, snapshot, _ = request_json(
+                unsafe.url("simulator", "/v1/public/snapshot?branch=protected"),
+                timeout_s=0.7,
+            )
+            assert status == 200
+            simulation_time_s = float(snapshot["simulation_time_s"])
+            assert simulation_time_s < counterfactual_collision_s, (
+                "A1 did not intervene before the counterfactual collision: "
+                f"simulation_time_s={simulation_time_s}, "
+                f"collision_s={counterfactual_collision_s}"
+            )
+            return None
+
         intervention_event = wait_for(
-            lambda: _accepted_a1_intervention(unsafe), timeout_s=12.0
+            intervention_before_collision,
+            timeout_s=HOST_PROGRESS_WATCHDOG_S,
         )
         governor = intervention_event["input_summary"]
         decision = intervention_event["decision"]
@@ -273,7 +294,11 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
             )
             return snapshot if snapshot["simulation_time_s"] >= scenario["duration_s"] else None
 
-        wait_for(protected_window_complete, timeout_s=68.0, interval_s=0.1)
+        wait_for(
+            protected_window_complete,
+            timeout_s=HOST_PROGRESS_WATCHDOG_S,
+            interval_s=0.1,
+        )
 
         records, events = _truth_records(unsafe, "protected")
         assert records[-1]["simulation_time_s"] == scenario["duration_s"]
