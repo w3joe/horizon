@@ -31,6 +31,7 @@ jobs:
           echo "HORIZON_RUNS_DIR=$RUNNER_TEMP/horizon-runs" >> "$GITHUB_ENV"
           echo "HORIZON_COMPUTE_LEDGER=$RUNNER_TEMP/horizon-compute-ledger.json" >> "$GITHUB_ENV"
           echo "HORIZON_SYSTEM_DIAGNOSTICS_DIR=$RUNNER_TEMP/horizon-system-diagnostics" >> "$GITHUB_ENV"
+          echo "HORIZON_GATE_CPU_ISOLATION=required" >> "$GITHUB_ENV"
       - name: Bootstrap pinned dependencies
         env:
           HORIZON_PYTHON: python

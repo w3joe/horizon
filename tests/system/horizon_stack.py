@@ -20,6 +20,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from scripts.process_scheduling import build_process_scheduling_plan
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -177,13 +179,17 @@ class HorizonStack:
         self.processes: dict[str, ManagedProcess] = {}
         self.stopped_commands: dict[str, list[str]] = {}
         self.run_id = f"a08-{scenario.removesuffix('.json')}-{os.getpid()}-{time.monotonic_ns()}"
+        self.env = os.environ.copy()
+        self.scheduling = build_process_scheduling_plan(
+            self.env.get("HORIZON_GATE_CPU_ISOLATION", "off")
+        )
+        self.process_scheduling: dict[str, dict[str, object]] = {}
         self.capabilities = directory / "capabilities"
         self.logs = directory / "logs"
         self.capabilities.mkdir(parents=True)
         self.logs.mkdir(parents=True)
         self.link: LinkFaultProxy | None = None
         self.use_link_proxy = collector_link_proxy
-        self.env = os.environ.copy()
         paths = [
             ROOT,
             ROOT / "packages/contracts/python",
@@ -209,7 +215,7 @@ class HorizonStack:
         log_path = self.logs / f"{name}.log"
         log = log_path.open("ab" if log_path.exists() else "wb")
         process = subprocess.Popen(  # noqa: S603 - fixed local fixture commands
-            command,
+            self.scheduling.command(name, command),
             cwd=ROOT,
             env=self.env,
             stdout=log,
@@ -218,6 +224,7 @@ class HorizonStack:
         )
         self.processes[name] = ManagedProcess(name, process, log, command)
         self._wait_health(name)
+        self.process_scheduling[name] = self.scheduling.observe_process(name, process.pid)
 
     def _wait_health(self, name: str) -> None:
         def healthy() -> bool:
@@ -389,7 +396,12 @@ class HorizonStack:
         diagnostic_root = os.environ.get("HORIZON_SYSTEM_DIAGNOSTICS_DIR")
         if diagnostic_root and self.processes:
             # Public fixture telemetry only: never capabilities or evaluator data.
-            diagnostics: dict[str, Any] = {"run_id": self.run_id, "scenario": self.scenario}
+            diagnostics: dict[str, Any] = {
+                "run_id": self.run_id,
+                "scenario": self.scenario,
+                "scheduling": self.scheduling.public_record(),
+                "process_scheduling": self.process_scheduling,
+            }
             for service, endpoint in (
                 ("assurance", "/v1/telemetry"),
                 ("gate", "/v1/telemetry"),

@@ -20,6 +20,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from perception_runtime import PerceptionLaunchConfig, load_perception_config
+from process_scheduling import (
+    ISOLATION_MODES,
+    SchedulingIsolationError,
+    build_process_scheduling_plan,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -599,9 +604,22 @@ def main() -> int:
         action="store_true",
         help="also require paused reset recovery and an atomic explicit resume",
     )
+    parser.add_argument(
+        "--gate-cpu-isolation",
+        choices=ISOLATION_MODES,
+        default=os.environ.get("HORIZON_GATE_CPU_ISOLATION", "off"),
+        help=(
+            "Linux child-process affinity policy: reserve one allowed CPU for the gate, "
+            "confine and lower the priority of other services; this is not hard real time"
+        ),
+    )
     args = parser.parse_args()
     if args.smoke_seconds < 0:
         parser.error("--smoke-seconds must be non-negative")
+    try:
+        scheduling = build_process_scheduling_plan(args.gate_cpu_isolation)
+    except SchedulingIsolationError as exc:
+        parser.error(f"gate CPU isolation unavailable: {exc}")
 
     ports = dict(json.loads((ROOT / "infra/ports.json").read_text())["ports"])
     process_specs = json.loads((ROOT / "infra/processes.json").read_text())["services"]
@@ -746,6 +764,8 @@ def main() -> int:
         "unavailable": unavailable,
         "runtime_status": "starting",
         "processes": {},
+        "scheduling": scheduling.public_record(),
+        "process_scheduling": {},
     }
     if perception is not None:
         status["perception"] = {
@@ -766,12 +786,19 @@ def main() -> int:
             assert_port_free(host, port)
             log_handle = (logs_dir / f"{name}.log").open("wb")
             process = subprocess.Popen(
-                commands[name], cwd=ROOT, env=env, stdout=log_handle, stderr=subprocess.STDOUT,
+                scheduling.command(name, commands[name]),
+                cwd=ROOT,
+                env=env,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
             item = ManagedProcess(name, process, log_handle, f"http://{host}:{port}/health")
             managed.append(item)
             wait_healthy(item, timeout_s=60.0 if name == "perception" else 15.0)
+            process_scheduling = status["process_scheduling"]
+            assert isinstance(process_scheduling, dict)
+            process_scheduling[name] = scheduling.observe_process(name, process.pid)
             status["processes"][name] = {"pid": process.pid, "port": port, "health": "ready"}
             if name == "perception":
                 with urlopen(
@@ -796,6 +823,11 @@ def main() -> int:
         (run_dir / "run.json").write_text(json.dumps(status, indent=2) + "\n")
 
         print(f"Horizon run {run_id} ready: http://{host}:{ports['console']}", flush=True)
+        print(
+            "gate CPU isolation "
+            f"{scheduling.status}: {scheduling.reason}; hard real time=false",
+            flush=True,
+        )
         for name, reason in unavailable.items():
             print(f"unavailable {name}: {reason}", flush=True)
         monitor_processes(
