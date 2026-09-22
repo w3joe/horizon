@@ -27,7 +27,16 @@ The existing operational workspace remains available through **Live console**.
 6. Read the outcome cards as post-run evaluation. They show collision counts and hull-clearance
    metrics with units for both branches. These results are not online controller inputs.
 7. Expand **Technical details** only when provenance is useful. It contains the run, source commit,
-   scenario version, digest, current identifiers, and the limitations embedded in the run manifest.
+   scenario version, digest, current identifiers, exact intervention mechanism, recorded candidate
+   ID/version, and the limitations embedded in the run manifest. Candidate identity is read from
+   the public decision records; if a replay records A5, the header and evidence panel say `A5`.
+
+The harbour and platform treatment is explicitly presentational: a Singapore Strait-inspired setting,
+naval-gray patrol craft, sensor mast/radome, EO/IR sensor, mission-bay/RHIB cue, and secure-comms
+display. It does not claim that the recorded run occurred in Singapore. Simple deck and CIWS-like
+silhouettes are static, non-functional presentation geometry: they have no controls, target/contact
+linkage, tracking, engagement logic, firing animation, performance parameters, or fire-control
+behavior. These visuals do not change public hulls, scene coordinates, command lineage, or scoring.
 
 At an 890 × 768 review window the two branch viewports remain side by side. Below 760 px they stack
 for legibility. The primary play action is above the fold at both review and desktop sizes.
@@ -55,5 +64,7 @@ after the corresponding `first_collision_time_s`; intervention visuals appear on
 recorded intervention time.
 
 The vessel model is “Assault boat” by tnnv under CC BY 4.0, linked in the interface. Water, wake,
-lighting, and cameras are visual context. Recorded neural artifacts remain a separate inspector in
-the live console. The guided replay does not claim that neural evidence caused the intervention.
+lighting, cameras, Singapore-inspired harbour treatment, and patrol-platform fittings are visual
+context. Procedural sensor fittings are original presentation geometry and are not sourced equipment
+models. Recorded neural artifacts remain a separate inspector in the live console. The guided replay
+does not claim that neural evidence caused the intervention.

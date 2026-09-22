@@ -3,17 +3,22 @@
 ## Initial walkthrough
 
 1. Start Vite development mode on port 5176 and confirm the amber **INITIAL FIXTURE MODE** disclosure. A production proxy with unavailable services instead shows **FIXTURE FALLBACK · LIVE DISCONNECTED** and locks all controls.
-2. Use **Oblique** and **Tactical** cameras to inspect the same NED harbor scene. The patrol vessel hull is 12 × 3 m. Cyan is the accepted path, dashed red is the rejected proposal, and dashed amber is the unprotected predicted branch.
-3. Select **S19 · Camera mismatch**. Playback begins at the synthetic fault marker. Pause, scrub, reset, or change speed without changing event timestamps.
-4. Select the intervention marker, then move between Navigation, Data flow, and Neural sensor. The event ID, observation IDs, and inference ID remain linked.
-5. Select MV Kestrel in the scene to inspect its status, evidence age, supporting source IDs, and uncertainty bound.
-6. In Neural sensor, verify that an unavailable artifact produces no substitute activations. When the A01 artifact route is configured, inspect the recorded raw frame, actual mask preview, and three measured layer summaries while keeping that reproduction separate from the selected control event.
+2. Use the five-button **Guided evidence sequence**. Its stages cover degraded perception/neural evidence, radar–camera disagreement, stale internal communications, contradictory inter-ship intent, and decision-AI telemetry loss. Selection pauses at the fixture decision so the linked input rows and consequence card can be read.
+3. Read the consequence card as fixture data. Margin expansion is the difference between the fixture's 8.2 m baseline and the linked decision constraint. Speed restriction is shown only when both a proposal and an accepted command exist. The authority/action value comes directly from the fixture `AssuranceDecision`; telemetry loss therefore shows `recovery`, while a missing proposal remains unavailable.
+4. Use **Oblique** and **Tactical** cameras to inspect the same NED scenario geometry in a Singapore Strait-inspired harbour presentation. The naval-gray patrol fit, sensor mast/radome, EO/IR sensor, and mission-bay/RHIB cues are decorative geometry. The display makes no claim that the source scenario occurred in Singapore, and those additions do not affect hulls, contacts, control, or assurance.
+5. Select the intervention marker, then move between Navigation, Data flow, and Neural sensor. Event, observation, and available inference identifiers remain linked. Radar and camera conflicts remain separate records; peer claimed intent remains separate from radar-supported motion; network capture remains separate from application receipt.
+6. Select MV Kestrel in the scene to inspect its status, evidence age, supporting source IDs, contradictory observation IDs, and uncertainty bound.
+7. In Neural sensor, verify that unavailable layers produce no substitute activations. When the A01 artifact route is configured, inspect the recorded raw frame, actual mask preview, and three measured layer summaries while keeping that reproduction separate from the selected control event.
+
+The development stages use a candidate named `STUB` because they are presentation fixtures. In live mode the header, assurance node, and evidence panel display the exact candidate ID and version supplied by the linked backend decision. An A5 decision is therefore visibly labeled `A5`; the console does not infer A5 from launch configuration or scenario naming.
 
 ## Live read-only seam
 
 Run the A01 console proxy and open its same origin. The console consumes the public SSE snapshot stream, collector observations and diagnostics, A04 assurance telemetry/joined evidence, A05 fused evidence, gate telemetry, and the allowlisted perception artifact API. A production build switches to **LIVE PUBLIC MODE** after receiving a schema `0.1.0` `SimulationSnapshot`.
 
 The authority panel requires a complete, identity-matched governor input, decision, and receipt. An accepted receipt is shown as current authority only while its command ID matches the public plant's active command, its run and branch match, its decision has not expired against the gate's sampled monotonic clock, and the snapshot, evidence, and gate services are fresh. Otherwise it is labeled historical. Each upstream has its own freshness indicator, so a healthy snapshot stream cannot hide stale assurance or collector evidence. A command without backend trajectory samples produces an explicit unavailable legend.
+
+The Singapore Strait and defensive-maritime treatment is presentation context only. It uses no geographic coordinates and makes no claim of an operational deployment. The platform fit includes simple static deck and CIWS-like silhouettes, explicitly labeled non-functional. They have no controls, targeting or contact linkage, tracking, engagement logic, firing animation, performance parameters, fire-control, or actuation behavior. The internal-communications capability displayed beside the platform is read from the current observation record.
 
 The Neural sensor workspace shows the completed 85-frame local CPU WaSR-T reproduction through A01's artifact routes. The raw source image and mask preview are recorded data, independent from the simulator camera. Timing is local CPU reproduction timing, the three layer rows are measured summaries, and the equality/reset result is limited to the measured three-frame validation prefix. No GPU or live 20 Hz claim is made.
 

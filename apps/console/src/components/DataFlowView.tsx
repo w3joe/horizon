@@ -41,7 +41,9 @@ export function DataFlowView({ packet, event }: { packet: ConsolePacket; event?:
   const traceMs = trace ? (trace.completed_monotonic_ns - trace.started_monotonic_ns) / 1_000_000 : null;
   const decision = packet.lineage.decision;
   const receipt = packet.lineage.receipt;
-  const peerIntentCount = input?.peer_intents?.length ?? 0;
+  const fixturePeerIntents = packet.observations.filter((item) => item.contract_type === "Observation" && item.input_group === "inter_ship_communications");
+  const peerIntentCount = input?.peer_intents?.length ?? fixturePeerIntents.length;
+  const peerContradiction = packet.contact.contradictingObservationIds.some((id) => fixturePeerIntents.some((item) => item.observation_id === id));
   return (
     <div className="flow-workspace workspace-scroll">
       <div className="workspace-heading">
@@ -91,8 +93,8 @@ export function DataFlowView({ packet, event }: { packet: ConsolePacket; event?:
         </section>
         <section className="peer-record">
           <span className="eyebrow">PEER CLAIMED INTENT</span>
-          <strong>{peerIntentCount ? `${peerIntentCount} report${peerIntentCount === 1 ? "" : "s"}` : "No current report"}</strong>
-          <p>Claimed intent remains separate from radar-supported observed motion.</p>
+          <strong>{peerIntentCount ? `${peerIntentCount} report${peerIntentCount === 1 ? "" : "s"}${peerContradiction ? " · contradiction retained" : ""}` : "No current report"}</strong>
+          <p>Claimed intent remains separate from radar-supported observed motion{peerContradiction ? "; the fixture marks the peer claim as contradicting evidence." : "."}</p>
         </section>
       </div>
     </div>

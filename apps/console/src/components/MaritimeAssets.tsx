@@ -83,7 +83,7 @@ function AssetModel({ url, expectedNodes, shadows = true }: {
 }
 
 function FallbackRib({ failed = false }: { failed?: boolean }) {
-  const color = failed ? "#a93d3c" : "#d79b45";
+  const color = failed ? "#a93d3c" : "#5d6b70";
   return (
     <group>
       <mesh castShadow position-y={0.45}>
@@ -93,6 +93,63 @@ function FallbackRib({ failed = false }: { failed?: boolean }) {
       <mesh castShadow position={[0, 0.78, -5.45]} rotation-x={-Math.PI / 2}>
         <coneGeometry args={[1.5, 2.8, 4]} />
         <meshStandardMaterial color={color} roughness={0.55} />
+      </mesh>
+    </group>
+  );
+}
+
+function PatrolPresentationFit() {
+  const navalGray = "#63747a";
+  const darkGray = "#26363c";
+  return (
+    <group>
+      <mesh castShadow position={[0, 1.42, 0.55]}>
+        <boxGeometry args={[1.9, 0.85, 3.2]} />
+        <meshStandardMaterial color={navalGray} roughness={0.66} metalness={0.24} />
+      </mesh>
+      <mesh castShadow position={[0, 2.55, 0.7]}>
+        <cylinderGeometry args={[0.09, 0.13, 2.1, 10]} />
+        <meshStandardMaterial color={darkGray} roughness={0.5} metalness={0.52} />
+      </mesh>
+      <mesh castShadow position={[0, 3.62, 0.7]}>
+        <sphereGeometry args={[0.38, 16, 12]} />
+        <meshStandardMaterial color="#d4dadd" roughness={0.42} metalness={0.14} />
+      </mesh>
+      <mesh castShadow position={[0, 1.62, -2.05]}>
+        <sphereGeometry args={[0.32, 16, 10]} />
+        <meshStandardMaterial color="#18272d" roughness={0.36} metalness={0.25} />
+      </mesh>
+      <mesh castShadow position={[0, 1.23, 3.3]}>
+        <boxGeometry args={[2.1, 0.22, 2.5]} />
+        <meshStandardMaterial color="#35464b" roughness={0.74} metalness={0.18} />
+      </mesh>
+      <group position={[0, 1.25, -3.65]}>
+        <mesh castShadow>
+          <cylinderGeometry args={[0.46, 0.58, 0.44, 16]} />
+          <meshStandardMaterial color={darkGray} roughness={0.58} metalness={0.38} />
+        </mesh>
+        <mesh castShadow position={[0, 0.34, -0.18]} rotation-x={-0.16}>
+          <boxGeometry args={[0.28, 0.28, 1.25]} />
+          <meshStandardMaterial color={navalGray} roughness={0.55} metalness={0.34} />
+        </mesh>
+      </group>
+      <group position={[0, 1.42, 4.15]}>
+        <mesh castShadow>
+          <cylinderGeometry args={[0.42, 0.5, 0.5, 16]} />
+          <meshStandardMaterial color={darkGray} roughness={0.58} metalness={0.38} />
+        </mesh>
+        <mesh castShadow position-y={0.36}>
+          <sphereGeometry args={[0.34, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2]} />
+          <meshStandardMaterial color={navalGray} roughness={0.52} metalness={0.3} />
+        </mesh>
+      </group>
+      <mesh position={[-0.78, 2.72, 0.7]}>
+        <sphereGeometry args={[0.08, 10, 8]} />
+        <meshBasicMaterial color="#e45454" toneMapped={false} />
+      </mesh>
+      <mesh position={[0.78, 2.72, 0.7]}>
+        <sphereGeometry args={[0.08, 10, 8]} />
+        <meshBasicMaterial color="#68d7b0" toneMapped={false} />
       </mesh>
     </group>
   );
@@ -166,6 +223,7 @@ export function LicensedRib({ position, heading, timeS = 0, physicalPose }: {
     <group position={[position[0], position[1] + heave, position[2]]} rotation-y={-heading}>
       <group rotation={[pitch, 0, roll]}>
         <LoadedAsset asset={MARITIME_ASSETS.rib} fallback={<FallbackRib />} errorFallback={<FallbackRib failed />} />
+        <PatrolPresentationFit />
       </group>
     </group>
   );

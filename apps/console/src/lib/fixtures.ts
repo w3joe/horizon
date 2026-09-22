@@ -1,30 +1,93 @@
 import type { AssuranceDecision, GateReceipt, Observation, SimulationSnapshot } from "../../../../packages/contracts/typescript/src/index";
 import type { ConsolePacket, ScenarioEvent, ScenarioId } from "../types";
 
-const scenarioCopy: Record<ScenarioId, { label: string; reason: string; codes: string[]; neural: ConsolePacket["neural"] }> = {
-  crossing: {
-    label: "S04 · Crossing contact",
-    reason: "Predicted hull clearance falls below the configured bounded margin.",
-    codes: ["COLLISION_MARGIN_LOW", "RECOVERY_REQUIRED"],
-    neural: neural("healthy", [], "No neural fault indicated; intervention is based on fused geometry."),
+interface FixtureStageDefinition {
+  number: string;
+  shortLabel: string;
+  title: string;
+  label: string;
+  summary: string;
+  reason: string;
+  codes: string[];
+  neural: ConsolePacket["neural"];
+  marginM: number;
+  issuedSpeedMps: number;
+  action: AssuranceDecision["action"];
+  authority: AssuranceDecision["authority"];
+  affectedObservationIds: string[];
+}
+
+const BASELINE_MARGIN_M = 8.2;
+const PROPOSED_SPEED_MPS = 3.0;
+
+export const DEMO_STAGES: ReadonlyArray<{ id: ScenarioId; number: string; shortLabel: string; title: string; summary: string }> = [
+  { id: "perception", number: "01", shortLabel: "Neural evidence", title: "Degraded perception evidence", summary: "A declared output-only neural source reports degraded health; unavailable internals remain visibly unavailable." },
+  { id: "camera", number: "02", shortLabel: "Sensor conflict", title: "Radar–camera disagreement", summary: "The radar-supported track and camera output conflict, so both observations remain in the evidence chain." },
+  { id: "internal", number: "03", shortLabel: "Message age", title: "Stale internal communications", summary: "The network sees traffic, while the application-level delivery record is stale and cannot prove current consumption." },
+  { id: "intent", number: "04", shortLabel: "Peer intent", title: "Contradictory inter-ship intent", summary: "A peer's unauthenticated claimed course conflicts with independently observed motion and stays a separate claim." },
+  { id: "telemetry", number: "05", shortLabel: "AI telemetry", title: "Decision-AI telemetry loss", summary: "The proposal telemetry source declares itself unavailable, reducing the fixture decision to recovery authority." },
+];
+
+const scenarioCopy: Record<ScenarioId, FixtureStageDefinition> = {
+  perception: {
+    ...DEMO_STAGES[0],
+    label: "D01 · Degraded perception evidence",
+    reason: "The perception source declares degraded, output-only capability; no intermediate neural telemetry is substituted.",
+    codes: ["PERCEPTION_HEALTH_DEGRADED", "NEURAL_INTERNALS_UNAVAILABLE", "MARGIN_EXPANDED"],
+    neural: neural("degraded", ["OUTPUT_DISTRIBUTION_SHIFT", "INTERNALS_UNAVAILABLE"], "The fixture records degraded output evidence. Layer causality remains unknown because activations are unavailable."),
+    marginM: 12.2,
+    issuedSpeedMps: 2.4,
+    action: "modify",
+    authority: "filtered_autonomy",
+    affectedObservationIds: ["obs-camera-0042", "obs-neural-0042"],
   },
   camera: {
-    label: "S19 · Camera preprocessing mismatch",
+    ...DEMO_STAGES[1],
+    label: "D02 · Radar–camera disagreement",
     reason: "Camera free-space output disagrees with the radar-supported contact track.",
-    codes: ["PERCEPTION_HEALTH_DEGRADED", "RADAR_CAMERA_DISAGREEMENT"],
+    codes: ["PERCEPTION_HEALTH_DEGRADED", "RADAR_CAMERA_DISAGREEMENT", "MARGIN_EXPANDED"],
     neural: neural("degraded", ["PREPROCESSOR_VERSION_MISMATCH", "OUTPUT_DISAGREEMENT"], "Preprocessor mismatch is a suspected cause; this fixture does not establish causality."),
+    marginM: 13.5,
+    issuedSpeedMps: 2.1,
+    action: "modify",
+    authority: "filtered_autonomy",
+    affectedObservationIds: ["obs-radar-0042", "obs-camera-0042"],
   },
-  network: {
-    label: "S12 · Delayed observation path",
-    reason: "The decision AI consumed stale camera context and its proposal expired before actuation.",
-    codes: ["EVIDENCE_STALE", "PROPOSAL_EXPIRED"],
-    neural: neural("unknown", ["TEMPORAL_CONTEXT_STALE"], "Transport delay is observed; model internals are unavailable."),
+  internal: {
+    ...DEMO_STAGES[2],
+    label: "D03 · Stale internal communications",
+    reason: "A packet was observed on the network, but the application delivery record is stale; current AI consumption is unproven.",
+    codes: ["INTERNAL_COMMUNICATION_STALE", "CONSUMPTION_UNCONFIRMED", "SPEED_RESTRICTED"],
+    neural: neural("unknown", ["TEMPORAL_CONTEXT_UNCONFIRMED"], "The stale application record does not establish a neural fault."),
+    marginM: 10.2,
+    issuedSpeedMps: 1.9,
+    action: "modify",
+    authority: "filtered_autonomy",
+    affectedObservationIds: ["obs-network-0042", "obs-internal-0042"],
   },
-  proposal: {
-    label: "S22 · Unsafe AI proposal",
-    reason: "Fresh evidence reached the external decision AI, but its proposed course violates the clearance envelope.",
-    codes: ["UNSAFE_PROPOSAL", "COLLISION_MARGIN_LOW"],
-    neural: neural("healthy", [], "No sensor fault indicated; the unsafe behavior is attributed to the proposal."),
+  intent: {
+    ...DEMO_STAGES[3],
+    label: "D04 · Contradictory inter-ship intent",
+    reason: "The peer's claimed 206° course conflicts with the radar-supported 181° motion estimate; the claim is not treated as measured motion.",
+    codes: ["PEER_INTENT_CONTRADICTS_TRACK", "PEER_INTENT_UNAUTHENTICATED", "SPEED_RESTRICTED"],
+    neural: neural("healthy", [], "No neural degradation is recorded for this fixture stage."),
+    marginM: 11.0,
+    issuedSpeedMps: 2.0,
+    action: "modify",
+    authority: "filtered_autonomy",
+    affectedObservationIds: ["obs-radar-0042", "obs-intership-0042"],
+  },
+  telemetry: {
+    ...DEMO_STAGES[4],
+    label: "D05 · Decision-AI telemetry loss",
+    reason: "The declared decision-AI telemetry source is unavailable, so the fixture record carries no AI proposal and uses recovery authority.",
+    codes: ["DECISION_AI_TELEMETRY_UNAVAILABLE", "PROPOSAL_UNAVAILABLE", "RECOVERY_REQUIRED"],
+    neural: neural("unknown", ["NO_AI_TRACE"], "Perception health is not inferred from missing decision-AI telemetry."),
+    marginM: 14.0,
+    issuedSpeedMps: 1.2,
+    action: "recover",
+    authority: "recovery",
+    affectedObservationIds: ["obs-ai-0042"],
   },
 };
 
@@ -38,7 +101,7 @@ function neural(status: ConsolePacket["neural"]["status"], reasonCodes: string[]
     reasonCodes,
     observedOutputs: [
       { label: "Contact output", value: status === "degraded" ? "missed" : "contact-01" },
-      { label: "Radar agreement", value: status === "degraded" ? "disagrees" : "consistent" },
+      { label: "Output health", value: status === "degraded" ? "degraded" : status },
       { label: "Frame age", value: status === "unknown" ? "1.8 s · stale" : "82 ms" },
     ],
     layerTelemetry: [
@@ -86,18 +149,20 @@ export function createFixturePacket(scenarioId: ScenarioId, timeS: number): Cons
   const contactEastDelta = contactEast - ownEast;
   const contactRangeM = Math.hypot(contactNorthDelta, contactEastDelta);
   const contactBearingDeg = ((Math.atan2(contactEastDelta, contactNorthDelta) * 180) / Math.PI + 360) % 360;
-  const faulted = scenarioId !== "crossing";
-  const cameraCapability = scenarioId === "network" ? "degraded" : "available";
+  const cameraCapability = scenarioId === "perception" || scenarioId === "camera" ? "degraded" : "available";
+  const neuralCapability = scenarioId === "perception" ? "degraded" : "output_only";
+  const internalAgeS = scenarioId === "internal" ? 2.6 : 0.05;
+  const telemetryAvailable = scenarioId !== "telemetry";
   const observations: Observation[] = [
     observation("navigation_environment", "obs-nav-0042", "gnss-imu-01", "available", timeS, { position_ne_m: [ownNorth, ownEast], heading_rad: 0.2 }),
     observation("obstacle_perception", "obs-radar-0042", "radar-01", "available", timeS - 0.08, { contact_id: "contact-01", range_m: contactRangeM, bearing_deg: contactBearingDeg }),
-    observation("obstacle_perception", "obs-camera-0042", "camera-perception-01", cameraCapability, timeS - (scenarioId === "network" ? 1.8 : 0.09), { contact_id: scenarioId === "camera" ? null : "contact-01" }),
+    observation("obstacle_perception", "obs-camera-0042", "camera-perception-01", cameraCapability, timeS - 0.09, { contact_id: scenarioId === "camera" ? null : "contact-01", free_space_contact: scenarioId !== "camera" }),
     observation("ship_actuator_feedback", "obs-actuator-0042", "steering-01", "available", timeS, { rudder_rad: 0.18, thrust_fraction: 0.52 }),
-    observation("onboard_network", "obs-network-0042", "capture-mirror-01", scenarioId === "network" ? "degraded" : "available", timeS, { delayed_frames: scenarioId === "network" ? 9 : 0 }),
-    observation("internal_ship_communications", "obs-internal-0042", "event-bus-01", "available", timeS, { message: "proposal delivered" }),
-    observation("inter_ship_communications", "obs-intership-0042", "ais-receiver-01", "degraded", timeS - 2.4, { stated_course_deg: 206, authenticated: false }),
-    observation("decision_ai_telemetry", "obs-ai-0042", "decision-ai-fixture", "available", timeS, { inference_id: "inference-0042", proposal_id: "proposal-0042" }),
-    observation("neural_sensor_internals", "obs-neural-0042", "camera-perception-01", "output_only", timeS, { intermediate_activations: null, capability: "output_only" }),
+    observation("onboard_network", "obs-network-0042", "capture-mirror-01", "available", timeS, { observed_message_id: "proposal-message-0042", packet_seen: true }),
+    observation("internal_ship_communications", "obs-internal-0042", "event-bus-01", scenarioId === "internal" ? "degraded" : "available", timeS - internalAgeS, { message_id: "proposal-message-0042", application_status: scenarioId === "internal" ? "stale_receipt" : "consumed", age_s: internalAgeS }),
+    observation("inter_ship_communications", "obs-intership-0042", "ais-receiver-01", scenarioId === "intent" ? "degraded" : "available", timeS - 0.4, { stated_course_deg: scenarioId === "intent" ? 206 : 181, observed_course_deg: 181, authenticated: scenarioId !== "intent" }),
+    observation("decision_ai_telemetry", "obs-ai-0042", "decision-ai-fixture", telemetryAvailable ? "available" : "unavailable", timeS, telemetryAvailable ? { inference_id: "inference-0042", proposal_id: "proposal-0042" } : { inference_id: null, proposal_id: null, availability: "unavailable" }),
+    observation("neural_sensor_internals", "obs-neural-0042", "camera-perception-01", neuralCapability, timeS, { intermediate_activations: null, capability: neuralCapability }),
   ];
 
   const snapshot: SimulationSnapshot = {
@@ -126,19 +191,19 @@ export function createFixturePacket(scenarioId: ScenarioId, timeS: number): Cons
     branch_id: "protected",
     tick_index: snapshot.tick_index,
     input_snapshot_id: snapshot.snapshot_id,
-    proposal_id: "proposal-0042",
+    proposal_id: telemetryAvailable ? "proposal-0042" : "unavailable",
     decision_id: "decision-0042",
     candidate_id: "STUB",
     candidate_version: "fixture-v1",
-    action: timeS >= 25 ? "modify" : "pass",
-    authority: timeS >= 25 ? "filtered_autonomy" : "autonomy",
-    issued_command: { heading_rad: timeS >= 25 ? 0.35 : 0.08, speed_mps: timeS >= 25 ? 2.3 : 3.0 },
+    action: timeS >= 25 ? copy.action : "pass",
+    authority: timeS >= 25 ? copy.authority : "autonomy",
+    issued_command: { heading_rad: timeS >= 25 ? 0.35 : 0.08, speed_mps: timeS >= 25 ? copy.issuedSpeedMps : PROPOSED_SPEED_MPS },
     decided_monotonic_ns: Math.round(timeS * 1_000_000_000),
     expires_monotonic_ns: Math.round(timeS * 1_000_000_000 + 300_000_000),
     compute_time_ns: 20_000_000,
     deadline_met: true,
     reason_codes: timeS >= 25 ? copy.codes : [],
-    constraints: [{ constraint_id: "contact-01", kind: "collision", minimum_margin: 8.2, units: "m", assumption_id: "radar-bound-v1", representation: "bounded", coverage: null }],
+    constraints: [{ constraint_id: "contact-01", kind: "collision", minimum_margin: timeS >= 25 ? copy.marginM : BASELINE_MARGIN_M, units: "m", assumption_id: "fixture-bounded-margin-v1", representation: "bounded", coverage: null }],
     recovery: timeS >= 25 ? { recovery_id: "turn-starboard-v1", valid_until_monotonic_ns: Math.round(timeS * 1_000_000_000 + 400_000_000), assumption_id: "recovery-envelope-v1" } : null,
     solver: { status: "not_used" },
     valid: true,
@@ -190,21 +255,21 @@ export function createFixturePacket(scenarioId: ScenarioId, timeS: number): Cons
       explanation: "Synthetic fixture playback; no current actuator authority is asserted.",
     },
     observations,
-    proposedCommand: { headingRad: 0.08, speedMps: 3.0 },
-    proposedPath: [[0, -37], [28, -29], [52, -13], [76, 8], [104, 29]].map(([north, east]) => ({ north, east })),
+    proposedCommand: telemetryAvailable ? { headingRad: 0.08, speedMps: PROPOSED_SPEED_MPS } : null,
+    proposedPath: telemetryAvailable ? [[0, -37], [28, -29], [52, -13], [76, 8], [104, 29]].map(([north, east]) => ({ north, east })) : [],
     acceptedPath: [[0, -37], [28, -28], [50, -11], [61, 16], [79, 37], [104, 44]].map(([north, east]) => ({ north, east })),
     branchPath: [[0, -37], [28, -29], [52, -13], [76, 8], [99, 25]].map(([north, east]) => ({ north, east })),
     contact: {
       contactId: "contact-01",
       label: "MV Kestrel",
-      status: scenarioId === "network" ? "stale" : faulted ? "degraded" : "tracked",
+      status: scenarioId === "internal" ? "stale" : scenarioId === "perception" || scenarioId === "camera" || scenarioId === "intent" ? "degraded" : "tracked",
       rangeM: contactRangeM,
       bearingDeg: contactBearingDeg,
-      ageS: scenarioId === "network" ? 1.8 : 0.08,
+      ageS: scenarioId === "internal" ? internalAgeS : 0.08,
       sourceIds: ["radar-01", "camera-perception-01", "ais-receiver-01"],
       supportingObservationIds: ["obs-radar-0042", "obs-camera-0042"],
-      contradictingObservationIds: scenarioId === "camera" ? ["obs-camera-0042"] : [],
-      uncertaintyRadiusM: 8.2,
+      contradictingObservationIds: scenarioId === "camera" ? ["obs-camera-0042"] : scenarioId === "intent" ? ["obs-intership-0042"] : [],
+      uncertaintyRadiusM: timeS >= 25 ? copy.marginM : BASELINE_MARGIN_M,
       reason: copy.reason,
     },
     neural: copy.neural,
@@ -213,28 +278,35 @@ export function createFixturePacket(scenarioId: ScenarioId, timeS: number): Cons
     scenarioLabel: copy.label,
     physicsLabel: "Authoritative horizontal physics: fixture playback · waves are visual only",
     fixture: true,
+    fixtureStage: {
+      number: copy.number,
+      shortLabel: copy.shortLabel,
+      title: copy.title,
+      summary: copy.summary,
+      baselineMarginM: BASELINE_MARGIN_M,
+      sourceNote: "Synthetic schema-valid fixture records; illustrative behavior, not measured assurance performance.",
+    },
   };
 }
 
 function eventsFor(scenarioId: ScenarioId, reason: string): ScenarioEvent[] {
   const faultLabel = {
-    crossing: "Encounter develops",
-    camera: "Preprocessing mismatch introduced",
-    network: "Camera delivery delayed",
-    proposal: "Unsafe course proposed",
+    perception: "Perception health degrades",
+    camera: "Radar and camera disagree",
+    internal: "Application receipt becomes stale",
+    intent: "Peer intent contradicts observed motion",
+    telemetry: "Decision-AI telemetry becomes unavailable",
   }[scenarioId];
+  const affectedObservationIds = scenarioCopy[scenarioId].affectedObservationIds;
   return [
-    { id: "evt-fault", timeS: 18, stage: "fault", label: faultLabel, detail: "Synthetic scenario event; see input provenance.", observationIds: ["obs-camera-0042", "obs-network-0042"], severity: "attention" },
-    { id: "evt-detect", timeS: 23, stage: "detect", label: "Hazard evidence correlated", detail: reason, observationIds: ["obs-radar-0042", "obs-camera-0042"], inferenceId: "inference-0042", severity: "critical" },
-    { id: "evt-decide", timeS: 25, stage: "decide", label: "Proposal modified", detail: "STUB fixture decision changes heading and speed.", observationIds: ["obs-ai-0042"], inferenceId: "inference-0042", severity: "critical" },
+    { id: "evt-fault", timeS: 18, stage: "fault", label: faultLabel, detail: "Synthetic scenario event; see each observation's provenance.", observationIds: affectedObservationIds, severity: "attention" },
+    { id: "evt-detect", timeS: 23, stage: "detect", label: "Evidence limitation retained", detail: reason, observationIds: affectedObservationIds, inferenceId: scenarioId === "telemetry" ? undefined : "inference-0042", severity: "critical" },
+    { id: "evt-decide", timeS: 25, stage: "decide", label: scenarioId === "telemetry" ? "Recovery authority selected" : "Proposal constrained", detail: `STUB fixture decision records ${scenarioCopy[scenarioId].action} with ${scenarioCopy[scenarioId].authority.replaceAll("_", " ")} authority.`, observationIds: affectedObservationIds, inferenceId: scenarioId === "telemetry" ? undefined : "inference-0042", severity: "critical" },
     { id: "evt-actuate", timeS: 26, stage: "actuate", label: "Command accepted by fixture gate", detail: "Displayed actuation is fixture evidence, not a measured live result.", observationIds: ["obs-actuator-0042"], severity: "info" },
     { id: "evt-outcome", timeS: 49, stage: "outcome", label: "Protected branch separates", detail: "This branch path is an illustrative fixture outcome.", observationIds: ["obs-nav-0042"], severity: "info" },
   ];
 }
 
 export const SCENARIOS: Array<{ id: ScenarioId; label: string }> = [
-  { id: "crossing", label: "S04 · Crossing contact" },
-  { id: "camera", label: "S19 · Camera mismatch" },
-  { id: "network", label: "S12 · Delayed observations" },
-  { id: "proposal", label: "S22 · Unsafe proposal" },
+  ...DEMO_STAGES.map((stage) => ({ id: stage.id, label: `${stage.number} · ${stage.title}` })),
 ];

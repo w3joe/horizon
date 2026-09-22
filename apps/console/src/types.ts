@@ -11,7 +11,7 @@ import type {
 
 export type Workspace = "navigation" | "data" | "neural";
 export type CameraMode = "oblique" | "tactical";
-export type ScenarioId = "crossing" | "camera" | "network" | "proposal";
+export type ScenarioId = "perception" | "camera" | "internal" | "intent" | "telemetry";
 export type ConnectionState = "fixture" | "connecting" | "live" | "stale" | "disconnected";
 export type LineageStatus = "accepted" | "rejected" | "invalid" | "incomplete" | "unavailable";
 export type ServiceName = "snapshot" | "assurance" | "evidence" | "collector" | "diagnostics" | "gate";
@@ -237,6 +237,14 @@ export interface ConsolePacket {
   scenarioLabel: string;
   physicsLabel: string;
   fixture: boolean;
+  fixtureStage?: {
+    number: string;
+    shortLabel: string;
+    title: string;
+    summary: string;
+    baselineMarginM: number;
+    sourceNote: string;
+  };
 }
 
 export interface LiveEnvelope {

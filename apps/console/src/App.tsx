@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { DataFlowView } from "./components/DataFlowView";
 import { DemoExperience } from "./components/DemoExperience";
 import { EvidencePanel } from "./components/EvidencePanel";
+import { GuidedStageSelector } from "./components/GuidedStageSelector";
 import { MaritimeScene } from "./components/MaritimeScene";
 import { NeuralView } from "./components/NeuralView";
 import { OperatorControls } from "./components/OperatorControls";
@@ -35,7 +36,7 @@ export function App() {
 
 function LiveConsole() {
   const [workspace, setWorkspace] = useState<Workspace>("navigation");
-  const [scenarioId, setScenarioId] = useState<ScenarioId>("camera");
+  const [scenarioId, setScenarioId] = useState<ScenarioId>("perception");
   const [cameraMode, setCameraMode] = useState<CameraMode>("oblique");
   const [timeS, setTimeS] = useState(31);
   const [playing, setPlaying] = useState(false);
@@ -106,17 +107,20 @@ function LiveConsole() {
 
   const changeScenario = (id: ScenarioId) => {
     setScenarioId(id);
-    setTimeS(18);
-    setPlaying(true);
-    setSelectedEventId("evt-fault");
+    setTimeS(25);
+    setPlaying(false);
+    setSelectedEventId("evt-decide");
+    if (id === "perception") setWorkspace("neural");
+    else setWorkspace("data");
   };
 
   return (
     <main className="app-shell">
       <header className="app-header">
         <div className="brand"><span className="brand-mark"><HorizonMark /></span><div><strong>HORIZON</strong><small>Runtime assurance console</small></div></div>
-        <div className="mission-title"><span>COASTAL TRANSIT · SECTOR 04</span><strong>{packet.scenarioLabel}</strong></div>
+        <div className="mission-title"><span>SINGAPORE STRAIT · SOUTHERN APPROACH</span><strong>{packet.scenarioLabel}</strong></div>
         <div className="runtime-status">
+          <span className="candidate-pill"><small>{packet.fixture ? "Fixture candidate" : "Selected candidate"}</small><strong>{packet.decision ? `${packet.decision.candidate_id} · ${packet.decision.candidate_version}` : "unavailable"}</strong></span>
           <span className={`connection-pill ${connection}`}><i />{connection === "fixture" ? "Fixture stream" : connection}</span>
           <span className="clock">T+{displayTime.toFixed(1)} s</span>
         </div>
@@ -133,6 +137,8 @@ function LiveConsole() {
           {operatorLocked && <span className="control-pending">Scenario changes require a new coordinated run.</span>}
         </div>
       </section>
+
+      {packet.fixture && !operatorLocked && <GuidedStageSelector packet={packet} onSelect={changeScenario} />}
 
       {operatorLocked && <OperatorControls state={operator.state} onAction={operator.invoke} />}
 

@@ -219,8 +219,9 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch 
 
 export function MaritimeScene(props: Props) {
   const isTactical = props.cameraMode === "tactical";
+  const internalComms = [...props.packet.observations].reverse().find((item) => item.contract_type === "Observation" && item.input_group === "internal_ship_communications");
   return (
-    <div className="scene-canvas" aria-label="Interactive 3D synthetic harbor scene">
+    <div className="scene-canvas" aria-label="Interactive Singapore Strait-inspired synthetic harbour scene">
       <Canvas
         key={props.cameraMode}
         shadows
@@ -233,7 +234,12 @@ export function MaritimeScene(props: Props) {
         <SceneContents {...props} />
       </Canvas>
       <div className="north-indicator" aria-hidden="true"><span>N</span><i /></div>
-      <div className="scene-coordinates">NED frame · heading clockwise from north</div>
+      <div className="scene-coordinates">Singapore Strait-inspired harbour · NED scenario frame</div>
+      <div className="platform-fit" aria-label="Decorative defensive maritime platform fit">
+        <span>Patrol platform · presentation fit</span>
+        <strong>Sensor mast + radome · EO/IR sensor · mission bay/RHIB · static defensive silhouettes</strong>
+        <small>Internal comms evidence: {internalComms && "capability" in internalComms ? internalComms.capability : "unavailable"} · silhouettes are non-functional and have no control, targeting, or safety-evidence role</small>
+      </div>
       <div className="asset-attribution">
         <a href="https://opengameart.org/content/container-ship-full" target="_blank" rel="noreferrer">Ship + cargo · Sketlux · CC0</a>
         <a href="https://polyhaven.com/a/ocean_buoy" target="_blank" rel="noreferrer">Ocean Buoy · Mateusz Sadek / Poly Haven · CC0</a>

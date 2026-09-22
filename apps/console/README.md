@@ -38,6 +38,12 @@ Production playback and fault controls remain disabled until A01 exposes the coo
 
 The Navigation, Data flow, and Neural sensor workspaces share the selected timeline event. Keyboard shortcuts are `1`–`3` for workspaces, Space for fixture play/pause, and `R` for fixture reset.
 
+Development fixture mode also exposes an accessible five-stage evidence walkthrough. Each stage
+retains a distinct limitation across perception/neural output, radar–camera agreement, internal
+application communication age, peer claimed intent, or decision-AI telemetry. Its margin, speed, and
+authority summary is computed from the displayed fixture decision and receipt. The fixture candidate
+remains `STUB`; live and recorded candidate badges use the exact backend decision ID/version.
+
 ## Evidence boundaries
 
 - Fixture paths, outcomes, messages, and perception outputs are synthetic and labeled in the interface.
@@ -47,3 +53,4 @@ The Navigation, Data flow, and Neural sensor workspaces share the selected timel
 - Live simulator snapshots are sensor-derived display state, not evaluation truth.
 - Maritime GLBs never alter collision geometry, hydrodynamics, contacts, or assurance evidence.
 - The recorded perception source is a camera sequence reproduction, not a simulator camera or a live 20 Hz/GPU claim.
+- Singapore Strait and defensive-maritime cues are presentation context, without coordinates or a deployment claim. Procedural sensor mast/radome, EO/IR sensor, mission-bay/RHIB, and static deck/CIWS-like silhouettes are fictional and have no source-equipment claim. The silhouettes have no controls, target/contact linkage, tracking, engagement logic, firing animation, performance parameters, fire-control, or actuation behavior.

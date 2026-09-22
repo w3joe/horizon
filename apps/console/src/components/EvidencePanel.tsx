@@ -21,6 +21,7 @@ export function EvidencePanel({ packet, selectedEvent }: { packet: ConsolePacket
         <p className="panel-note">{packet.authority.explanation}</p>
         <div className={`issue-state ${packet.authority.state}`}><span>{statusLabel}</span><code>{receipt?.receipt_id ?? lineage.eventType}</code></div>
         <dl className="gate-readiness">
+          <div><dt>Candidate</dt><dd>{decision ? `${decision.candidate_id} · ${decision.candidate_version}` : "unknown"}</dd></div>
           <div><dt>Gate epoch</dt><dd>{packet.gateStatus?.epoch ?? "unknown"}</dd></div>
           <div><dt>Recovery primed</dt><dd>{packet.gateStatus?.startup_recovery_ready === true ? "yes" : packet.gateStatus?.startup_recovery_ready === false ? "no" : "unknown"}</dd></div>
           <div><dt>Quarantine</dt><dd>{packet.gateStatus?.quarantined === true ? "active" : packet.gateStatus?.quarantined === false ? "clear" : "unknown"}</dd></div>

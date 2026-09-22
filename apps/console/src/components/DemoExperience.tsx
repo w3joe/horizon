@@ -216,6 +216,10 @@ function CurrentEvidence({ replay, frame, timeS }: { replay: DemoReplay; frame: 
         <span>Why</span>
         <p>{reasons.length ? reasons.map(humanize).join(" · ") : "No intervention reason has been recorded at this point."}</p>
       </div>
+      <dl className="replay-identities">
+        <div><dt>Recorded candidate</dt><dd>{decision ? `${decision.candidate_id} · ${decision.candidate_version}` : "not yet recorded"}</dd></div>
+        <div><dt>Intervention mechanism</dt><dd>{interventionReached ? replay.intervention.mechanism ?? "none recorded" : "not yet reached"}</dd></div>
+      </dl>
     </section>
   );
 }
@@ -274,17 +278,19 @@ export function DemoExperience() {
   const protectedCollision = replay.outcome_summary.protected.first_collision_time_s != null && demo.timeS >= replay.outcome_summary.protected.first_collision_time_s;
   const counterfactualCollision = replay.outcome_summary.counterfactual.first_collision_time_s != null && demo.timeS >= replay.outcome_summary.counterfactual.first_collision_time_s;
   const interventionLabel = replay.intervention.mode === "preventive_guard" ? "Safety guard engaged" : "Safety takeover recorded";
+  const recordedCandidates = [...new Set(replay.public_evidence.decisions.map((item) => `${item.record.candidate_id} · ${item.record.candidate_version}`))];
+  const candidateLabel = recordedCandidates.length === 1 ? recordedCandidates[0] : recordedCandidates.length > 1 ? recordedCandidates.join(" + ") : "No candidate recorded";
 
   return (
     <main className="demo-shell">
       <header className="demo-header">
         <div className="demo-brand"><span><HorizonMark /></span><div><strong>HORIZON</strong><small>Runtime assurance at sea</small></div></div>
-        <div className="demo-header-meta"><span className="recorded-badge"><i />Recorded simulation</span><span>{replay.manifest.scenario.id} · {replay.manifest.duration_s.toFixed(0)} seconds</span></div>
+        <div className="demo-header-meta"><span className="recorded-badge"><i />Recorded simulation</span><span className="recorded-candidate">Candidate {candidateLabel}</span><span>{replay.manifest.scenario.id} · {replay.manifest.duration_s.toFixed(0)} seconds</span></div>
       </header>
 
       <section className="demo-hero">
         <div className="demo-hero-copy">
-          <span className="hero-kicker">A real local service run, replayed</span>
+          <span className="hero-kicker">A real local service run · Singapore Strait-inspired presentation</span>
           <h1>When autonomy fails,<br /><em>safety stays in control.</em></h1>
           <p>Watch the same maritime encounter unfold twice. The red branch continues without runtime assurance. The cyan branch shows the command that the protected plant actually received.</p>
           <div className="hero-actions">
@@ -300,6 +306,8 @@ export function DemoExperience() {
           ))}
         </aside>
       </section>
+
+      <aside className="demo-platform-context" aria-label="Presentation setting and patrol platform fit"><strong>Defensive maritime presentation</strong><span>Singapore Strait-inspired harbour · naval-gray patrol craft · sensor mast/radome · EO/IR sensor · mission bay/RHIB · static defensive silhouettes</span><small>Presentation geometry only; silhouettes have no controls, targeting, tracking, engagement, or firing behavior. Recorded evidence remains authoritative.</small></aside>
 
       <section ref={branchSection} className="branch-section" aria-label="Synchronized branch comparison">
         <header className="branch-section-header">
@@ -343,7 +351,7 @@ export function DemoExperience() {
         <button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((open) => !open)}><span>Technical details</span><small>{detailsOpen ? "Hide provenance and identifiers" : "Show provenance and identifiers"}</small><b>{detailsOpen ? "−" : "+"}</b></button>
         {detailsOpen && <div className="details-grid">
           <dl><div><dt>Run</dt><dd>{replay.run_id}</dd></div><div><dt>Source commit</dt><dd>{replay.manifest.source_commit}</dd></div><div><dt>Scenario version</dt><dd>{replay.manifest.scenario.version}</dd></div><div><dt>Replay digest</dt><dd>{replay.manifest.replay_sha256}</dd></div></dl>
-          <dl><div><dt>Snapshot</dt><dd>{frame.protected.snapshot_id}</dd></div><div><dt>Proposal</dt><dd>{latestAt(replay.public_evidence.proposals, demo.timeS)?.record.command_id ?? "not yet available"}</dd></div><div><dt>Intervention</dt><dd>{replay.intervention.mechanism ? humanize(replay.intervention.mechanism) : "none recorded"}</dd></div><div><dt>Exact intervention time</dt><dd>{replay.intervention.time_s === null ? "none recorded" : `${replay.intervention.time_s.toFixed(3)} s`}</dd></div><div><dt>Receipt</dt><dd>{replay.intervention.source_receipt_id ?? "none recorded"}</dd></div></dl>
+          <dl><div><dt>Snapshot</dt><dd>{frame.protected.snapshot_id}</dd></div><div><dt>Proposal</dt><dd>{latestAt(replay.public_evidence.proposals, demo.timeS)?.record.command_id ?? "not yet available"}</dd></div><div><dt>Recorded candidate</dt><dd>{candidateLabel}</dd></div><div><dt>Intervention mechanism</dt><dd>{replay.intervention.mechanism ?? "none recorded"}</dd></div><div><dt>Exact intervention time</dt><dd>{replay.intervention.time_s === null ? "none recorded" : `${replay.intervention.time_s.toFixed(3)} s`}</dd></div><div><dt>Receipt</dt><dd>{replay.intervention.source_receipt_id ?? "none recorded"}</dd></div></dl>
           <div className="details-notes"><strong>Boundaries of this evidence</strong><ul>{replay.manifest.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul><p>Recorded neural artifacts, when inspected in the live console, are separate evidence. This replay does not claim that a neural model caused the intervention.</p></div>
         </div>}
       </section>
