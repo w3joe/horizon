@@ -15,6 +15,7 @@ from experiment.evaluation.perception import calibrate_perception_methods, compa
 from experiment.evaluation.rta_calibration import assess_r3_r5_calibration, assess_r3_r5_readiness
 from experiment.acquisition.perception_calibration import acquire as acquire_perception_calibration
 from experiment.acquisition.perception_calibration import build_plan as build_perception_calibration_plan
+from experiment.acquisition.perception_calibration import retry_label_joins
 from experiment.evaluation.reporting import summarize_records
 from experiment.harness.manifests import (
     expand_jobs,
@@ -172,6 +173,12 @@ def _acquire_perception_calibration(args: argparse.Namespace) -> int:
     config = load_json(args.config)
     if args.join_labels and args.annotations_root is None:
         raise ValueError("--join-labels requires --annotations-root")
+    if args.retry_labels:
+        if args.annotations_root is None:
+            raise ValueError("--retry-labels requires --annotations-root")
+        report = retry_label_joins(plan, args.output_root, args.annotations_root, config["label_policy"])
+        print(json.dumps(report, indent=2))
+        return 0
     report = acquire_perception_calibration(
         plan,
         args.frame_root,
@@ -348,6 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     acquisition.add_argument("--max-jobs", type=int, default=1)
     acquisition.add_argument("--max-frames-per-job", type=int)
     acquisition.add_argument("--join-labels", action="store_true")
+    acquisition.add_argument("--retry-labels", action="store_true")
     acquisition.add_argument("--plan-only", action="store_true")
     acquisition.set_defaults(function=_acquire_perception_calibration)
 

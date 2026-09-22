@@ -166,7 +166,12 @@ def materialize_job(
     }
     if metadata_path.exists():
         existing = json.loads(metadata_path.read_text())
-        _require(existing == expected_metadata, "resume destination has incompatible materialization metadata")
+        same_identity = all(existing.get(key) == expected_metadata[key] for key in ("schema_version", "plan_sha256", "job"))
+        _require(same_identity, "resume destination has incompatible materialization metadata")
+        previous_count = int(existing.get("selected_frame_count", -1))
+        _require(previous_count <= len(selected), "resume cannot shrink a materialized arm")
+        if existing != expected_metadata:
+            _write_json(metadata_path, expected_metadata)
     else:
         _write_json(metadata_path, expected_metadata)
     previous = None
@@ -315,7 +320,10 @@ def acquire(
     state_path = output_root / "state.json"
     state = json.loads(state_path.read_text()) if state_path.exists() else {"plan_sha256": plan["plan_sha256"], "jobs": {}}
     _require(state.get("plan_sha256") == plan["plan_sha256"], "output root belongs to another acquisition plan")
-    chosen = [job for job in plan["jobs"] if state["jobs"].get(f"{job['sequence_id']}/{job['arm_id']}", {}).get("status") != "inference_complete"][:max_jobs]
+    chosen = [
+        job for job in plan["jobs"]
+        if state["jobs"].get(f"{job['sequence_id']}/{job['arm_id']}", {}).get("eligible_for_calibration_bundle") is not True
+    ][:max_jobs]
     runner = run_sequence or actual_run_sequence
     spec = ModelSpec(
         family="wasr_t", source_dir=Path(source_dir), source_commit="1b5360af20408e09bbf0116a0029f7e0c0800e7c",
@@ -326,6 +334,13 @@ def acquire(
         job_root = output_root / "jobs" / job["sequence_id"] / job["arm_id"]
         materialized = materialize_job(plan, job, frame_root, job_root / "materialization", max_frames=max_frames_per_job)
         inference_dir = job_root / "inference"
+        existing_manifest = inference_dir / "manifest.json"
+        if existing_manifest.exists():
+            existing_count = int(json.loads(existing_manifest.read_text()).get("sequence_frame_count", -1))
+            if existing_count != materialized["selected_frame_count"]:
+                archive = job_root / f"inference-partial-{existing_count}"
+                _require(not archive.exists(), "partial inference archive already exists")
+                inference_dir.replace(archive)
         if not (inference_dir / "manifest.json").exists():
             runner(spec, job_root / "materialization", inference_dir, device, fp16, frame_glob="*L.jpg", evidence_partition="calibration")
         manifest = json.loads((inference_dir / "manifest.json").read_text())
@@ -372,4 +387,27 @@ def acquire(
         "state_sha256": _file_hash(state_path),
     }
     _write_json(output_root / "progress.json", report)
+    return report
+
+
+def retry_label_joins(
+    plan: dict[str, Any], output_root: str | Path, annotations_root: str | Path, label_policy: dict[str, Any]
+) -> dict[str, Any]:
+    """Retry label joins for completed jobs after an optional local parser is installed."""
+    output_root, annotations_root = Path(output_root), Path(annotations_root)
+    state = json.loads((output_root / "state.json").read_text())
+    _require(state.get("plan_sha256") == plan["plan_sha256"], "output root belongs to another acquisition plan")
+    statuses = {}
+    for job in plan["jobs"]:
+        if f"{job['sequence_id']}/{job['arm_id']}" not in state["jobs"]:
+            continue
+        job_root = output_root / "jobs" / job["sequence_id"] / job["arm_id"]
+        key = f"{job['sequence_id']}/{job['arm_id']}"
+        statuses[key] = join_h0_labels(
+            job_root, annotations_root / job["sequence_id"] / "ground_truth", label_policy
+        )
+        state["jobs"][key]["label_join_status"] = statuses[key]
+    _write_json(output_root / "state.json", state)
+    report = {"partition": "calibration", "joined_job_count": len(statuses), "statuses": statuses, "state_sha256": _file_hash(output_root / "state.json")}
+    _write_json(output_root / "label-join-retry.json", report)
     return report

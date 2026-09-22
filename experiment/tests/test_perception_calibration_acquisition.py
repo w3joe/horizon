@@ -53,12 +53,14 @@ def test_materialization_resumes_and_temporal_drop_has_a_valid_first_frame(tmp_p
     plan = build_plan(config, frame_root)
     temporal = next(job for job in plan["jobs"] if job["arm_id"] == "temporal-drop-v1")
     destination = tmp_path / "arm"
-    first = materialize_job(plan, temporal, frame_root, destination)
-    second = materialize_job(plan, temporal, frame_root, destination)
+    first = materialize_job(plan, temporal, frame_root, destination, max_frames=2)
+    second = materialize_job(plan, temporal, frame_root, destination, max_frames=2)
 
     assert first["frames_sha256"] == second["frames_sha256"]
-    assert len(second["frames"]) == 3
+    assert len(second["frames"]) == 2
     assert all((destination / row["frame_id"]).exists() for row in second["frames"])
+    extended = materialize_job(plan, temporal, frame_root, destination, max_frames=3)
+    assert extended["selected_frame_count"] == 3
 
 
 def test_bounded_acquisition_writes_h0_evidence_and_preserves_h1_block(tmp_path: Path) -> None:
@@ -89,3 +91,11 @@ def test_bounded_acquisition_writes_h0_evidence_and_preserves_h1_block(tmp_path:
     rows = (tmp_path / "out" / "jobs" / "kope67-test" / "nominal" / "h0-scores.jsonl").read_text().splitlines()
     assert len(rows) == 2
     assert json.loads(rows[0])["h1_status"] == "blocked"
+
+    completed = acquire(
+        plan, frame_root, tmp_path / "out",
+        source_dir=tmp_path, weights=tmp_path / "weights", device="mps", fp16=False,
+        max_jobs=1, max_frames_per_job=None, run_sequence=fake_runner,
+    )
+    assert completed["eligible_job_count"] == 1
+    assert (tmp_path / "out" / "jobs" / "kope67-test" / "nominal" / "inference-partial-2" / "manifest.json").exists()
