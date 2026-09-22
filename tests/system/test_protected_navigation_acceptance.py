@@ -12,6 +12,7 @@ from .horizon_stack import HorizonStack, request_json, wait_for
 
 
 HOST_PROGRESS_WATCHDOG_S = 120.0
+FIXED_STEP_S = 0.02
 
 
 def _stack(tmp_path, **kwargs) -> HorizonStack:
@@ -49,43 +50,82 @@ def _drive_s22_protected_path(
     stack: HorizonStack,
     *,
     collision_time_s: float,
-    duration_s: float,
 ) -> dict:
     deadline = time.monotonic() + HOST_PROGRESS_WATCHDOG_S
-    intervention: dict | None = None
     while time.monotonic() < deadline:
         evidence = stack.drive_joined_chain(
-            require_exact_command=intervention is None,
             timeout_s=max(0.1, deadline - time.monotonic())
         )
         governor = evidence["governor_input"]
         decision = evidence["decision"]
         simulation_time_s = float(governor["simulation_time_s"])
-        if intervention is None:
-            assert simulation_time_s < collision_time_s, (
-                "A1 did not intervene before the counterfactual collision: "
-                f"simulation_time_s={simulation_time_s}, "
-                f"collision_s={collision_time_s}"
-            )
-            if decision.get("action") in {"modify", "recover"}:
-                intervention = evidence
+        assert simulation_time_s < collision_time_s, (
+            "A1 did not intervene before the counterfactual collision: "
+            f"simulation_time_s={simulation_time_s}, "
+            f"collision_s={collision_time_s}"
+        )
+        if decision.get("action") in {"modify", "recover"}:
+            # Advance exactly once so truth records the accepted gate command
+            # before the deterministic continuation is cloned.
+            stack.step_simulation()
+            return evidence
 
-        # Each physics advance follows a complete accepted transaction. Exact
-        # fixed steps inside the final pre-collision window prevent the host
-        # scheduler from skipping the safety boundary.
+        # Before intervention, each physics advance follows a complete exact
+        # transaction. Fixed steps in the final pre-collision window prevent
+        # the host scheduler from skipping the safety boundary.
         coarse_step = (
-            intervention is not None
-            or simulation_time_s < collision_time_s - 5.0
+            simulation_time_s < collision_time_s - 5.0
         )
         step_count = 25 if coarse_step else 1
-        snapshot = stack.step_simulation(step_count)
-        if float(snapshot["simulation_time_s"]) >= duration_s:
-            assert intervention is not None
-            return intervention
+        stack.step_simulation(step_count)
 
     raise AssertionError(
         f"protected S22 path did not complete within {HOST_PROGRESS_WATCHDOG_S:.1f}s"
     )
+
+
+def _submit_evaluation_command(
+    stack: HorizonStack,
+    *,
+    branch: str,
+    simulation_time_s: float,
+    expires_simulation_time_s: float,
+    authority: str,
+    command: dict,
+) -> dict:
+    command_id = "s22-a1-command-continuation"
+    status, receipt, _ = request_json(
+        stack.url("simulator", f"/v1/evaluation/command?branch={branch}"),
+        {
+            "run_id": stack.run_id,
+            "branch_id": branch,
+            "decision_id": command_id,
+            "command_id": command_id,
+            "authority": authority,
+            "sequence": 1_000_000,
+            "expires_simulation_time_s": expires_simulation_time_s,
+            "offline_monotonic_ns": round(simulation_time_s * 1e9),
+            "command": command,
+        },
+        bearer=stack.token("evaluation.token"),
+    )
+    assert status == 200 and receipt["accepted"] is True
+    return receipt
+
+
+def _step_evaluation_to(
+    stack: HorizonStack, branch: str, start_s: float, end_s: float
+) -> None:
+    steps = round((end_s - start_s) / FIXED_STEP_S)
+    assert steps >= 0
+    status, snapshot, _ = request_json(
+        stack.url("simulator", f"/v1/evaluation/step?branch={branch}"),
+        {"steps": steps},
+        bearer=stack.token("evaluation.token"),
+        timeout_s=8.0,
+    )
+    assert status == 200
+    assert snapshot["simulation_time_s"] == end_s
 
 
 def _truth_records(
@@ -270,7 +310,6 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
         intervention_event = _drive_s22_protected_path(
             unsafe,
             collision_time_s=counterfactual_collision_s,
-            duration_s=float(scenario["duration_s"]),
         )
         governor = intervention_event["governor_input"]
         decision = intervention_event["decision"]
@@ -301,26 +340,66 @@ def test_s22_protected_path_intervenes_on_unsafe_external_ai(tmp_path) -> None:
         )
         assert a1_receipt["received_monotonic_ns"] < decision["expires_monotonic_ns"]
 
-        records, events = _truth_records(unsafe, "protected")
-        assert records[-1]["simulation_time_s"] == scenario["duration_s"]
-        assert not [item for item in events if item["kind"] == "collision"]
-        assert min(
-            item["signed_margins"]["hull_clearance_m"] for item in records
-        ) > 0.0
-
+        protected_records, protected_events = _truth_records(unsafe, "protected")
         a1_actuation = next(
             item
-            for item in records
+            for item in protected_records
             if item["actual_actuator"]["command_id"] == a1_receipt["command_id"]
         )
         a1_actuation_s = float(a1_actuation["simulation_time_s"])
         assert a1_actuation_s < counterfactual_collision_s
         assert counterfactual_collision_s - a1_actuation_s > 0.0
 
+        evaluation_token = unsafe.token("evaluation.token")
+        status, continuation, _ = request_json(
+            unsafe.url("simulator", "/v1/evaluation/clone?branch=protected"),
+            {"branch_id": "s22-protected-command-continuation", "protected": False},
+            bearer=evaluation_token,
+        )
+        assert status == 201
+        continuation_start_s = float(continuation["simulation_time_s"])
+        assert continuation_start_s == a1_actuation_s
+        duration_s = float(scenario["duration_s"])
+        _submit_evaluation_command(
+            unsafe,
+            branch="s22-protected-command-continuation",
+            simulation_time_s=continuation_start_s,
+            expires_simulation_time_s=duration_s + 1.0,
+            authority=a1_receipt["authority"],
+            command=a1_receipt["actual_command"],
+        )
+        _step_evaluation_to(
+            unsafe,
+            "s22-protected-command-continuation",
+            continuation_start_s,
+            duration_s,
+        )
+        continuation_records, continuation_events = _truth_records(
+            unsafe, "s22-protected-command-continuation"
+        )
+        post_intervention = [
+            item
+            for item in continuation_records
+            if item["simulation_time_s"] >= continuation_start_s
+        ]
+        assert continuation_records[-1]["simulation_time_s"] == duration_s
+        assert not [
+            item
+            for item in [*protected_events, *continuation_events]
+            if item["kind"] == "collision"
+        ]
+        assert min(
+            item["signed_margins"]["hull_clearance_m"]
+            for item in [*protected_records, *post_intervention]
+        ) > 0.0
+
         # The physical evaluation horizon completed, but the recovery-latched
         # vessel did not reach the route endpoint. Preserve that censored
         # mission result instead of calling bounded clearance mission success.
-        assert records[-1]["mission_progress"]["distance_remaining_m"] > 15.0
+        assert (
+            continuation_records[-1]["mission_progress"]["distance_remaining_m"]
+            > 15.0
+        )
 
     finally:
         unsafe.close()
