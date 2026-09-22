@@ -3,92 +3,156 @@
   "schema_version": "0.1.0",
   "snapshot_id": "singapore-synthetic-traffic-v1",
   "mode": "synthetic_offline",
-  "selection_time_utc": "2026-09-22T12:00:00Z",
-  "provenance": {
-    "source_kind": "generated_synthetic",
-    "source_artifact_sha256": "5ac10bc39fe48ad7a62608c5958ffaf530036f352120a49926b1eebe46497de1",
-    "rights": "CC0-1.0; generated Horizon test fixture; no received AIS records",
-    "redistribution_allowed": true
-  },
+  "capture_sha256": "b386c5a4b4d8292d15e483cc2e3fd5d974225a7659770fa8fbe764315078457c",
+  "selection_utc": "2026-09-22T12:00:00Z",
+  "selection_window_s": 0.0,
   "local_frame": {
-    "frame": "NED",
-    "origin_wgs84": {
-      "latitude_deg": 1.25,
-      "longitude_deg": 103.85,
-      "height_m": 0.0
-    },
-    "sha256": "2c2a62fe9bc551f3192e198c8aeb42aa21472529ed289e839dceb02268348ba2"
+    "latitude_deg": 1.25,
+    "longitude_deg": 103.85,
+    "height_m": 0.0,
+    "sha256": "4523a5360a25db52ffcd31a5f5a9befe0a16fa56fdbf3bf86c40d6e2a7512a7e"
   },
+  "compiler_version": "horizon-synthetic-traffic-fixture-v1",
   "motion_model": {
     "kind": "constant_course_speed",
-    "horizon_s": 180.0
+    "horizon_s": 180.0,
+    "acceleration_mps2": 0.0,
+    "turn_rate_rps": 0.0
   },
+  "rights_status": "approved_public",
+  "source_completeness": "incomplete",
   "counts": {
-    "total_candidates": 4,
+    "frames_total": 4,
+    "dynamic_valid": 4,
+    "static_valid": 0,
+    "candidates": 4,
     "selected": 4,
-    "excluded": 0,
-    "exclusion_reasons": {}
+    "exclusions": {}
   },
   "vessels": [
     {
-      "vessel_id": "synthetic-cargo-eastbound",
-      "position_ne_m": [360.0, -260.0],
-      "heading_rad": 1.5707963267948966,
+      "mmsi": "000000101",
+      "identity_generation": 1,
+      "source_frame_sha256": "4acb5fa9aef28311b91e7a8d1225acf864440cef85a807e762eedea1a066df2b",
+      "position_ne_m": [
+        360.0,
+        -260.0
+      ],
+      "velocity_ne_mps": [
+        2.571758278209442e-16,
+        4.2
+      ],
       "speed_mps": 4.2,
-      "hull": {"length_m": 120.0, "beam_m": 22.0, "draft_m": 7.0},
+      "course_rad": 1.5707963267948966,
+      "true_heading_rad": 1.5707963267948966,
+      "hull": {
+        "length_m": 120.0,
+        "beam_m": 22.0,
+        "draft_m": 7.0
+      },
       "dimensions_assumed": false,
-      "report": {
-        "age_s": 2.0,
-        "identity_generation": 1,
-        "position_uncertainty_m": 18.0,
-        "source_health": "healthy"
-      },
-      "simulated_observations": {"radar": true, "camera": true, "ais": true}
+      "report_age_s": 2.0,
+      "position_uncertainty_m": 18.0,
+      "source_health": "healthy",
+      "motion_model": "constant_course_speed",
+      "simulated_observations": {
+        "radar": true,
+        "camera": true,
+        "ais": true
+      }
     },
     {
-      "vessel_id": "synthetic-ais-dropout",
-      "position_ne_m": [220.0, 170.0],
-      "heading_rad": -1.5707963267948966,
+      "mmsi": "000000102",
+      "identity_generation": 1,
+      "source_frame_sha256": "484f29629f84b10044f463233b2970fbf2a77a0cea68d41b46b3ba35645bb1ff",
+      "position_ne_m": [
+        220.0,
+        170.0
+      ],
+      "velocity_ne_mps": [
+        2.143131898507868e-16,
+        -3.5
+      ],
       "speed_mps": 3.5,
-      "hull": {"length_m": 78.0, "beam_m": 15.0, "draft_m": 4.5},
-      "dimensions_assumed": true,
-      "report": {
-        "age_s": 5.0,
-        "identity_generation": 1,
-        "position_uncertainty_m": 30.0,
-        "source_health": "healthy"
+      "course_rad": 4.71238898038469,
+      "true_heading_rad": 4.71238898038469,
+      "hull": {
+        "length_m": 78.0,
+        "beam_m": 15.0,
+        "draft_m": 4.5
       },
-      "simulated_observations": {"radar": true, "camera": true, "ais": true}
+      "dimensions_assumed": true,
+      "report_age_s": 5.0,
+      "position_uncertainty_m": 30.0,
+      "source_health": "healthy",
+      "motion_model": "constant_course_speed",
+      "simulated_observations": {
+        "radar": true,
+        "camera": true,
+        "ais": true
+      }
     },
     {
-      "vessel_id": "synthetic-stale-ais",
-      "position_ne_m": [440.0, 90.0],
-      "heading_rad": 3.141592653589793,
+      "mmsi": "000000103",
+      "identity_generation": 2,
+      "source_frame_sha256": "aa7382363da02bb73e1dcbb6769b44c97826dd4b461b4f75d3a7201464c75fa3",
+      "position_ne_m": [
+        440.0,
+        90.0
+      ],
+      "velocity_ne_mps": [
+        -2.8,
+        3.429011037612589e-16
+      ],
       "speed_mps": 2.8,
-      "hull": {"length_m": 64.0, "beam_m": 12.0, "draft_m": 3.8},
-      "dimensions_assumed": true,
-      "report": {
-        "age_s": 35.0,
-        "identity_generation": 2,
-        "position_uncertainty_m": 75.0,
-        "source_health": "degraded"
+      "course_rad": 3.141592653589793,
+      "true_heading_rad": 3.141592653589793,
+      "hull": {
+        "length_m": 64.0,
+        "beam_m": 12.0,
+        "draft_m": 3.8
       },
-      "simulated_observations": {"radar": true, "camera": true, "ais": true}
+      "dimensions_assumed": true,
+      "report_age_s": 35.0,
+      "position_uncertainty_m": 75.0,
+      "source_health": "degraded",
+      "motion_model": "constant_course_speed",
+      "simulated_observations": {
+        "radar": true,
+        "camera": true,
+        "ais": true
+      }
     },
     {
-      "vessel_id": "synthetic-radar-only",
-      "position_ne_m": [125.0, -110.0],
-      "heading_rad": 0.35,
+      "mmsi": "000000104",
+      "identity_generation": 1,
+      "source_frame_sha256": "d8227c8a9765ca8225eaa3b6749dd9a1575830717f911c9fa48344b31bf618e7",
+      "position_ne_m": [
+        125.0,
+        -110.0
+      ],
+      "velocity_ne_mps": [
+        1.5969336118405442,
+        0.5829262726742672
+      ],
       "speed_mps": 1.7,
-      "hull": {"length_m": 18.0, "beam_m": 5.0, "draft_m": 1.5},
-      "dimensions_assumed": true,
-      "report": {
-        "age_s": 0.0,
-        "identity_generation": 1,
-        "position_uncertainty_m": 8.0,
-        "source_health": "unknown"
+      "course_rad": 0.35,
+      "true_heading_rad": 0.35,
+      "hull": {
+        "length_m": 18.0,
+        "beam_m": 5.0,
+        "draft_m": 1.5
       },
-      "simulated_observations": {"radar": true, "camera": true, "ais": false}
+      "dimensions_assumed": true,
+      "report_age_s": 0.0,
+      "position_uncertainty_m": 8.0,
+      "source_health": "unknown",
+      "motion_model": "constant_course_speed",
+      "simulated_observations": {
+        "radar": true,
+        "camera": true,
+        "ais": false
+      }
     }
   ]
 }

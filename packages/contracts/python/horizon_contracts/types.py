@@ -29,6 +29,7 @@ class TimeContext(TypedDict):
 class Hull(TypedDict):
     length_m: float
     beam_m: float
+    draft_m: NotRequired[float]
 
 class BoundedError(TypedDict):
     position_radius_m: float
@@ -418,14 +419,15 @@ class TrafficVessel(TypedDict):
     dimensions_assumed: bool
     report_age_s: float
     position_uncertainty_m: float
-    source_health: Literal['recorded', 'degraded']
+    source_health: Literal['healthy', 'recorded', 'degraded', 'unknown']
     motion_model: Literal['constant_course_speed']
+    simulated_observations: NotRequired[dict[str, Any]]
 
 class TrafficSnapshot(TypedDict):
     contract_type: Literal['TrafficSnapshot']
     schema_version: SchemaVersion
     snapshot_id: str
-    mode: Literal['recorded_mirror']
+    mode: Literal['recorded_mirror', 'synthetic_offline']
     capture_sha256: Sha256
     selection_utc: str
     selection_window_s: float

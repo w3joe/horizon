@@ -1,9 +1,7 @@
-"""Local, typed adapter for deterministic offline traffic snapshots.
+"""Typed adapter from the shared offline ``TrafficSnapshot`` to simulator plants.
 
-The shared Horizon schema does not yet define ``TrafficSnapshot``.  This
-module deliberately keeps the provisional wire shape at the simulator edge
-and converts validated records into the simulator's existing ``TrafficSpec``
-type.  No live provider object reaches the plant.
+No live provider object reaches the plant. Recorded and synthetic snapshots use
+the same central contract, then become simulator-owned traffic truth.
 """
 
 from __future__ import annotations
@@ -119,31 +117,20 @@ def load_traffic_snapshot(
     if mode not in {"recorded_mirror", "synthetic_offline"}:
         raise ValueError("traffic snapshot mode must be recorded_mirror or synthetic_offline")
 
-    provenance = raw.get("provenance")
-    if not isinstance(provenance, dict):
-        raise ValueError("traffic snapshot provenance must be an object")
-    source_kind = provenance.get("source_kind")
-    expected_kind = "approved_recorded_capture" if mode == "recorded_mirror" else "generated_synthetic"
-    if source_kind != expected_kind:
-        raise ValueError(f"{mode} snapshot source_kind must be {expected_kind}")
     source_artifact_sha256 = _validate_sha256(
-        provenance.get("source_artifact_sha256"), "source artifact hash"
+        raw.get("capture_sha256"), "source artifact hash"
     )
-    rights = provenance.get("rights")
-    if not isinstance(rights, str) or not rights:
-        raise ValueError("traffic snapshot rights must be nonempty")
-    redistribution_allowed = provenance.get("redistribution_allowed")
-    if not isinstance(redistribution_allowed, bool):
-        raise ValueError("redistribution_allowed must be boolean")
+    rights = raw.get("rights_status")
+    if rights not in {"approved_private", "approved_public", "restricted"}:
+        raise ValueError("traffic snapshot rights_status is invalid")
+    redistribution_allowed = rights == "approved_public"
     if mode == "synthetic_offline" and not redistribution_allowed:
-        raise ValueError("checked-in synthetic snapshots must permit redistribution")
+        raise ValueError("checked-in synthetic snapshots must use approved_public rights")
 
     local_frame = raw.get("local_frame")
-    if not isinstance(local_frame, dict) or local_frame.get("frame") != "NED":
-        raise ValueError("traffic snapshot local_frame must be NED")
-    origin = local_frame.get("origin_wgs84")
-    if not isinstance(origin, dict):
-        raise ValueError("traffic snapshot origin_wgs84 must be an object")
+    if not isinstance(local_frame, dict):
+        raise ValueError("traffic snapshot local_frame must be an object")
+    origin = local_frame
     normalized_origin = {
         "height_m": _finite_number(origin.get("height_m", 0.0), "origin height"),
         "latitude_deg": _finite_number(origin.get("latitude_deg"), "origin latitude"),
@@ -154,9 +141,7 @@ def load_traffic_snapshot(
     if not -180.0 <= normalized_origin["longitude_deg"] <= 180.0:
         raise ValueError("origin longitude is out of range")
     local_frame_sha256 = _validate_sha256(local_frame.get("sha256"), "local frame hash")
-    expected_frame_hash = _canonical_sha256(
-        {"frame": "NED", "origin_wgs84": normalized_origin}
-    )
+    expected_frame_hash = _canonical_sha256(normalized_origin)
     if local_frame_sha256 != expected_frame_hash:
         raise ValueError("local frame hash does not match the declared origin")
 
@@ -178,38 +163,40 @@ def load_traffic_snapshot(
         label = f"vessels[{index}]"
         if not isinstance(item, dict):
             raise ValueError(f"{label} must be an object")
-        vessel_id = item.get("vessel_id")
-        if not isinstance(vessel_id, str) or not vessel_id:
-            raise ValueError(f"{label}.vessel_id must be nonempty")
+        vessel_id = item.get("mmsi")
+        if not isinstance(vessel_id, str) or re.fullmatch(r"[0-9]{9}", vessel_id) is None:
+            raise ValueError(f"{label}.mmsi must contain nine digits")
         if vessel_id in vessel_ids:
-            raise ValueError(f"duplicate traffic vessel_id: {vessel_id}")
+            raise ValueError(f"duplicate traffic mmsi: {vessel_id}")
         vessel_ids.add(vessel_id)
         position = item.get("position_ne_m")
         if not isinstance(position, list) or len(position) != 2:
             raise ValueError(f"{label}.position_ne_m must contain north and east")
-        heading_rad = wrap_angle(_finite_number(item.get("heading_rad"), f"{label}.heading_rad"))
+        reported_heading = item.get("true_heading_rad")
+        heading_value = item.get("course_rad") if reported_heading is None else reported_heading
+        heading_rad = wrap_angle(_finite_number(heading_value, f"{label}.heading"))
         speed_mps = _nonnegative(item.get("speed_mps"), f"{label}.speed_mps")
         hull_raw = item.get("hull")
         if not isinstance(hull_raw, dict):
             raise ValueError(f"{label}.hull must be an object")
         length_m = _nonnegative(hull_raw.get("length_m"), f"{label}.hull.length_m")
         beam_m = _nonnegative(hull_raw.get("beam_m"), f"{label}.hull.beam_m")
-        draft_m = _nonnegative(hull_raw.get("draft_m"), f"{label}.hull.draft_m")
+        draft_m = _nonnegative(
+            hull_raw.get("draft_m", max(0.5, min(10.0, length_m * 0.05))),
+            f"{label}.hull.draft_m",
+        )
         if min(length_m, beam_m, draft_m) <= 0.0:
             raise ValueError(f"{label}.hull dimensions must be positive")
         dimensions_assumed = item.get("dimensions_assumed")
         if not isinstance(dimensions_assumed, bool):
             raise ValueError(f"{label}.dimensions_assumed must be boolean")
-        report = item.get("report")
-        if not isinstance(report, dict):
-            raise ValueError(f"{label}.report must be an object")
-        identity_generation = report.get("identity_generation")
+        identity_generation = item.get("identity_generation")
         if isinstance(identity_generation, bool) or not isinstance(identity_generation, int):
             raise ValueError(f"{label}.identity_generation must be an integer")
         if identity_generation < 1:
             raise ValueError(f"{label}.identity_generation must be positive")
-        source_health = report.get("source_health")
-        if source_health not in {"healthy", "degraded", "unknown"}:
+        source_health = item.get("source_health")
+        if source_health not in {"healthy", "recorded", "degraded", "unknown"}:
             raise ValueError(f"{label}.source_health is invalid")
         sensors = item.get("simulated_observations", {})
         if not isinstance(sensors, dict):
@@ -237,11 +224,11 @@ def load_traffic_snapshot(
                 ),
                 hull=Hull(length_m=length_m, beam_m=beam_m, draft_m=draft_m),
                 dimensions_assumed=dimensions_assumed,
-                report_age_s=_nonnegative(report.get("age_s"), f"{label}.report.age_s"),
+                report_age_s=_nonnegative(item.get("report_age_s"), f"{label}.report_age_s"),
                 identity_generation=identity_generation,
                 position_uncertainty_m=_nonnegative(
-                    report.get("position_uncertainty_m"),
-                    f"{label}.report.position_uncertainty_m",
+                    item.get("position_uncertainty_m"),
+                    f"{label}.position_uncertainty_m",
                 ),
                 source_health=source_health,
                 observations=observation_profile,
@@ -251,8 +238,9 @@ def load_traffic_snapshot(
     counts = raw.get("counts")
     if not isinstance(counts, dict) or counts.get("selected") != len(vessels):
         raise ValueError("traffic snapshot counts.selected must match vessels")
-    total = counts.get("total_candidates")
-    excluded = counts.get("excluded")
+    total = counts.get("candidates")
+    exclusions = counts.get("exclusions")
+    excluded = sum(exclusions.values()) if isinstance(exclusions, dict) else None
     if (
         isinstance(total, bool)
         or not isinstance(total, int)
@@ -278,9 +266,9 @@ def load_traffic_snapshot(
 
 
 def traffic_specs(snapshot: TrafficSnapshot):
-    """Convert the provisional snapshot to simulator-native traffic specs."""
+    """Convert the shared snapshot to simulator-native traffic specs."""
 
-    # Import here to keep the provisional wire adapter independent of scenario
+    # Import here to keep the wire adapter independent of scenario
     # loading while scenario.py owns the plant-facing type.
     from .scenario import TrafficSpec
 

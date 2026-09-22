@@ -30,6 +30,7 @@ export interface TimeContext {
 export interface Hull {
   length_m: number;
   beam_m: number;
+  draft_m?: number;
 }
 
 export interface BoundedError {
@@ -452,15 +453,16 @@ export interface TrafficVessel {
   dimensions_assumed: boolean;
   report_age_s: number;
   position_uncertainty_m: number;
-  source_health: "recorded" | "degraded";
+  source_health: "healthy" | "recorded" | "degraded" | "unknown";
   motion_model: "constant_course_speed";
+  simulated_observations?: Record<string, unknown>;
 }
 
 export interface TrafficSnapshot {
   contract_type: "TrafficSnapshot";
   schema_version: SchemaVersion;
   snapshot_id: string;
-  mode: "recorded_mirror";
+  mode: "recorded_mirror" | "synthetic_offline";
   capture_sha256: Sha256;
   selection_utc: string;
   selection_window_s: number;

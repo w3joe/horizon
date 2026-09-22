@@ -73,7 +73,8 @@
       "required": ["length_m", "beam_m"],
       "properties": {
         "length_m": { "type": "number", "exclusiveMinimum": 0 },
-        "beam_m": { "type": "number", "exclusiveMinimum": 0 }
+        "beam_m": { "type": "number", "exclusiveMinimum": 0 },
+        "draft_m": { "type": "number", "exclusiveMinimum": 0 }
       }
     },
     "BoundedError": {
@@ -658,8 +659,17 @@
         "dimensions_assumed": { "type": "boolean" },
         "report_age_s": { "type": "number", "minimum": 0 },
         "position_uncertainty_m": { "type": "number", "minimum": 0 },
-        "source_health": { "type": "string", "enum": ["recorded", "degraded"] },
-        "motion_model": { "const": "constant_course_speed" }
+        "source_health": { "type": "string", "enum": ["healthy", "recorded", "degraded", "unknown"] },
+        "motion_model": { "const": "constant_course_speed" },
+        "simulated_observations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "radar": { "type": "boolean" },
+            "camera": { "type": "boolean" },
+            "ais": { "type": "boolean" }
+          }
+        }
       }
     },
     "TrafficSnapshot": {
@@ -670,7 +680,7 @@
         "contract_type": { "const": "TrafficSnapshot" },
         "schema_version": { "$ref": "#/$defs/SchemaVersion" },
         "snapshot_id": { "type": "string", "minLength": 1 },
-        "mode": { "const": "recorded_mirror" },
+        "mode": { "type": "string", "enum": ["recorded_mirror", "synthetic_offline"] },
         "capture_sha256": { "$ref": "#/$defs/Sha256" },
         "selection_utc": { "type": "string", "format": "date-time" },
         "selection_window_s": { "type": "number", "minimum": 0 },

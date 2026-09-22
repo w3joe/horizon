@@ -1,6 +1,30 @@
 # Horizon
 
-Horizon is a private maritime runtime-assurance research and simulation workspace. It keeps the decision AI, safety supervisor, actuator gate, plant, independent evaluation truth, and browser console at explicit process boundaries.
+Horizon is a private maritime runtime-assurance research and simulation workspace. It monitors an autonomous vessel's sensor, network, internal communication, neural-perception, and decision-AI evidence, then constrains unsafe commands through an independent safety supervisor and actuator gate.
+
+![Singapore Strait RTA intervention view](docs/demo/screenshots/singapore-rta-conflict.png)
+
+*Deterministic Singapore-area fixture: stale AIS disagrees with radar, so the RTA preserves a conservative contact and increases closest-point-of-approach clearance. The map and traffic shown here are synthetic, simulation-only fixtures.*
+
+## What the demo shows
+
+- A synchronized Singapore-area WGS84 map and 3D local-NED maritime scene.
+- Recorded-mirror, AIS-reported shadow, and synthetic traffic kept visibly distinct.
+- Contact age, health, uncertainty, source conflicts, CPA, and TCPA.
+- The protected trajectory beside the same unprotected counterfactual.
+- Independent radar, camera, and AIS observations generated from simulator-owned traffic plants.
+- A browser security boundary that receives normalized display fields rather than provider credentials or raw AISStream frames.
+
+The stable screenshot states are:
+
+- `http://127.0.0.1:5173/?view=singapore&state=overview`
+- `http://127.0.0.1:5173/?view=singapore&state=conflict`
+
+![Singapore Strait traffic overview](docs/demo/screenshots/singapore-traffic-overview.png)
+
+*Healthy recorded-mirror overview with the same traffic instant aligned across the 2D map and 3D scene.*
+
+## Run locally
 
 The default local slice starts seven processes: the authoritative simulator,
 replaceable decision-AI fixture, observation collector, fusion service, assurance
@@ -18,6 +42,8 @@ create metric contacts or free-space authority.
 ./scripts/launch_cpu.sh
 ```
 
+Open `http://127.0.0.1:5173`. Select **Singapore AIS** for the offline traffic-mirror walkthrough, **Guided demo** for the recorded protected/counterfactual run, or **Live console** for the seven-service stack.
+
 Run the 296-frame development camera source only when its external data and
 pinned checkpoint are available:
 
@@ -29,7 +55,7 @@ pinned checkpoint are available:
 See the [live recorded-camera boundary](docs/perception/live-recorded-camera.md)
 for validation, diagnostics, exhaustion, and shutdown behavior.
 
-Open `http://127.0.0.1:5173`. The console opens in the guided recorded demo when a verified replay is present and keeps the live seven-service console as a separate mode. The recording compares protected and evaluation-only counterfactual branches from one exact paused-reset state, with evidence-linked intervention and post-run outcome panels. See the [guided demo](docs/demo/guided-demo.md) and [backend replay provenance](docs/demo/backend-replay.md).
+The console opens in the guided recorded demo when a verified replay is present and keeps the live seven-service console as a separate mode. The recording compares protected and evaluation-only counterfactual branches from one exact paused-reset state, with evidence-linked intervention and post-run outcome panels. See the [Singapore AIS console](docs/demo/singapore-ais-console.md), [guided demo](docs/demo/guided-demo.md), and [backend replay provenance](docs/demo/backend-replay.md).
 
 Generate the finite 45-second S22 recording from a clean commit without using paid compute:
 
