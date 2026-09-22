@@ -53,15 +53,15 @@ because the 0.45 s diagnostic cannot finish the route. This is the observed acti
 | A2 | 2 pass | 0 / 2 | 2.68–2.81 ms |
 | A3 | 2 recover | 2 / 0 | 26.48–26.76 ms |
 | A4 | 2 recover | 2 / 0 | 25.17–26.36 ms |
-| A5 | 2 minimum risk | 2 / 0 | 29.77–29.89 ms |
+| A5 | 2 recover | 2 / 0 | 9.57–9.74 ms |
 
-A3 and A4 no longer reproduce the older development run's universal minimum-risk behavior on this
-cell: both found and submitted recoveries. A5 still reached its internal 29 ms work limit while
-conditioning evidence and checking prediction/recovery, so it returned minimum risk with
-`PREDICTION_DEADLINE_EXHAUSTED` and `NO_VALIDATED_RECOVERY`; its outer 40 ms candidate deadline was
-still reported met. A1 and A2 passed the proposal, but the independent gate rejected all four pass
-decisions after final-command revalidation found a collision-margin violation. That disagreement is
-substantive candidate/gate evidence, not a reason to relabel either result as success.
+A3, A4, and A5 no longer reproduce the older development run's universal minimum-risk behavior on
+this cell: all three found recoveries that the gate accepted. A5 used the validated
+`finite-starboard-70-1mps-v1` recovery after its bounded rejection path avoided redundant full-horizon
+work. Safe commands still require complete-horizon assessment. A1 and A2 passed the proposal, but
+the independent gate rejected all four pass decisions after final-command revalidation found a
+collision-margin violation. That disagreement is substantive candidate/gate evidence, not a reason
+to relabel either result as success.
 
 The run therefore closes the earlier implementation ambiguity but does not make the five candidates
 comparable for selection. It has one seed, two decision opportunities per branch, an idealized
