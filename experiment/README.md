@@ -30,6 +30,14 @@ PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment perception-calibrate \
   --bundle ../horizon-runs/calibration/perception-calibration-bundle.json \
   --output ../horizon-runs/calibration/perception-calibration-report.json
 
+PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment r3-r5-calibrate \
+  --bundle ../horizon-runs/calibration/r3-r5-controller-input-bundle.json \
+  --output ../horizon-runs/calibration/r3-r5-controller-input-report.json
+
+PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment r3-r5-readiness \
+  --index experiment/manifests/r3-r5-calibration-readiness-index.json \
+  --output ../horizon-runs/calibration/r3-r5-readiness.json
+
 PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment controller-evidence \
   --index ../horizon-runs/development/controller-study/index.json \
   --output ../horizon-runs/development/controller-study/readiness.json
@@ -73,7 +81,12 @@ or overwritten jobs, and routes replay to response-only scoring or closed loop t
 The stage-2 commands enforce the frozen runtime/split identities in
 `configs/perception-stage2.json`. The drift command is descriptive development analysis. The
 calibration command rejects heldout observations, mismatched method arms, inconsistent labels, and
-unready H2-H4 artifacts. The controller command checks evidence completeness and returns no ranking.
+unready H2-H4 artifacts. `r3-r5-calibrate` additionally measures track and AIS set coverage,
+A2 reliability/ECE/Brier score, matched-FPR H0-H4 calibration curves, causal-control eligibility,
+and diagnostic overhead. It rejects an AIS bound that shrinks a radar-supported bound and never
+maps representation novelty into metres. `r3-r5-readiness` is the explicit no-data outcome when
+valid calibration observations do not exist; it does not substitute development artifacts. The
+controller command checks evidence completeness and returns no ranking.
 The detailed gates are in `protocol/perception-stage2.md`.
 
 The external data status is deliberately explicit:

@@ -12,6 +12,7 @@ from experiment.evaluation.calibration import calibrate_threshold, require_calib
 from experiment.evaluation.candidate_acceptance import assess_candidate_implementations
 from experiment.evaluation.controller_evidence import assess_controller_evidence
 from experiment.evaluation.perception import calibrate_perception_methods, compare_runtime_drift
+from experiment.evaluation.rta_calibration import assess_r3_r5_calibration, assess_r3_r5_readiness
 from experiment.evaluation.reporting import summarize_records
 from experiment.harness.manifests import (
     expand_jobs,
@@ -133,6 +134,20 @@ def _perception_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _r3_r5_calibrate(args: argparse.Namespace) -> int:
+    report = assess_r3_r5_calibration(args.bundle)
+    write_json(args.output, report)
+    print(json.dumps({"status": report["gate_r3"]["status"], "artifact_hash": report["artifact_hash"]}, indent=2))
+    return 0
+
+
+def _r3_r5_readiness(args: argparse.Namespace) -> int:
+    report = assess_r3_r5_readiness(args.index)
+    write_json(args.output, report)
+    print(json.dumps({"status": report["status"], "artifact_hash": report["artifact_hash"]}, indent=2))
+    return 0
+
+
 def _controller_evidence(args: argparse.Namespace) -> int:
     report = assess_controller_evidence(args.index, args.selection_rule)
     write_json(args.output, report)
@@ -211,6 +226,22 @@ def build_parser() -> argparse.ArgumentParser:
     perception_calibrate.add_argument("--bundle", required=True)
     perception_calibrate.add_argument("--output", required=True)
     perception_calibrate.set_defaults(function=_perception_calibrate)
+
+    r3_r5 = subparsers.add_parser(
+        "r3-r5-calibrate",
+        help="assess calibration-only controller-input and matched-FPR health evidence",
+    )
+    r3_r5.add_argument("--bundle", required=True)
+    r3_r5.add_argument("--output", required=True)
+    r3_r5.set_defaults(function=_r3_r5_calibrate)
+
+    readiness = subparsers.add_parser(
+        "r3-r5-readiness",
+        help="record an explicit R3/R5 calibration-evidence blocker without using held-out data",
+    )
+    readiness.add_argument("--index", required=True)
+    readiness.add_argument("--output", required=True)
+    readiness.set_defaults(function=_r3_r5_readiness)
 
     controller = subparsers.add_parser(
         "controller-evidence", help="check whether paired controller evidence supports selection"

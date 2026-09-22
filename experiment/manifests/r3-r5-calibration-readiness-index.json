@@ -1,0 +1,60 @@
+{
+  "schema_version": "horizon.r3-r5-readiness-index.v1",
+  "observed_artifacts": [
+    {
+      "id": "a07-modd2-dev-kope81-00006800",
+      "partition": "development",
+      "purpose": "MPS/float32 development runtime extraction",
+      "sha256": "8591eb97d9ae7dc0aedb83322d94b195e7af25075d8a67cd2fc36875452fa642"
+    },
+    {
+      "id": "a07-modd2-dev-runtime-alignment-003",
+      "partition": "development",
+      "purpose": "CUDA/L4 float16 development runtime-alignment extraction",
+      "sha256": "474ab75388a8c5d1af224e23c28a9bef68ab6474f5b8a19fbb2bd4f160b78cd9"
+    },
+    {
+      "id": "local-wasrt-sequence-085",
+      "partition": "integration",
+      "purpose": "85-frame local integration smoke",
+      "sha256": "3ddbf5d18776ca1efb57f7b9a15f9f1e5496fd1b5934a4c563e974340d295d07"
+    },
+    {
+      "id": "calibration-perception-kope67-00004500-00005050-preflight",
+      "partition": "calibration",
+      "eligible_for_full_bundle": false,
+      "purpose": "8-frame MPS local extraction preflight; it validates the declared calibration input path only",
+      "sha256": "36c629a6acefdf61a3d5d9aa21dfd4649f94406e0c17ebf72ff7eeab4746961f"
+    }
+  ],
+  "required_calibration_inputs": {
+    "track_truth_coverage": {
+      "status": "missing",
+      "reason": "No calibration-split track state/error bundle with simulator truth is present."
+    },
+    "a2_risk_outcomes": {
+      "status": "missing",
+      "reason": "No calibration-split A2 score/outcome bundle is present."
+    },
+    "ais_age_truth": {
+      "status": "missing",
+      "reason": "No calibration-split AIS age/error and radar non-shrink bundle is present."
+    },
+    "perception_h0_h4_scores": {
+      "status": "blocked",
+      "reason": "An 8-frame MPS preflight succeeded, but the 6,568-frame extraction, controlled perturbation arms, versioned output ROI, labels, target-runtime H2-H4 references, and matched method rows have not been produced."
+    },
+    "instrumentation_accounting": {
+      "status": "blocked",
+      "reason": "Existing three-frame development instrumentation timing is not matched H0-H4 calibration accounting."
+    },
+    "h4_causal_controls": {
+      "status": "blocked",
+      "reason": "The current H4 reference is nonconverged, so causal controls cannot support an H4 claim."
+    },
+    "h1_independent_checks": {
+      "status": "blocked",
+      "reason": "Current extraction has no independent horizon or occlusion source, so H1 is intentionally incomplete and cannot be calibrated as a complete conventional monitor."
+    }
+  }
+}
