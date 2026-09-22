@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from http.client import IncompleteRead
 import json
 from pathlib import Path
 import threading
@@ -38,6 +39,34 @@ def _json(url: str) -> tuple[int, dict]:
             return response.status, json.load(response)
     except HTTPError as exc:
         return exc.code, json.load(exc)
+
+
+def test_fusion_loop_retries_after_interrupted_decision_ai_response(monkeypatch) -> None:
+    loop = FusionLoop(
+        FusionEngine(),
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:2",
+        "protected",
+        interval_s=0.001,
+    )
+    calls = 0
+
+    def interrupted_then_successful() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise IncompleteRead(b"", 128)
+        loop.last_error_reasons = []
+        loop.stop_event.set()
+
+    monkeypatch.setattr(loop, "cycle_once", interrupted_then_successful)
+    loop.start()
+    assert loop.thread is not None
+    loop.thread.join(timeout=1.0)
+
+    assert not loop.thread.is_alive()
+    assert calls == 2
+    assert loop.last_error_reasons == []
 
 
 def test_real_http_observation_fusion_ai_governor_pipeline() -> None:

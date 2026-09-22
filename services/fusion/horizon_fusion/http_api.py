@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 from http import HTTPStatus
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
@@ -135,7 +136,7 @@ class FusionLoop:
                 self.cycle_once()
             except NotReady as exc:
                 self.last_error_reasons = exc.reasons
-            except (HTTPError, URLError, TimeoutError, ValueError, KeyError, TypeError) as exc:
+            except (HTTPError, URLError, HTTPException, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
                 self.last_error_reasons = ["UPSTREAM_ERROR", type(exc).__name__]
             self.stop_event.wait(max(0.0, deadline - time.monotonic()))
 
