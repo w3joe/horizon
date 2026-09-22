@@ -31,13 +31,16 @@ jobs:
           echo "HORIZON_RUNS_DIR=$RUNNER_TEMP/horizon-runs" >> "$GITHUB_ENV"
           echo "HORIZON_COMPUTE_LEDGER=$RUNNER_TEMP/horizon-compute-ledger.json" >> "$GITHUB_ENV"
           echo "HORIZON_SYSTEM_DIAGNOSTICS_DIR=$RUNNER_TEMP/horizon-system-diagnostics" >> "$GITHUB_ENV"
-          echo "HORIZON_GATE_CPU_ISOLATION=required" >> "$GITHUB_ENV"
       - name: Bootstrap pinned dependencies
         env:
           HORIZON_PYTHON: python
         run: ./scripts/bootstrap.sh
       - name: Contracts, component tests, and console build
         run: ./scripts/check.sh
+      - name: Verify required Linux scheduling isolation
+        env:
+          HORIZON_GATE_CPU_ISOLATION: required
+        run: .venv/bin/python -m pytest -q tests/system/test_scheduling_isolation.py
       - name: Audit JavaScript production and development dependencies
         run: npm audit --audit-level=moderate
       - name: Validate authorized compute reservation without launching cloud work
@@ -45,6 +48,8 @@ jobs:
           ./scripts/python.sh scripts/compute_ledger.py init
           ./scripts/python.sh scripts/run_modal_job.py --reservation a07-wasrt-sequence-002
       - name: Start and stop the implemented CPU slice
+        env:
+          HORIZON_GATE_CPU_ISOLATION: required
         run: ./scripts/launch_cpu.sh --smoke-seconds 1
       - name: Upload sanitized runtime diagnostics on failure
         if: failure()
