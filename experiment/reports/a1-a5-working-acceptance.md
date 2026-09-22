@@ -43,17 +43,17 @@ and exposes gate/watchdog coupling; it cannot support comparative ranking.
 ## Bounded paired result
 
 The current implementation ran the manifest for 0.45 simulated seconds under run ID
-`a30-a1-a5-paired-closed-loop-002`. All five branches shared one pair key, emitted two schema-valid
+`a30-a1-a5-paired-closed-loop-003`. All five branches shared one pair key, emitted two schema-valid
 decisions, reported zero candidate deadline misses, had complete short traces, and remained censored
 because the 0.45 s diagnostic cannot finish the route. This is the observed action and gate evidence:
 
 | Candidate | Actions | Gate accepted / rejected | Descriptive candidate time |
 |---|---|---:|---:|
-| A1 | 2 pass | 0 / 2 | 1.46–1.53 ms |
-| A2 | 2 pass | 0 / 2 | 2.69–2.76 ms |
-| A3 | 2 recover | 2 / 0 | 26.63–26.64 ms |
-| A4 | 2 recover | 2 / 0 | 26.27–26.38 ms |
-| A5 | 2 minimum risk | 2 / 0 | 29.75–29.91 ms |
+| A1 | 2 pass | 0 / 2 | 1.51–1.70 ms |
+| A2 | 2 pass | 0 / 2 | 2.68–2.81 ms |
+| A3 | 2 recover | 2 / 0 | 26.48–26.76 ms |
+| A4 | 2 recover | 2 / 0 | 25.17–26.36 ms |
+| A5 | 2 minimum risk | 2 / 0 | 29.77–29.89 ms |
 
 A3 and A4 no longer reproduce the older development run's universal minimum-risk behavior on this
 cell: both found and submitted recoveries. A5 still reached its internal 29 ms work limit while
