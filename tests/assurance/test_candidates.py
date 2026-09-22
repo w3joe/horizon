@@ -134,13 +134,15 @@ def test_distant_contact_uses_conservative_enclosing_sweep(
     from horizon_assurance import predictive
 
     calls: list[int] = []
-    original = predictive._axis_aligned_sweep_clearance
+    original = predictive._axis_aligned_value_sweep_clearance
 
     def observed(centers, contact_start, contact_end):
         calls.append(len(centers))
         return original(centers, contact_start, contact_end)
 
-    monkeypatch.setattr(predictive, "_axis_aligned_sweep_clearance", observed)
+    monkeypatch.setattr(
+        predictive, "_axis_aligned_value_sweep_clearance", observed
+    )
     message = copy.deepcopy(governor_input)
     message["snapshot"]["contacts"][0]["position_ne_m"] = [180.0, -80.0]
     assessment = BoundedPredictiveChecker(reference).assess(
@@ -224,7 +226,7 @@ def test_convex_boundary_certificate_matches_detailed_safe_result(
     fast = checker.assess(governor_input, governor_input["proposal"]["command"])
 
     monkeypatch.setattr(
-        "horizon_assurance.predictive._convex_boundary_center_clearance",
+        "horizon_assurance.predictive._convex_boundary_value_clearance",
         lambda *_: None,
     )
     detailed = checker.assess(governor_input, governor_input["proposal"]["command"])
@@ -249,7 +251,7 @@ def test_failed_box_proof_falls_back_without_changing_safe_result(
     box_assessment = checker.assess(message, message["proposal"]["command"])
 
     monkeypatch.setattr(
-        "horizon_assurance.predictive._axis_aligned_sweep_clearance",
+        "horizon_assurance.predictive._axis_aligned_value_sweep_clearance",
         lambda *_: -1.0e9,
     )
     convex_assessment = checker.assess(message, message["proposal"]["command"])
@@ -274,14 +276,14 @@ def test_partial_contact_certificates_skip_only_proven_safe_chunks(
     message = copy.deepcopy(governor_input)
     message["snapshot"]["contacts"][0]["position_ne_m"] = [180.0, -80.0]
 
-    original_box_clearance = predictive._axis_aligned_sweep_clearance
+    original_box_clearance = predictive._axis_aligned_value_sweep_clearance
     original_clearance = geometry.signed_polygon_clearance
     detailed_calls = 0
     forced_chunk_ends = (10.0, 20.0, 30.0)
 
     def partial_box_clearance(centers, contact_start, contact_end):
         if any(
-            math.isclose(centers[-1]["time_s"], target, abs_tol=1e-12)
+            math.isclose(centers[-1][0], target, abs_tol=1e-12)
             for target in forced_chunk_ends
         ):
             return -1.0e9
@@ -295,14 +297,14 @@ def test_partial_contact_certificates_skip_only_proven_safe_chunks(
         return original_clearance(first, second)
 
     monkeypatch.setattr(
-        predictive, "_axis_aligned_sweep_clearance", partial_box_clearance
+        predictive, "_axis_aligned_value_sweep_clearance", partial_box_clearance
     )
     monkeypatch.setattr(geometry, "signed_polygon_clearance", partial_clearance)
     partial = BoundedPredictiveChecker(reference).recovery_from_current(message)
 
     # Index zero has no preceding chunk certificate; the other detailed calls
     # are exactly the three deliberately unresolved chunks.
-    assert detailed_calls == 1 + len(forced_chunk_ends)
+    assert detailed_calls == 1 + 5 * len(forced_chunk_ends)
 
     forced_detailed_calls = 0
 
@@ -314,16 +316,91 @@ def test_partial_contact_certificates_skip_only_proven_safe_chunks(
         return original_clearance(first, second)
 
     monkeypatch.setattr(
-        predictive, "_axis_aligned_sweep_clearance", lambda *_: -1.0e9
+        predictive, "_axis_aligned_value_sweep_clearance", lambda *_: -1.0e9
     )
     monkeypatch.setattr(geometry, "signed_polygon_clearance", forced_clearance)
     forced = BoundedPredictiveChecker(reference).recovery_from_current(message)
 
-    assert forced_detailed_calls == 31
+    assert forced_detailed_calls == 151
     assert partial.command == forced.command
     assert partial.option == forced.option
     assert partial.assessment.status == forced.assessment.status
     assert partial.assessment.reason_codes == forced.assessment.reason_codes
+
+
+def test_proven_unsafe_candidates_preserve_first_safe_recovery_selection(
+    reference, governor_input
+) -> None:
+    message = copy.deepcopy(governor_input)
+    contact = message["snapshot"]["contacts"][0]
+    contact["position_ne_m"] = [50.0, -30.0]
+    contact["velocity_ne_mps"] = [0.0, 4.0]
+
+    checker = BoundedPredictiveChecker(reference)
+    observed_completeness: list[bool] = []
+    original_assess = checker.assess
+
+    def observed_assess(*args, **kwargs):
+        assessment = original_assess(*args, **kwargs)
+        observed_completeness.append(assessment.complete)
+        return assessment
+
+    checker.assess = observed_assess
+    optimized = checker.recovery_from_current(copy.deepcopy(message))
+
+    exact_checker = BoundedPredictiveChecker(reference)
+    exact_assess = exact_checker.assess
+
+    def forced_exact(*args, **kwargs):
+        kwargs["stop_on_definitive_unsafe"] = False
+        return exact_assess(*args, **kwargs)
+
+    exact_checker.assess = forced_exact
+    exact = exact_checker.recovery_from_current(copy.deepcopy(message))
+
+    assert observed_completeness == [False, False, True]
+    assert optimized == exact
+
+
+def test_all_unsafe_library_rechecks_provisional_margins_before_ranking(
+    reference, governor_input
+) -> None:
+    message = copy.deepcopy(governor_input)
+    contact = message["snapshot"]["contacts"][0]
+    contact["position_ne_m"] = [50.0, -30.0]
+    contact["velocity_ne_mps"] = [0.0, 4.0]
+    config = replace(
+        AssuranceConfig(),
+        recovery_turns_rad=(math.radians(70.0),),
+        recovery_speeds_mps=(1.0, 2.0),
+    )
+
+    checker = BoundedPredictiveChecker(reference, config)
+    observed_completeness: list[bool] = []
+    original_assess = checker.assess
+
+    def observed_assess(*args, **kwargs):
+        assessment = original_assess(*args, **kwargs)
+        observed_completeness.append(assessment.complete)
+        return assessment
+
+    checker.assess = observed_assess
+    optimized = checker.recovery_from_current(copy.deepcopy(message))
+
+    exact_checker = BoundedPredictiveChecker(reference, config)
+    exact_assess = exact_checker.assess
+
+    def forced_exact(*args, **kwargs):
+        kwargs["stop_on_definitive_unsafe"] = False
+        return exact_assess(*args, **kwargs)
+
+    exact_checker.assess = forced_exact
+    exact = exact_checker.recovery_from_current(copy.deepcopy(message))
+
+    assert observed_completeness == [False, False, True, True]
+    assert optimized == exact
+    assert not optimized.assessment.safe
+    assert optimized.assessment.complete
 
 
 def test_a3_collision_envelope_never_returns_unqualified_pass(reference, governor_input) -> None:

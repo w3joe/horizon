@@ -8,6 +8,18 @@ import time
 from typing import Any
 
 from .configuration import AssuranceConfig, EngineeringBound, NavigationReference
+from horizon_sim.rollout import (
+    ROLLOUT_EAST_M,
+    ROLLOUT_HEADING_RAD,
+    ROLLOUT_NORTH_M,
+    ROLLOUT_RUDDER_RAD,
+    ROLLOUT_SURGE_MPS,
+    ROLLOUT_SWAY_MPS,
+    ROLLOUT_THRUST_FRACTION,
+    ROLLOUT_TIME_S,
+    ROLLOUT_YAW_RATE_RPS,
+    RolloutValueSample,
+)
 
 
 UNKNOWN_MARGIN = -1.0e9
@@ -125,6 +137,38 @@ def _axis_aligned_sweep_clearance(
     return math.hypot(north_gap, east_gap)
 
 
+def _axis_aligned_value_sweep_clearance(
+    own_centers: list[RolloutValueSample],
+    contact_start: tuple[float, float],
+    contact_end: tuple[float, float],
+) -> float:
+    first = own_centers[0]
+    own_north_min = own_north_max = first[ROLLOUT_NORTH_M]
+    own_east_min = own_east_max = first[ROLLOUT_EAST_M]
+    for sample in own_centers[1:]:
+        north = sample[ROLLOUT_NORTH_M]
+        east = sample[ROLLOUT_EAST_M]
+        if north < own_north_min:
+            own_north_min = north
+        elif north > own_north_max:
+            own_north_max = north
+        if east < own_east_min:
+            own_east_min = east
+        elif east > own_east_max:
+            own_east_max = east
+    north_gap = max(
+        0.0,
+        own_north_min - max(contact_start[0], contact_end[0]),
+        min(contact_start[0], contact_end[0]) - own_north_max,
+    )
+    east_gap = max(
+        0.0,
+        own_east_min - max(contact_start[1], contact_end[1]),
+        min(contact_start[1], contact_end[1]) - own_east_max,
+    )
+    return math.hypot(north_gap, east_gap)
+
+
 def _convex_boundary_center_clearance(
     centers: list[dict[str, float]],
     boundary: tuple[tuple[float, float], ...],
@@ -188,6 +232,61 @@ def _convex_boundary_center_clearance(
     return minimum
 
 
+def _convex_boundary_value_clearance(
+    centers: list[RolloutValueSample],
+    boundary: tuple[tuple[float, float], ...],
+) -> float | None:
+    """Tuple-rollout equivalent of ``_convex_boundary_center_clearance``."""
+
+    if len(boundary) < 3:
+        return None
+    twice_area = sum(
+        current[0] * boundary[(index + 1) % len(boundary)][1]
+        - boundary[(index + 1) % len(boundary)][0] * current[1]
+        for index, current in enumerate(boundary)
+    )
+    if twice_area == 0.0:
+        return None
+    orientation = 1.0 if twice_area > 0.0 else -1.0
+    inward_lines: list[tuple[float, float, float]] = []
+    has_turn = False
+    for index, current in enumerate(boundary):
+        following = boundary[(index + 1) % len(boundary)]
+        after = boundary[(index + 2) % len(boundary)]
+        edge_north = following[0] - current[0]
+        edge_east = following[1] - current[1]
+        edge_length = math.hypot(edge_north, edge_east)
+        if edge_length == 0.0:
+            return None
+        turn = edge_north * (after[1] - following[1]) - edge_east * (
+            after[0] - following[0]
+        )
+        if turn != 0.0:
+            if orientation * turn < 0.0:
+                return None
+            has_turn = True
+        normal_north = orientation * -edge_east / edge_length
+        normal_east = orientation * edge_north / edge_length
+        inward_lines.append(
+            (
+                normal_north,
+                normal_east,
+                -(normal_north * current[0] + normal_east * current[1]),
+            )
+        )
+    if not has_turn:
+        return None
+    minimum = math.inf
+    for sample in centers:
+        north = sample[ROLLOUT_NORTH_M]
+        east = sample[ROLLOUT_EAST_M]
+        for normal_north, normal_east, offset in inward_lines:
+            distance = normal_north * north + normal_east * east + offset
+            if distance < minimum:
+                minimum = distance
+    return minimum
+
+
 def _state_from_sample(sample: dict[str, float]):
     from horizon_sim.model import VesselState
 
@@ -201,6 +300,35 @@ def _state_from_sample(sample: dict[str, float]):
         rudder_rad=sample["rudder_rad"],
         thrust_fraction=sample["thrust_fraction"],
     )
+
+
+def _state_from_value_sample(sample: RolloutValueSample):
+    from horizon_sim.model import VesselState
+
+    return VesselState(
+        north_m=sample[ROLLOUT_NORTH_M],
+        east_m=sample[ROLLOUT_EAST_M],
+        heading_rad=sample[ROLLOUT_HEADING_RAD],
+        surge_mps=sample[ROLLOUT_SURGE_MPS],
+        sway_mps=sample[ROLLOUT_SWAY_MPS],
+        yaw_rate_rps=sample[ROLLOUT_YAW_RATE_RPS],
+        rudder_rad=sample[ROLLOUT_RUDDER_RAD],
+        thrust_fraction=sample[ROLLOUT_THRUST_FRACTION],
+    )
+
+
+def _dict_from_value_sample(sample: RolloutValueSample) -> dict[str, float]:
+    return {
+        "time_s": sample[ROLLOUT_TIME_S],
+        "north_m": sample[ROLLOUT_NORTH_M],
+        "east_m": sample[ROLLOUT_EAST_M],
+        "heading_rad": sample[ROLLOUT_HEADING_RAD],
+        "surge_mps": sample[ROLLOUT_SURGE_MPS],
+        "sway_mps": sample[ROLLOUT_SWAY_MPS],
+        "yaw_rate_rps": sample[ROLLOUT_YAW_RATE_RPS],
+        "rudder_rad": sample[ROLLOUT_RUDDER_RAD],
+        "thrust_fraction": sample[ROLLOUT_THRUST_FRACTION],
+    }
 
 
 class BoundedPredictiveChecker:
@@ -297,6 +425,33 @@ class BoundedPredictiveChecker:
             parameters=self._parameters(capability),
         )
 
+    def _rollout_values(
+        self,
+        governor_input: dict[str, Any],
+        command: dict[str, Any],
+        *,
+        horizon_s: float,
+        ownship: dict[str, Any] | None = None,
+        actuator: dict[str, Any] | None = None,
+    ) -> list[RolloutValueSample]:
+        from horizon_sim.model import Environment
+        from horizon_sim.rollout import rollout_values_from_estimate
+
+        snapshot = governor_input["snapshot"]
+        current = snapshot["environment"]["current_estimate_ne_mps"]
+        capability = actuator or snapshot["actuator"]
+        return rollout_values_from_estimate(
+            ownship or snapshot["ownship"],
+            command,
+            actuator_capability=capability,
+            horizon_s=horizon_s,
+            environment=Environment(
+                current_north_mps=float(current[0]),
+                current_east_mps=float(current[1]),
+            ),
+            parameters=self._parameters(capability),
+        )
+
     def assess(
         self,
         governor_input: dict[str, Any],
@@ -334,7 +489,7 @@ class BoundedPredictiveChecker:
 
         requested_hull = (ownship or snapshot["ownship"])["hull"]
         own_hull = Hull(float(requested_hull["length_m"]), float(requested_hull["beam_m"]), self.config.ownship_draft_m)
-        rollout = self.rollout(
+        rollout = self._rollout_values(
             governor_input,
             command,
             horizon_s=horizon,
@@ -372,7 +527,7 @@ class BoundedPredictiveChecker:
         maximum_own_translation = (
             self.config.maximum_command_speed_mps + current_speed
         ) * horizon
-        initial_state = _state_from_sample(rollout[0])
+        initial_state = _state_from_value_sample(rollout[0])
         initial_polygon = hull_polygon(initial_state, own_hull)
         active_boundary_ids: set[str] = set()
 
@@ -418,7 +573,7 @@ class BoundedPredictiveChecker:
             )
             if boundary is None:
                 continue
-            center_clearance = _convex_boundary_center_clearance(rollout, boundary)
+            center_clearance = _convex_boundary_value_clearance(rollout, boundary)
             if center_clearance is None:
                 continue
             margin = (
@@ -565,9 +720,9 @@ class BoundedPredictiveChecker:
                         break
                     chunk = rollout[previous_fast_index : sample_index + 1]
                     start_elapsed = (
-                        time_offset_s + rollout[previous_fast_index]["time_s"]
+                        time_offset_s + rollout[previous_fast_index][ROLLOUT_TIME_S]
                     )
-                    elapsed = time_offset_s + rollout[sample_index]["time_s"]
+                    elapsed = time_offset_s + rollout[sample_index][ROLLOUT_TIME_S]
                     contact_start = (
                         float(contact_position[0])
                         + float(velocity[0]) * start_elapsed,
@@ -578,7 +733,7 @@ class BoundedPredictiveChecker:
                         float(contact_position[0]) + float(velocity[0]) * elapsed,
                         float(contact_position[1]) + float(velocity[1]) * elapsed,
                     )
-                    center_clearance = _axis_aligned_sweep_clearance(
+                    center_clearance = _axis_aligned_value_sweep_clearance(
                         chunk, contact_start, contact_end
                     )
                     own_radius, own_assumption = _bounded_radius(
@@ -623,8 +778,8 @@ class BoundedPredictiveChecker:
                         # before falling through to rectangular hull checks.
                         center_hull = convex_hull(
                             (
-                                float(item["north_m"]),
-                                float(item["east_m"]),
+                                item[ROLLOUT_NORTH_M],
+                                item[ROLLOUT_EAST_M],
                             )
                             for item in chunk
                         )
@@ -672,10 +827,12 @@ class BoundedPredictiveChecker:
                             )
                             own_endpoint_polygons = (
                                 hull_polygon(
-                                    _state_from_sample(rollout[previous_fast_index]),
+                                    _state_from_value_sample(
+                                        rollout[previous_fast_index]
+                                    ),
                                     own_hull,
                                 ),
-                                hull_polygon(_state_from_sample(sample), own_hull),
+                                hull_polygon(_state_from_value_sample(sample), own_hull),
                             )
                             contact_endpoint_polygons = (
                                 hull_polygon(contact_start_state, contact_hull),
@@ -782,7 +939,7 @@ class BoundedPredictiveChecker:
                 previous_index = sample_index
                 continue
             sample = rollout[sample_index]
-            elapsed = time_offset_s + sample["time_s"]
+            elapsed = time_offset_s + sample[ROLLOUT_TIME_S]
             own_radius, own_assumption = _bounded_radius(
                 own_uncertainty,
                 elapsed,
@@ -798,13 +955,18 @@ class BoundedPredictiveChecker:
                 reasons.append("OWNSHIP_BOUND_UNAVAILABLE")
                 own_radius = math.inf
             inflation = own_radius + current_rate * elapsed
-            chunk_states = [_state_from_sample(item) for item in rollout[previous_index : sample_index + 1]]
+            chunk_states = [
+                _state_from_value_sample(item)
+                for item in rollout[previous_index : sample_index + 1]
+            ]
             swept_own_polygon = convex_hull(
                 point
                 for state in chunk_states
                 for point in hull_polygon(state, own_hull)
             )
-            chunk_start_elapsed = time_offset_s + rollout[previous_index]["time_s"]
+            chunk_start_elapsed = (
+                time_offset_s + rollout[previous_index][ROLLOUT_TIME_S]
+            )
             start_radius, _ = _bounded_radius(
                 own_uncertainty,
                 chunk_start_elapsed,
@@ -904,7 +1066,9 @@ class BoundedPredictiveChecker:
                 if not math.isfinite(contact_radius):
                     reasons.append("CONTACT_BOUND_UNAVAILABLE")
                     contact_radius = math.inf
-                start_elapsed = time_offset_s + rollout[previous_index]["time_s"]
+                start_elapsed = (
+                    time_offset_s + rollout[previous_index][ROLLOUT_TIME_S]
+                )
                 contact_start = VesselState(
                     north_m=float(contact_position[0]) + float(velocity[0]) * start_elapsed,
                     east_m=float(contact_position[1]) + float(velocity[1]) * start_elapsed,
@@ -936,10 +1100,10 @@ class BoundedPredictiveChecker:
         for sample in rollout:
             actuator_margin = min(
                 actuator_margin,
-                sample["rudder_rad"] - rudder_low,
-                rudder_high - sample["rudder_rad"],
-                sample["thrust_fraction"] - thrust_low,
-                thrust_high - sample["thrust_fraction"],
+                sample[ROLLOUT_RUDDER_RAD] - rudder_low,
+                rudder_high - sample[ROLLOUT_RUDDER_RAD],
+                sample[ROLLOUT_THRUST_FRACTION] - thrust_low,
+                thrust_high - sample[ROLLOUT_THRUST_FRACTION],
             )
         evidence["actuator-capability"] = {
             "constraint_id": "actuator-capability",
@@ -977,7 +1141,7 @@ class BoundedPredictiveChecker:
                 len(rollout) - 1,
                 max(0, round(capture_time_s / parameters.fixed_step_s)),
             )
-            handoff_sample = rollout[index]
+            handoff_sample = _dict_from_value_sample(rollout[index])
         return Assessment(
             status,
             unique_reasons,
