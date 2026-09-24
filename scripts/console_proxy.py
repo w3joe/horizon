@@ -289,6 +289,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             "/api/operator/pause": "pause",
             "/api/operator/resume": "resume",
             "/api/operator/reset": "reset",
+            "/api/operator/restart": "restart",
+            "/api/operator/rate": "rate",
             "/api/operator/fault": "fault",
             "/api/operator/acknowledge": "acknowledge",
         }
@@ -406,13 +408,34 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             "declared_fault_ids": sorted(self.declared_fault_ids),
             "actions": {
                 name: {"method": "POST", "path": f"/api/operator/{name}"}
-                for name in ("pause", "resume", "reset", "fault", "acknowledge")
+                for name in ("pause", "resume", "reset", "restart", "rate", "fault", "acknowledge")
             },
         }
 
     def _operator_action(
         self, action: str, body: dict[str, Any]
     ) -> tuple[HTTPStatus, dict[str, Any]]:
+        if action == "restart":
+            reset_status, reset = self._operator_action("reset", {})
+            if reset.get("accepted") is not True:
+                return reset_status, {
+                    "accepted": False,
+                    "action": action,
+                    "error": "DEMO_RESET_FAILED",
+                    "reset": reset,
+                    "control": reset.get("control", self._operator_status()),
+                }
+            resume_status, resume = self._operator_action("resume", {})
+            accepted = resume.get("accepted") is True
+            return (HTTPStatus.OK if accepted else resume_status), {
+                "accepted": accepted,
+                "action": action,
+                "state": "running" if accepted else "reset_in_progress",
+                "reset": reset,
+                "resume": resume,
+                "error": None if accepted else "DEMO_RESUME_FAILED",
+                "control": resume.get("control", self._operator_status()),
+            }
         if action == "resume":
             readiness = self._operator_status()
             deadline = time.monotonic() + self.resume_readiness_timeout_s
@@ -427,7 +450,16 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     "control": readiness,
                 }
             resume_certificate = readiness["startup_recovery_certificate"]
-        if action == "fault":
+        if action == "rate":
+            multiplier = body.get("multiplier")
+            if isinstance(multiplier, bool) or multiplier not in {1, 2, 4}:
+                return HTTPStatus.BAD_REQUEST, {
+                    "accepted": False,
+                    "action": action,
+                    "error": "RATE_MULTIPLIER_MUST_BE_1_2_OR_4",
+                }
+            upstream_body = {"multiplier": multiplier}
+        elif action == "fault":
             fault_id = body.get("fault_id")
             enabled = body.get("enabled", True)
             if not isinstance(enabled, bool):

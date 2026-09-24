@@ -386,6 +386,46 @@ def test_explicit_resume_waits_for_bounded_recovery_window_then_calls_plant_once
     ]
 
 
+def test_restart_resets_then_resumes_the_demo(monkeypatch) -> None:
+    handler = object.__new__(ConsoleHandler)
+    certificate = {
+        "run_id": "run-8",
+        "branch_id": "protected",
+        "decision_id": "recovery-8",
+        "input_snapshot_id": "snapshot-8",
+        "proposal_id": "proposal-8",
+        "plant_epoch": 3,
+        "original_host_valid_until_ns": 5_000_000_000,
+    }
+    monkeypatch.setattr(
+        ConsoleHandler,
+        "_operator_status",
+        lambda self: {
+            "resume_permitted": True,
+            "state": "ready",
+            "startup_recovery_certificate": certificate,
+        },
+    )
+    calls = []
+
+    def fake_upstream(self, service, path, *, body=None, token_file=None):
+        del self, token_file
+        calls.append((service, path, body))
+        return 200, {"accepted": True}
+
+    monkeypatch.setattr(ConsoleHandler, "_json_upstream", fake_upstream)
+    status, payload = handler._operator_action("restart", {})
+
+    assert status == HTTPStatus.OK
+    assert payload["accepted"] is True
+    assert payload["state"] == "running"
+    assert [path for _, path, _ in calls] == [
+        "/v1/operator/pause?branch=protected",
+        "/v1/operator/reset?branch=protected",
+        "/v1/operator/resume?branch=protected",
+    ]
+
+
 def test_fault_requires_declared_id_and_boolean_enabled() -> None:
     handler = object.__new__(ConsoleHandler)
     handler.declared_fault_ids = frozenset({"slow-rudder"})
@@ -399,6 +439,23 @@ def test_fault_requires_declared_id_and_boolean_enabled() -> None:
     )
     assert status == HTTPStatus.UNPROCESSABLE_ENTITY
     assert payload["error"] == "FAULT_NOT_DECLARED"
+
+
+def test_rate_is_bounded_and_forwarded_to_the_simulator(monkeypatch) -> None:
+    handler = object.__new__(ConsoleHandler)
+    handler.simulator_operator_token_file = Path("operator.token")
+    monkeypatch.setattr(
+        ConsoleHandler,
+        "_json_upstream",
+        lambda self, service, path, **kwargs: (200, {"time_scale": kwargs["body"]["multiplier"]}),
+    )
+    monkeypatch.setattr(ConsoleHandler, "_operator_status", lambda self: {"state": "ready"})
+    status, payload = handler._operator_action("rate", {"multiplier": 4})
+    assert status == HTTPStatus.OK
+    assert payload["accepted"] is True
+    status, payload = handler._operator_action("rate", {"multiplier": 3})
+    assert status == HTTPStatus.BAD_REQUEST
+    assert payload["error"] == "RATE_MULTIPLIER_MUST_BE_1_2_OR_4"
 
 
 def test_gate_acknowledgement_preserves_upstream_rejection(monkeypatch) -> None:

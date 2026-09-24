@@ -29,6 +29,7 @@ class SimulatorRuntime:
     def __init__(self, simulator: AuthoritativeSimulator, *, realtime: bool = True):
         self.branches = {simulator.branch_id: simulator}
         self.realtime = realtime
+        self.time_scale = 1.0
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.paused = threading.Event()
@@ -46,9 +47,9 @@ class SimulatorRuntime:
             self.thread.join(timeout=2.0)
 
     def _loop(self) -> None:
-        period = next(iter(self.branches.values())).parameters.fixed_step_s
         deadline = time.monotonic()
         while not self.stop_event.is_set():
+            period = next(iter(self.branches.values())).parameters.fixed_step_s / self.time_scale
             deadline += period
             with self.lock:
                 if self.paused.is_set():
@@ -279,6 +280,11 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                         self.server.runtime.paused.clear()
                     elif path == "/v1/operator/reset":
                         branch.reset()
+                    elif path == "/v1/operator/rate":
+                        multiplier = body.get("multiplier")
+                        if isinstance(multiplier, bool) or multiplier not in {1, 2, 4}:
+                            raise ValueError("multiplier must be 1, 2, or 4")
+                        self.server.runtime.time_scale = float(multiplier)
                     elif path == "/v1/operator/fault":
                         if bool(body.get("enabled", True)):
                             branch.inject_declared_fault(str(body["fault_id"]))
@@ -296,6 +302,7 @@ class SimulatorHandler(BaseHTTPRequestHandler):
                         "observation_tick_index": branch.observation_tick_index,
                         "active_authority": branch.active_command_authority,
                         "manual_fault_active": bool(branch.manual_faults),
+                        "time_scale": self.server.runtime.time_scale,
                     }
                 self._json(HTTPStatus.OK, status)
                 return

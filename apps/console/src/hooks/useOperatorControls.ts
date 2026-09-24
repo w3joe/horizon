@@ -61,8 +61,8 @@ export function useOperatorControls(enabled: boolean, onResetStarted: () => void
       setState((current) => ({ ...current, error: `${action} capability unavailable` }));
       return false;
     }
-    if (action === "reset") onResetStarted();
-    setState((current) => ({ ...current, pendingAction: action, lastAction: action, lastAccepted: null, error: null, resetRequested: action === "reset" ? true : current.resetRequested }));
+    if (action === "reset" || action === "restart") onResetStarted();
+    setState((current) => ({ ...current, pendingAction: action, lastAction: action, lastAccepted: null, error: null, resetRequested: action === "reset" || action === "restart" ? true : current.resetRequested }));
     try {
       const response = await fetch(target.path, {
         method: "POST",
@@ -78,14 +78,14 @@ export function useOperatorControls(enabled: boolean, onResetStarted: () => void
             ? [...new Set([...activeFaults, body.fault_id])]
             : activeFaults.filter((fault) => fault !== body.fault_id);
         }
-        if (accepted && action === "reset") activeFaults = [];
+        if (accepted && (action === "reset" || action === "restart")) activeFaults = [];
         return {
           ...current,
           capabilities: payload.control ?? current.capabilities,
           pendingAction: null,
           lastAccepted: accepted,
           activeFaults,
-          resetRequested: action === "reset" ? accepted : action === "resume" && accepted ? false : current.resetRequested,
+          resetRequested: action === "reset" ? accepted : (action === "resume" || action === "restart") && accepted ? false : current.resetRequested,
           error: accepted ? null : payload.error ?? payload.detail ?? `${action} was not accepted`,
         };
       });
@@ -96,7 +96,7 @@ export function useOperatorControls(enabled: boolean, onResetStarted: () => void
         ...current,
         pendingAction: null,
         lastAccepted: false,
-        resetRequested: action === "reset" ? false : current.resetRequested,
+        resetRequested: action === "reset" || action === "restart" ? false : current.resetRequested,
         error: reason instanceof Error ? reason.message : `${action} request failed`,
       }));
       return false;

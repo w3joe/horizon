@@ -11,12 +11,23 @@ import type {
 
 export type Workspace = "navigation" | "data" | "neural";
 export type CameraMode = "oblique" | "tactical";
+export type SystemMode = "connected" | "simulation";
 export type ScenarioId = "perception" | "camera" | "internal" | "intent" | "telemetry";
 export type ConnectionState = "fixture" | "connecting" | "live" | "stale" | "disconnected";
 export type LineageStatus = "accepted" | "rejected" | "invalid" | "incomplete" | "unavailable";
 export type ServiceName = "snapshot" | "assurance" | "evidence" | "collector" | "diagnostics" | "gate";
 export type ServiceState = "connecting" | "live" | "stale" | "unavailable";
 export type EvidenceObservation = Observation | NetworkObservation;
+
+export interface SensorInputs {
+  rangeM: number;
+  bearingDeg: number;
+  reportAgeS: number;
+  uncertaintyM: number;
+  reportedSpeedMps: number;
+  radarDetection: boolean;
+  cameraDetection: boolean;
+}
 
 export interface ServiceFreshness {
   state: ServiceState;
@@ -252,7 +263,7 @@ export interface LiveEnvelope {
   decision?: AssuranceDecision;
 }
 
-export type OperatorAction = "pause" | "resume" | "reset" | "fault" | "acknowledge";
+export type OperatorAction = "pause" | "resume" | "reset" | "restart" | "rate" | "fault" | "acknowledge";
 
 export interface OperatorCapabilities {
   schema_version: "1.0";

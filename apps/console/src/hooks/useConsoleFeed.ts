@@ -49,11 +49,10 @@ async function fetchJson<T>(url: string, signal: AbortSignal, expectedMissing = 
 }
 
 /**
- * Production uses A01's same-origin read-only proxy. Vite development remains
- * in fixture mode unless VITE_HORIZON_LIVE=1 and a compatible proxy is mounted.
+ * Connected mode uses A01's same-origin read-only proxy. Simulation mode keeps
+ * the network seam closed even in production.
  */
-export function useConsoleFeed(scenarioId: ScenarioId, timeS: number): FeedState {
-  const liveEnabled = import.meta.env.PROD || import.meta.env.VITE_HORIZON_LIVE === "1";
+export function useConsoleFeed(scenarioId: ScenarioId, timeS: number, liveEnabled: boolean): FeedState {
   const api = "/api";
   const endpoint = liveEnabled ? `${api}/v1/public/stream?branch=protected&events=0` : null;
   const fixture = useMemo(() => createFixturePacket(scenarioId, timeS), [scenarioId, timeS]);
@@ -195,8 +194,8 @@ export function useConsoleFeed(scenarioId: ScenarioId, timeS: number): FeedState
   }, [lastReceivedAt, liveEnabled]);
 
   const packet = useMemo(() => {
+    if (!liveEnabled) return fixture;
     if (!snapshot) {
-      if (!liveEnabled) return fixture;
       return {
         ...fixture,
         decision: null,

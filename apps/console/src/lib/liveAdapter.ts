@@ -1,6 +1,16 @@
 import type { SimulationSnapshot } from "../../../../packages/contracts/typescript/src/index";
-import { commandPath, fusionSnapshotToDisplay } from "./lineage";
+import { commandPath } from "./lineage";
 import type { CollectorDiagnostics, ConsolePacket, EvidenceObservation, GateStatus, LineageState, LiveControlEvent, NeuralEvidence, ScenarioEvent, ServiceFreshness, ServiceName } from "../types";
+
+function projectedPath(position: number[], headingRad: number, speedMps: number) {
+  return Array.from({ length: 13 }, (_, index) => {
+    const elapsedS = index * 5;
+    return {
+      north: position[0] + Math.cos(headingRad) * speedMps * elapsedS,
+      east: position[1] + Math.sin(headingRad) * speedMps * elapsedS,
+    };
+  });
+}
 
 function liveEvents(events: LiveControlEvent[], lineage: LineageState): ScenarioEvent[] {
   const event = [...events].reverse().find((item) =>
@@ -57,22 +67,30 @@ export function createLivePacket(args: {
 }): ConsolePacket {
   const { lineage, fixtureFallback } = args;
   const input = lineage.governorInput;
-  const snapshot = input
-    ? { ...fusionSnapshotToDisplay(input), active_command_id: args.publicSnapshot.active_command_id }
-    : args.publicSnapshot;
+  // The public plant stream owns live time and vessel poses. Joined assurance
+  // evidence may legitimately stop advancing after a fail-closed decision; it
+  // must never freeze the physical display at its last accepted input.
+  const snapshot = args.publicSnapshot;
+  const controlLagS = input && input.run_id === snapshot.run_id && input.branch_id === snapshot.branch_id
+    ? Math.max(0, snapshot.simulation_time_s - input.simulation_time_s)
+    : null;
+  const controlFresh = controlLagS !== null && controlLagS <= 1;
   const contactState = input?.snapshot.contacts[0];
   const vessel = snapshot.traffic[0];
   const northDelta = vessel ? vessel.position_ne_m[0] - snapshot.ownship.position_ne_m[0] : 0;
   const eastDelta = vessel ? vessel.position_ne_m[1] - snapshot.ownship.position_ne_m[1] : 0;
   const track = input?.tracks?.find((item) => item.track_id === contactState?.contact_id);
   const bounded = contactState?.uncertainty.bounded_error;
-  const proposal = input?.proposal.command;
-  const applied = lineage.receipt?.accepted ? lineage.receipt.actual_command : null;
+  const proposal = controlFresh ? input?.proposal.command : null;
+  const applied = controlFresh && lineage.receipt?.accepted ? lineage.receipt.actual_command : null;
+  const proposedCommandPath = commandPath(proposal);
+  const appliedCommandPath = commandPath(applied);
   const receiptClockNs = lineage.receipt?.actuated_monotonic_ns ?? lineage.receipt?.received_monotonic_ns;
   const receiptAgeS = receiptClockNs !== undefined && args.estimatedGateMonotonicNs !== null
     ? Math.max(0, (args.estimatedGateMonotonicNs - receiptClockNs) / 1_000_000_000)
     : null;
   const currentAuthority = lineage.status === "accepted"
+    && controlFresh
     && lineage.receipt?.accepted === true
     && lineage.decision !== null
     && args.serviceFreshness.snapshot.state === "live"
@@ -102,8 +120,11 @@ export function createLivePacket(args: {
     receiptAgeS: null,
     explanation: "No complete current receipt chain is available.",
   };
-  const reason = lineage.reasonCodes.length ? lineage.reasonCodes.join(" · ").replaceAll("_", " ") : lineage.explanation;
+  const reason = controlLagS !== null && !controlFresh
+    ? `Assurance overlay is ${controlLagS.toFixed(1)} s behind the live plant; vessel motion remains sourced from the public simulator.`
+    : lineage.reasonCodes.length ? lineage.reasonCodes.join(" · ").replaceAll("_", " ") : lineage.explanation;
   const events = liveEvents(args.controlEvents, lineage);
+  const plantPath = projectedPath(snapshot.ownship.position_ne_m, snapshot.ownship.heading_rad, snapshot.ownship.speed_mps);
   return {
     ...fixtureFallback,
     snapshot,
@@ -116,16 +137,20 @@ export function createLivePacket(args: {
     authority,
     observations: args.observations,
     proposedCommand: proposal ? { headingRad: proposal.heading_rad, speedMps: proposal.speed_mps } : null,
-    proposedPath: commandPath(proposal),
-    acceptedPath: commandPath(applied),
-    branchPath: [],
+    proposedPath: proposedCommandPath.length > 1 || !proposal
+      ? proposedCommandPath
+      : projectedPath(snapshot.ownship.position_ne_m, proposal.heading_rad, proposal.speed_mps),
+    acceptedPath: currentAuthority && appliedCommandPath.length > 1
+      ? appliedCommandPath
+      : plantPath,
+    branchPath: vessel ? projectedPath(vessel.position_ne_m, vessel.heading_rad, vessel.speed_mps) : [],
     contact: {
-      contactId: contactState?.contact_id ?? vessel?.vessel_id ?? "unavailable",
-      label: contactState?.contact_id ?? vessel?.vessel_id ?? "No linked contact",
-      status: input?.health.status === "degraded" ? "degraded" : input?.health.status === "healthy" ? "tracked" : "unknown",
+      contactId: vessel?.vessel_id ?? contactState?.contact_id ?? "unavailable",
+      label: vessel?.vessel_id ?? contactState?.contact_id ?? "No linked contact",
+      status: !controlFresh && input ? "stale" : input?.health.status === "degraded" ? "degraded" : input?.health.status === "healthy" ? "tracked" : "unknown",
       rangeM: Math.hypot(northDelta, eastDelta),
       bearingDeg: ((Math.atan2(eastDelta, northDelta) * 180) / Math.PI + 360) % 360,
-      ageS: contactState?.age_s ?? null,
+      ageS: contactState?.age_s !== undefined && controlLagS !== null ? contactState.age_s + controlLagS : contactState?.age_s ?? null,
       sourceIds: contactState?.source_ids ?? [],
       supportingObservationIds: track?.supporting_observation_ids ?? [],
       contradictingObservationIds: track?.contradicting_observation_ids ?? [],
@@ -137,7 +162,11 @@ export function createLivePacket(args: {
     neural: runtimeNeural(lineage),
     events,
     scenarioLabel: `${snapshot.run_id} · ${snapshot.branch_id} · tick ${snapshot.tick_index}`,
-    physicsLabel: input ? "Consumed fused estimate · public online evidence · not evaluation truth" : "Public sensor-derived display state · lineage unavailable",
+    physicsLabel: !input
+      ? "Live public plant state · assurance lineage unavailable"
+      : controlFresh
+        ? "Live public plant state · current assurance overlay"
+        : `Live public plant state · assurance overlay ${controlLagS?.toFixed(1) ?? "—"} s behind`,
     fixture: false,
   };
 }

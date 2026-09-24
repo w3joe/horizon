@@ -27,7 +27,7 @@
 }
 
 .experience-switcher button {
-  min-width: 106px;
+  min-width: 92px;
   padding: 8px 13px;
   border: 0;
   border-radius: 999px;
@@ -44,7 +44,7 @@
   box-shadow: inset 0 0 0 1px rgba(76, 225, 222, .24);
 }
 
-.app-header .runtime-status { margin-right: 236px; }
+.app-header .runtime-status { margin-right: 206px; }
 .live-scenario-summary { display: flex; align-items: center; gap: 9px; }
 .live-scenario-summary span { color: var(--muted); font-size: 12px; }
 .live-scenario-summary strong { padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--text); background: #0b1b24; font-size: 12px; font-weight: 500; }

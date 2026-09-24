@@ -7,7 +7,7 @@
   "recoverability_class": "declared_recoverable",
   "duration_s": 90.0,
   "ownship": {"north_m": 0.0, "east_m": 0.0, "heading_rad": 0.0, "surge_mps": 3.5, "thrust_fraction": 0.55},
-  "traffic_snapshot": {"path": "fixtures/singapore-synthetic-traffic.json", "sha256": "8b53559d2de30f45d283b1c63a67aafb5b29dba4f04da00a9233346745d51d35", "maximum_vessels": 32},
+  "traffic_snapshot": {"path": "fixtures/singapore-synthetic-traffic.json", "sha256": "1dbf381b21dd9d2099e3976ef4e46e7693b9e4c0825e4414fd9c131bb8036466", "maximum_vessels": 32},
   "environment": {"current_ne_mps": [0.12, 0.08], "wind_force_ne_n": [180.0, 75.0]},
   "water_boundary_ne_m": [[-800.0,-800.0],[1200.0,-800.0],[1200.0,800.0],[-800.0,800.0]],
   "corridor_ne_m": [[-650.0,-650.0],[1000.0,-650.0],[1000.0,650.0],[-650.0,650.0]],

@@ -46,6 +46,7 @@ def test_candidate_cli_defaults_to_a5_and_validates_explicit_selection() -> None
     parser = launch.argument_parser()
 
     assert parser.parse_args([]).candidate == "A5"
+    assert parser.parse_args([]).scenario == "scenarios/singapore_traffic_mirror_synthetic.json"
     for candidate_id in launch.CANDIDATE_IDS:
         assert parser.parse_args(["--candidate", candidate_id]).candidate == candidate_id
     with pytest.raises(SystemExit):

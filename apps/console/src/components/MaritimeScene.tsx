@@ -1,7 +1,9 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { type ReactNode, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { headingToSceneYaw, nedToScene } from "../lib/coordinates";
+import { collisionContact, vesselsCollide } from "../lib/collision";
+import { projectedConflict } from "../lib/pathConflict";
 import type { CameraMode, ConsolePacket, PathPoint } from "../types";
 import { LicensedCargoShip, LicensedCargoStack, LicensedOceanBuoy, LicensedRib } from "./MaritimeAssets";
 
@@ -11,6 +13,7 @@ interface Props {
   selectedContactId: string;
   onSelectContact: (id: string) => void;
   showBranch: boolean;
+  motionRate?: number;
   frozen?: boolean;
 }
 
@@ -31,7 +34,7 @@ const BUOY_PLACEMENTS: ReadonlyArray<[number, number, number]> = [
 ];
 
 function Ocean({ frozen = false }: { frozen?: boolean }) {
-  const geometry = useMemo(() => new THREE.PlaneGeometry(360, 300, 72, 60), []);
+  const geometry = useMemo(() => new THREE.PlaneGeometry(1800, 1400, 90, 70), []);
   const original = useMemo(() => Float32Array.from(geometry.attributes.position.array), [geometry]);
   useFrame(({ clock }) => {
     const positions = geometry.attributes.position;
@@ -51,19 +54,26 @@ function Ocean({ frozen = false }: { frozen?: boolean }) {
   );
 }
 
-function CameraAim({ mode }: { mode: CameraMode }) {
+function CameraAim({ mode, target }: { mode: CameraMode; target: [number, number, number] }) {
   const camera = useThree((state) => state.camera);
   useEffect(() => {
     if (mode === "tactical") {
-      camera.position.set(0, 180, -45);
+      camera.position.set(target[0], 180, target[2] - 45);
       camera.up.set(0, 0, -1);
     } else {
-      camera.position.set(67, 50, 42);
+      camera.position.set(target[0] + 67, 50, target[2] + 87);
       camera.up.set(0, 1, 0);
     }
-    camera.lookAt(0, 0, -45);
+    camera.lookAt(target[0], 0, target[2]);
     camera.updateProjectionMatrix();
   }, [camera, mode]);
+  useFrame((_, delta) => {
+    const desired = mode === "tactical"
+      ? new THREE.Vector3(target[0], 180, target[2] - 45)
+      : new THREE.Vector3(target[0] + 67, 50, target[2] + 87);
+    camera.position.lerp(desired, 1 - Math.exp(-2.8 * Math.min(delta, 0.1)));
+    camera.lookAt(target[0], 0, target[2]);
+  });
   return null;
 }
 
@@ -153,7 +163,79 @@ function PathLine({ points, color, dashed = false, opacity = 1 }: { points: Path
   return <primitive object={line} />;
 }
 
-function SceneContents({ packet, selectedContactId, onSelectContact, showBranch, frozen }: Omit<Props, "cameraMode">) {
+function SmoothPose({ position, heading, speed = 0, motionRate = 1, frozen = false, children }: {
+  position: [number, number, number];
+  heading: number;
+  speed?: number;
+  motionRate?: number;
+  frozen?: boolean;
+  children: ReactNode;
+}) {
+  const group = useRef<THREE.Group>(null);
+  const initialPosition = useRef(position);
+  const initialYaw = useRef(headingToSceneYaw(heading));
+  const sample = useRef({ position: new THREE.Vector3(...position), heading, receivedAtMs: performance.now() });
+  useEffect(() => {
+    sample.current = { position: new THREE.Vector3(...position), heading, receivedAtMs: performance.now() };
+  }, [heading, position[0], position[1], position[2]]);
+  useFrame((_, delta) => {
+    if (!group.current) return;
+    const currentSample = sample.current;
+    const targetYaw = headingToSceneYaw(currentSample.heading);
+    const extrapolationS = Math.min(0.3, Math.max(0, (performance.now() - currentSample.receivedAtMs) / 1000));
+    const predictedX = currentSample.position.x + Math.sin(currentSample.heading) * speed * extrapolationS * motionRate;
+    const predictedZ = currentSample.position.z - Math.cos(currentSample.heading) * speed * extrapolationS * motionRate;
+    if (frozen) {
+      group.current.position.copy(currentSample.position);
+      group.current.rotation.y = targetYaw;
+      return;
+    }
+    const blend = 1 - Math.exp(-14 * Math.min(delta, 0.1));
+    group.current.position.x = THREE.MathUtils.lerp(group.current.position.x, predictedX, blend);
+    group.current.position.y = THREE.MathUtils.lerp(group.current.position.y, currentSample.position.y, blend);
+    group.current.position.z = THREE.MathUtils.lerp(group.current.position.z, predictedZ, blend);
+    const yawDelta = Math.atan2(Math.sin(targetYaw - group.current.rotation.y), Math.cos(targetYaw - group.current.rotation.y));
+    group.current.rotation.y += yawDelta * blend;
+  });
+  return <group ref={group} position={initialPosition.current} rotation-y={initialYaw.current}>{children}</group>;
+}
+
+function ProjectedConflictMarker({ point }: { point: PathPoint }) {
+  return (
+    <group position={nedToScene(point, 0.5)}>
+      <mesh rotation-x={-Math.PI / 2}>
+        <ringGeometry args={[5, 7, 48]} />
+        <meshBasicMaterial color="#ff4658" transparent opacity={0.9} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh rotation-y={Math.PI / 4} position-y={0.3}><boxGeometry args={[12, 0.45, 0.7]} /><meshBasicMaterial color="#ff4658" /></mesh>
+      <mesh rotation-y={-Math.PI / 4} position-y={0.3}><boxGeometry args={[12, 0.45, 0.7]} /><meshBasicMaterial color="#ff4658" /></mesh>
+      <pointLight color="#ff4658" intensity={30} distance={38} position-y={5} />
+    </group>
+  );
+}
+
+function CollisionBurst({ point, frozen = false }: { point: PathPoint; frozen?: boolean }) {
+  const burst = useRef<THREE.Group>(null);
+  useFrame(({ clock }) => {
+    if (!burst.current) return;
+    const pulse = frozen ? 1 : 0.82 + Math.sin(clock.elapsedTime * 9) * 0.18;
+    burst.current.scale.setScalar(pulse);
+    burst.current.rotation.y = clock.elapsedTime * 0.8;
+  });
+  return (
+    <group ref={burst} position={nedToScene(point, 2.5)}>
+      <mesh><sphereGeometry args={[4.8, 20, 14]} /><meshStandardMaterial color="#ffb12f" emissive="#ff3b18" emissiveIntensity={4} transparent opacity={0.82} /></mesh>
+      <mesh><sphereGeometry args={[8.5, 16, 12]} /><meshBasicMaterial color="#ff5b35" wireframe transparent opacity={0.5} /></mesh>
+      {Array.from({ length: 12 }, (_, index) => {
+        const angle = (index / 12) * Math.PI * 2;
+        return <mesh key={index} position={[Math.cos(angle) * 8, 1 + (index % 3) * 2.2, Math.sin(angle) * 8]} rotation={[angle, angle * 0.6, 0]}><coneGeometry args={[0.7, 5, 5]} /><meshBasicMaterial color={index % 2 ? "#ffcd57" : "#ff4b35"} /></mesh>;
+      })}
+      <pointLight color="#ff542e" intensity={85} distance={75} />
+    </group>
+  );
+}
+
+function SceneContents({ packet, selectedContactId, onSelectContact, showBranch, motionRate = 1, frozen }: Omit<Props, "cameraMode">) {
   const contact = packet.snapshot.traffic[0];
   const own = packet.snapshot.ownship;
   const branchGhost = showBranch && packet.branchPath.length > 0
@@ -169,6 +251,15 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch,
   });
   const contactPosition = contact ? nedToScene({ north: contact.position_ne_m[0], east: contact.position_ne_m[1] }, 0.28) : [0, 0, 0] as [number, number, number];
   const uncertaintyRadius = packet.contact.uncertaintyRadiusM;
+  const liveConflict = !packet.fixture && contact
+    ? projectedConflict(packet.proposedPath, packet.branchPath, (own.hull.length_m + contact.hull.length_m) * 0.5)
+    : null;
+  const isCollidingWithOwnship = (vessel: typeof own) => vesselsCollide(own, vessel);
+  const collidingVessel = collisionContact(packet.snapshot);
+  const collisionPoint = collidingVessel ? {
+    north: (own.position_ne_m[0] + collidingVessel.position_ne_m[0]) / 2,
+    east: (own.position_ne_m[1] + collidingVessel.position_ne_m[1]) / 2,
+  } : null;
   return (
     <>
       <color attach="background" args={["#0a2633"]} />
@@ -181,40 +272,49 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch,
       {packet.proposedPath.length > 1 && <PathLine points={packet.proposedPath} color="#fb6674" dashed />}
       {packet.acceptedPath.length > 1 && <PathLine points={packet.acceptedPath} color="#4ce1de" />}
       {showBranch && packet.branchPath.length > 1 && <PathLine points={packet.branchPath} color="#f2bb64" dashed opacity={0.72} />}
-      <LicensedRib
-        position={nedToScene({ north: own.position_ne_m[0], east: own.position_ne_m[1] }, 0)}
-        heading={own.heading_rad}
-        timeS={packet.snapshot.simulation_time_s}
-        physicalPose={packet.snapshot.marine_environment ? {
-          heaveDown: own.heave_down_m ?? 0,
-          roll: own.attitude_rp_rad?.[0] ?? 0,
-          pitch: own.attitude_rp_rad?.[1] ?? 0,
-        } : undefined}
-      />
-      {contact && <LicensedCargoShip
-        position={contactPosition}
-        heading={contact.heading_rad}
-        lengthM={contact.hull.length_m}
-        beamM={contact.hull.beam_m}
-        selected={selected}
-        onClick={() => onSelectContact(contact.vessel_id)}
-      />}
-      {contact && uncertaintyRadius !== null && uncertaintyRadius > 0 && <mesh ref={uncertaintyRef} position={[contactPosition[0], 0.08, contactPosition[2]]} rotation-x={-Math.PI / 2}>
-        <ringGeometry args={[Math.max(0, uncertaintyRadius - 0.28), uncertaintyRadius, 72]} />
-        <meshBasicMaterial color="#f2bb64" transparent opacity={0.56} side={THREE.DoubleSide} />
-      </mesh>}
-      {packet.snapshot.traffic.slice(1).map((vessel, index) => (
-        <LicensedCargoShip
-          key={vessel.vessel_id}
-          position={nedToScene({ north: vessel.position_ne_m[0], east: vessel.position_ne_m[1] }, 0)}
-          heading={vessel.heading_rad}
-          lengthM={vessel.hull.length_m}
-          beamM={vessel.hull.beam_m}
-          detailed={index < 2}
-          selected={selectedContactId === vessel.vessel_id}
-          onClick={() => onSelectContact(vessel.vessel_id)}
+      {liveConflict && <ProjectedConflictMarker point={liveConflict.point} />}
+      <SmoothPose position={nedToScene({ north: own.position_ne_m[0], east: own.position_ne_m[1] }, 0)} heading={own.heading_rad} speed={own.speed_mps} motionRate={motionRate} frozen={frozen}>
+        <LicensedRib
+          position={[0, 0, 0]}
+          heading={0}
+          timeS={packet.snapshot.simulation_time_s}
+          physicalPose={packet.snapshot.marine_environment ? {
+            heaveDown: own.heave_down_m ?? 0,
+            roll: own.attitude_rp_rad?.[0] ?? 0,
+            pitch: own.attitude_rp_rad?.[1] ?? 0,
+          } : undefined}
         />
+      </SmoothPose>
+      {contact && <SmoothPose position={contactPosition} heading={contact.heading_rad} speed={contact.speed_mps} motionRate={motionRate} frozen={frozen}>
+        <LicensedCargoShip
+          position={[0, 0, 0]}
+          heading={0}
+          lengthM={contact.hull.length_m}
+          beamM={contact.hull.beam_m}
+          collision={isCollidingWithOwnship(contact)}
+          selected={selected}
+          onClick={() => onSelectContact(contact.vessel_id)}
+        />
+        {uncertaintyRadius !== null && uncertaintyRadius > 0 && <mesh ref={uncertaintyRef} position={[0, 0.08, 0]} rotation-x={-Math.PI / 2}>
+          <ringGeometry args={[Math.max(0, uncertaintyRadius - 0.28), uncertaintyRadius, 72]} />
+          <meshBasicMaterial color="#f2bb64" transparent opacity={0.56} side={THREE.DoubleSide} />
+        </mesh>}
+      </SmoothPose>}
+      {packet.snapshot.traffic.slice(1).map((vessel, index) => (
+        <SmoothPose key={vessel.vessel_id} position={nedToScene({ north: vessel.position_ne_m[0], east: vessel.position_ne_m[1] }, 0)} heading={vessel.heading_rad} speed={vessel.speed_mps} motionRate={motionRate} frozen={frozen}>
+          <LicensedCargoShip
+            position={[0, 0, 0]}
+            heading={0}
+            lengthM={vessel.hull.length_m}
+            beamM={vessel.hull.beam_m}
+            collision={isCollidingWithOwnship(vessel)}
+            detailed={index < 2}
+            selected={selectedContactId === vessel.vessel_id}
+            onClick={() => onSelectContact(vessel.vessel_id)}
+          />
+        </SmoothPose>
       ))}
+      {collisionPoint && <CollisionBurst point={collisionPoint} frozen={frozen} />}
       {branchGhost && <GhostVessel position={nedToScene(branchGhost, 0.42)} heading={0.08} />}
     </>
   );
@@ -222,7 +322,10 @@ function SceneContents({ packet, selectedContactId, onSelectContact, showBranch,
 
 export function MaritimeScene(props: Props) {
   const isTactical = props.cameraMode === "tactical";
+  const ownshipScenePosition = nedToScene({ north: props.packet.snapshot.ownship.position_ne_m[0], east: props.packet.snapshot.ownship.position_ne_m[1] }, 0);
   const internalComms = [...props.packet.observations].reverse().find((item) => item.contract_type === "Observation" && item.input_group === "internal_ship_communications");
+  const radarState = props.packet.contact.sourceIds.some((source) => source.toLowerCase().includes("radar")) ? "TRACK" : "NO RETURN";
+  const cameraState = props.packet.contact.sourceIds.some((source) => source.toLowerCase().includes("camera")) ? "TRACK" : "DEGRADED";
   return (
     <div className="scene-canvas" aria-label="Interactive Singapore Strait-inspired synthetic harbour scene">
       <Canvas
@@ -234,7 +337,7 @@ export function MaritimeScene(props: Props) {
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
         frameloop={props.frozen ? "demand" : "always"}
       >
-        <CameraAim mode={props.cameraMode} />
+        <CameraAim mode={props.cameraMode} target={ownshipScenePosition} />
         <SceneContents {...props} />
       </Canvas>
       <div className="north-indicator" aria-hidden="true"><span>N</span><i /></div>
@@ -244,10 +347,16 @@ export function MaritimeScene(props: Props) {
         <strong>Sensor mast + radome · EO/IR sensor · mission bay/RHIB · static defensive silhouettes</strong>
         <small>Internal comms evidence: {internalComms && "capability" in internalComms ? internalComms.capability : "unavailable"} · silhouettes are non-functional and have no control, targeting, or safety-evidence role</small>
       </div>
-      <div className="asset-attribution">
-        <a href="https://opengameart.org/content/container-ship-full" target="_blank" rel="noreferrer">Ship + cargo · Sketlux · CC0</a>
-        <a href="https://polyhaven.com/a/ocean_buoy" target="_blank" rel="noreferrer">Ocean Buoy · Mateusz Sadek / Poly Haven · CC0</a>
-        <span>Visual proxies · public hulls remain authoritative</span>
+      <div className="sensor-hud" aria-label="Selected contact sensor data">
+        <header><span>Sensor data</span><strong>{props.packet.contact.label}</strong></header>
+        <dl>
+          <div><dt>Range</dt><dd>{props.packet.contact.rangeM.toFixed(1)} m</dd></div>
+          <div><dt>Bearing</dt><dd>{props.packet.contact.bearingDeg.toFixed(1)}°</dd></div>
+          <div><dt>Age</dt><dd>{props.packet.contact.ageS?.toFixed(2) ?? "—"} s</dd></div>
+          <div><dt>Uncertainty</dt><dd>±{props.packet.contact.uncertaintyRadiusM?.toFixed(1) ?? "—"} m</dd></div>
+          <div><dt>Radar</dt><dd className={radarState === "TRACK" ? "good" : "warn"}>{radarState}</dd></div>
+          <div><dt>Camera</dt><dd className={cameraState === "TRACK" ? "good" : "warn"}>{cameraState}</dd></div>
+        </dl>
       </div>
       {props.packet.snapshot.traffic[0] && <button className="contact-label" type="button" onClick={() => props.onSelectContact(props.packet.contact.contactId)} aria-pressed={props.selectedContactId === props.packet.contact.contactId}>
         <strong>{props.packet.contact.label}</strong><span>{props.packet.contact.rangeM.toFixed(1)} m · {props.packet.contact.status}</span>

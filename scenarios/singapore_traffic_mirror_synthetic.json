@@ -5,7 +5,7 @@
   "family": "singapore_traffic_mirror",
   "split": "development",
   "recoverability_class": "declared_recoverable",
-  "duration_s": 90.0,
+  "duration_s": 300.0,
   "ownship": {
     "north_m": 0.0,
     "east_m": 0.0,
@@ -15,7 +15,7 @@
   },
   "traffic_snapshot": {
     "path": "fixtures/singapore-synthetic-traffic.json",
-    "sha256": "8b53559d2de30f45d283b1c63a67aafb5b29dba4f04da00a9233346745d51d35",
+    "sha256": "1dbf381b21dd9d2099e3976ef4e46e7693b9e4c0825e4414fd9c131bb8036466",
     "maximum_vessels": 32
   },
   "environment": {

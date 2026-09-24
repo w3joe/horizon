@@ -15,7 +15,7 @@
   "compiler_version": "horizon-synthetic-traffic-fixture-v1",
   "motion_model": {
     "kind": "constant_course_speed",
-    "horizon_s": 180.0,
+    "horizon_s": 300.0,
     "acceleration_mps2": 0.0,
     "turn_rate_rps": 0.0
   },
@@ -35,20 +35,20 @@
       "identity_generation": 1,
       "source_frame_sha256": "4acb5fa9aef28311b91e7a8d1225acf864440cef85a807e762eedea1a066df2b",
       "position_ne_m": [
-        360.0,
-        -260.0
+        150.0,
+        -150.0
       ],
       "velocity_ne_mps": [
-        2.571758278209442e-16,
-        4.2
+        2.143131898507868e-16,
+        3.5
       ],
-      "speed_mps": 4.2,
+      "speed_mps": 3.5,
       "course_rad": 1.5707963267948966,
       "true_heading_rad": 1.5707963267948966,
       "hull": {
-        "length_m": 120.0,
-        "beam_m": 22.0,
-        "draft_m": 7.0
+        "length_m": 18.0,
+        "beam_m": 5.0,
+        "draft_m": 1.3
       },
       "dimensions_assumed": false,
       "report_age_s": 2.0,

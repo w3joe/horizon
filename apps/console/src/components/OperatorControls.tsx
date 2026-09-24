@@ -36,6 +36,7 @@ export function OperatorControls({
       <div className="operator-buttons">
         <button type="button" disabled={!capabilities || pending} onClick={() => void onAction("pause")}>Pause</button>
         <button type="button" disabled={!capabilities?.resume_permitted || pending} onClick={() => void onAction("resume")}>Resume</button>
+        <button type="button" className="critical-action" disabled={!capabilities || pending} onClick={() => void onAction("restart")}>Restart demo</button>
         <button type="button" className="critical-action" disabled={!capabilities || pending} onClick={() => void onAction("reset")}>Reset</button>
         <button type="button" disabled={!capabilities || pending} onClick={() => void onAction("acknowledge")}>Acknowledge</button>
       </div>

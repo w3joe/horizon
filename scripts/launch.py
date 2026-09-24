@@ -753,7 +753,7 @@ def verify_public_slice(
 def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke-seconds", type=float, default=0.0)
-    parser.add_argument("--scenario", default="scenarios/crossing_recoverable.json")
+    parser.add_argument("--scenario", default="scenarios/singapore_traffic_mirror_synthetic.json")
     parser.add_argument("--marine-config", help="Optional versioned marine plant configuration; assurance remains unqualified")
     parser.add_argument(
         "--candidate",

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import assetRegistry from "../../../../assets/maritime/registry.json";
+import { headingToSceneYaw } from "../lib/coordinates";
 
 type Position = [number, number, number];
 
@@ -220,7 +221,7 @@ export function LicensedRib({ position, heading, timeS = 0, physicalPose }: {
   const pitch = physicalPose?.pitch ?? Math.sin(timeS * 0.51 + 0.8) * 0.012;
   const roll = physicalPose ? -physicalPose.roll : Math.sin(timeS * 0.64) * 0.018;
   return (
-    <group position={[position[0], position[1] + heave, position[2]]} rotation-y={-heading}>
+    <group position={[position[0], position[1] + heave, position[2]]} rotation-y={headingToSceneYaw(heading)}>
       <group rotation={[pitch, 0, roll]}>
         <LoadedAsset asset={MARITIME_ASSETS.rib} fallback={<FallbackRib />} errorFallback={<FallbackRib failed />} />
         <PatrolPresentationFit />
@@ -244,7 +245,7 @@ export function LicensedCargoShip({ position, heading, lengthM, beamM, collision
   return (
     <group
       position={position}
-      rotation-y={-heading}
+      rotation-y={headingToSceneYaw(heading)}
       onClick={(event) => {
         event.stopPropagation();
         onClick?.();

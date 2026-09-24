@@ -154,6 +154,31 @@ def test_real_http_queue_pause_resume_and_reset_close_expiry_gaps() -> None:
         server_thread.join(timeout=2.0)
 
 
+def test_operator_can_select_bounded_realtime_demo_rate() -> None:
+    simulator = AuthoritativeSimulator(
+        load_scenario(ROOT / "scenarios" / "crossing_recoverable.json"),
+        seed=23,
+        run_id="http-rate-run",
+    )
+    runtime = SimulatorRuntime(simulator, realtime=False)
+    server = SimulatorHTTPServer(("127.0.0.1", 0), runtime, operator_token="operator-token")
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        status, payload = _post(base, "/v1/operator/rate", {"multiplier": 4}, "operator-token")
+        assert status == 200
+        assert payload["time_scale"] == 4.0
+        assert runtime.time_scale == 4.0
+        status, payload = _post(base, "/v1/operator/rate", {"multiplier": 3}, "operator-token")
+        assert status == 400
+        assert payload["error"] == "BAD_REQUEST"
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2.0)
+
+
 def test_resume_rechecks_proof_after_queue_delay_and_reset():
     clock = [1_000_000_000]
     sim = AuthoritativeSimulator(
