@@ -55,10 +55,19 @@
     "drop_policy": "drop_oldest_queued_frame",
     "publication_retry_count": 0
   },
+  "health_monitor": {
+    "method": "H5",
+    "mode": "shadow_only",
+    "reference_artifact": {
+      "data_relative_path": "references/neural-health/h5-wasrt-temporal-topk-contrastive-development-v1.json",
+      "sha256": "b6c448957f96c7ed8a7129d3f516c01c4b5bea5b760d7d79a8b5eb93d679b6ef"
+    }
+  },
   "limitations": [
     "Recorded frames do not react to simulator pose or commands.",
     "Image-space water and obstacle classes do not establish metric free space.",
     "Health risk remains unknown until a frozen calibration is validated on held-out sequences.",
+    "H5 runs in shadow mode and cannot increase camera or control authority.",
     "This mode cannot qualify a vessel operating mode or replace independent radar geometry."
   ]
 }

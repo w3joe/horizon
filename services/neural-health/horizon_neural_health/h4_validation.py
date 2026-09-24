@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from horizon_perception.modd2 import load_raw_annotation
 from horizon_perception.model import ModelSpec, load_official_model, sha256_file
@@ -16,7 +16,7 @@ from horizon_perception.runner import preprocess_image
 
 from .artifact import FeatureCache, ReferenceArtifact, canonical_hash
 from .interventions import run_sae_direction_intervention
-from .models import encode_h4
+from .models import encode_h4, encode_h5, fit_h4, score_h4_components
 from .training import build_reference
 
 
@@ -97,8 +97,11 @@ def fit_reference(
     hidden: int = 64,
     epochs: int = 5000,
     learning_rate: float = 0.003,
+    l1: float = 1e-3,
     tolerance: float = 1e-3,
     patience: int = 100,
+    version: str = "h4-modd2-multisequence-development-v2",
+    tuning_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     split = json.loads(split_path.read_text())
     vectors, sampling = _development_rows(bindings, split, samples_per_sequence)
@@ -118,17 +121,20 @@ def fit_reference(
         "sampling": sampling,
         "split_manifest_sha256": sha256_file(split_path),
     }
+    if tuning_record is not None:
+        provenance["development_tuning"] = tuning_record
     reference = build_reference(
         "H4",
         vectors,
         "encoder",
         source_groups,
-        "h4-modd2-multisequence-development-v2",
+        version,
         fit_split="development",
         provenance=provenance,
         hidden=hidden,
         epochs=epochs,
         learning_rate=learning_rate,
+        l1=l1,
         tolerance=tolerance,
         patience=patience,
         optimizer="adam",
@@ -138,21 +144,226 @@ def fit_reference(
     return reference
 
 
+def _tuning_candidates() -> list[dict[str, Any]]:
+    """Small predeclared grid for development-only H4 model selection."""
+    candidates = [
+        {"hidden": hidden, "learning_rate": 0.003, "l1": l1}
+        for hidden in (32, 64, 96)
+        for l1 in (3e-4, 1e-3, 3e-3)
+    ]
+    candidates.extend([
+        {"hidden": 64, "learning_rate": 0.001, "l1": 1e-3},
+        {"hidden": 64, "learning_rate": 0.006, "l1": 1e-3},
+    ])
+    return candidates
+
+
+def _select_tuning_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    eligible = [candidate for candidate in candidates if candidate["eligible"]]
+    if not eligible:
+        raise ValueError("no H4 tuning candidate passed convergence and dead-feature gates")
+    best_error = min(candidate["validation_reconstruction_mse_mean"] for candidate in eligible)
+    near_best = [
+        candidate
+        for candidate in eligible
+        if candidate["validation_reconstruction_mse_mean"] <= best_error * 1.01
+    ]
+    # Prefer the smallest representation within one percent of the best error;
+    # then prefer greater sparsity pressure and the lower observed error.
+    return min(
+        near_best,
+        key=lambda candidate: (
+            candidate["configuration"]["hidden"],
+            -candidate["configuration"]["l1"],
+            candidate["validation_reconstruction_mse_mean"],
+            candidate["configuration"]["learning_rate"],
+        ),
+    )
+
+
+def tune_reference(
+    bindings: dict[str, Path],
+    split_path: Path,
+    geometry_path: Path,
+    output_dir: Path,
+    *,
+    samples_per_sequence: int = 40,
+    epochs: int = 1500,
+    tolerance: float = 1e-3,
+    patience: int = 100,
+) -> dict[str, Any]:
+    """Tune H4 with leave-one-development-sequence-out validation.
+
+    This routine is deliberately restricted to the frozen development split.
+    Each candidate is fitted without one sequence and scored only on that
+    sequence. Calibration and held-out collections are rejected by
+    ``_development_rows`` before fitting begins.
+    """
+    import numpy as np
+
+    split = json.loads(split_path.read_text())
+    allowed = set(split["development"]["sequences"])
+    rows_by_sequence: dict[str, list[list[float]]] = {}
+    sampling: list[dict[str, Any]] = []
+    for sequence, path in sorted(bindings.items()):
+        if sequence not in allowed:
+            raise ValueError(f"H4 tuning input is outside development: {sequence}")
+        rows = list(FeatureCache(path).rows("encoder", dimensions=None, statistic="mean"))
+        indices = _uniform_indices(len(rows), samples_per_sequence)
+        selected = [rows[index] for index in indices]
+        if any(len(vector) != 2048 for _row, vector in selected):
+            raise ValueError(f"encoder feature dimension changed for {sequence}")
+        rows_by_sequence[sequence] = [vector for _row, vector in selected]
+        sampling.append({
+            "sequence_id": sequence,
+            "feature_cache_sha256": _file_hash(path),
+            "available_frames": len(rows),
+            "selected_frames": len(selected),
+            "selection": "uniform_inclusive_indices_v1",
+        })
+    if len(rows_by_sequence) < 3:
+        raise ValueError("H4 tuning requires at least three development sequences")
+
+    results: list[dict[str, Any]] = []
+    for configuration in _tuning_candidates():
+        folds = []
+        for held_out in sorted(rows_by_sequence):
+            training_rows = [
+                vector
+                for sequence, rows in rows_by_sequence.items()
+                if sequence != held_out
+                for vector in rows
+            ]
+            parameters = fit_h4(
+                training_rows,
+                hidden=configuration["hidden"],
+                epochs=epochs,
+                learning_rate=configuration["learning_rate"],
+                l1=configuration["l1"],
+                seed=0,
+                tolerance=tolerance,
+                optimizer="adam",
+                patience=patience,
+            )
+            components = [
+                score_h4_components(vector, parameters)
+                for vector in rows_by_sequence[held_out]
+            ]
+            folds.append({
+                "held_out_sequence": held_out,
+                "training_samples": len(training_rows),
+                "validation_samples": len(components),
+                "converged": parameters["converged"],
+                "epochs_completed": parameters["epochs_completed"],
+                "dead_features": parameters["dead_features"],
+                "dead_feature_fraction": (
+                    parameters["dead_features"] / parameters["hidden_features"]
+                ),
+                "reconstruction_mse_mean": float(np.mean([
+                    value["reconstruction_mse"] for value in components
+                ])),
+                "mean_activation": float(np.mean([
+                    value["mean_activation"] for value in components
+                ])),
+                "active_fraction": float(np.mean([
+                    value["active_fraction"] for value in components
+                ])),
+            })
+        reconstruction = [fold["reconstruction_mse_mean"] for fold in folds]
+        maximum_dead_fraction = max(fold["dead_feature_fraction"] for fold in folds)
+        results.append({
+            "configuration": configuration,
+            "eligible": (
+                all(fold["converged"] for fold in folds)
+                and maximum_dead_fraction <= 0.1
+            ),
+            "validation_reconstruction_mse_mean": float(np.mean(reconstruction)),
+            "validation_reconstruction_mse_std": float(np.std(reconstruction, ddof=1)),
+            "validation_reconstruction_mse_max": float(max(reconstruction)),
+            "validation_mean_activation": float(np.mean([
+                fold["mean_activation"] for fold in folds
+            ])),
+            "validation_active_fraction": float(np.mean([
+                fold["active_fraction"] for fold in folds
+            ])),
+            "maximum_dead_feature_fraction": maximum_dead_fraction,
+            "folds": folds,
+        })
+
+    selected = _select_tuning_candidate(results)
+    selection_body = {
+        "schema_version": "horizon.h4-development-tuning-selection.v1",
+        "partition": "development",
+        "split_manifest_sha256": sha256_file(split_path),
+        "samples_per_sequence": samples_per_sequence,
+        "fold_rule": "leave_one_sequence_out_v1",
+        "selection_rule": (
+            "lowest mean held-out-sequence reconstruction MSE; within 1% choose "
+            "fewer hidden features, then stronger sparsity"
+        ),
+        "eligibility_rule": "all folds converged and maximum dead-feature fraction <= 0.1",
+        "selected_configuration": selected["configuration"],
+        "sampling": sampling,
+        "candidates": results,
+    }
+    selection_hash = canonical_hash(selection_body)
+    output_dir.mkdir(parents=True, exist_ok=False)
+    reference_path = output_dir / "h4-reference-candidate.json"
+    reference = fit_reference(
+        bindings,
+        split_path,
+        geometry_path,
+        reference_path,
+        samples_per_sequence=samples_per_sequence,
+        hidden=selected["configuration"]["hidden"],
+        epochs=5000,
+        learning_rate=selected["configuration"]["learning_rate"],
+        l1=selected["configuration"]["l1"],
+        tolerance=tolerance,
+        patience=patience,
+        version="h4-modd2-multisequence-development-v3-tuned",
+        tuning_record={
+            "selection_sha256": selection_hash,
+            "fold_rule": selection_body["fold_rule"],
+            "selection_rule": selection_body["selection_rule"],
+        },
+    )
+    report = {
+        **selection_body,
+        "selection_sha256": selection_hash,
+        "reference_artifact_hash": reference["artifact_hash"],
+        "reference_file_sha256": _file_hash(reference_path),
+        "reference_fit": {key: reference["parameters"][key] for key in (
+            "fit_samples", "hidden_features", "learning_rate", "l1",
+            "epochs_completed", "initial_loss", "final_loss", "converged",
+            "dead_features",
+        )},
+        "limitations": [
+            "All tuning folds use the kope81 development collection group.",
+            "Reconstruction tuning does not establish fault detection, calibration, or safety benefit.",
+            "The tuned reference requires fresh causal controls before it can pass the H4 development gate.",
+        ],
+    }
+    _write_json(output_dir / "tuning-report.json", report)
+    return report
+
+
 def _stable_features(
     reference: ReferenceArtifact,
     rows_by_sequence: dict[str, list[tuple[dict[str, Any], list[float]]]],
-    count: int,
+    count: int | None,
+    encoder: Callable[[list[float], dict[str, Any]], list[float]] = encode_h4,
 ) -> list[dict[str, Any]]:
     import numpy as np
 
     all_rows = [row for rows in rows_by_sequence.values() for row in rows]
-    codes = np.asarray([encode_h4(vector, reference.parameters) for _row, vector in all_rows])
+    codes = np.asarray([encoder(vector, reference.parameters) for _row, vector in all_rows])
     prevalence = (codes > 1e-10).mean(axis=0)
     spread = codes.std(axis=0, ddof=1)
     correlations: dict[int, list[float]] = {index: [] for index in range(codes.shape[1])}
     for rows in rows_by_sequence.values():
         sequence_codes = np.asarray([
-            encode_h4(vector, reference.parameters) for _row, vector in rows
+            encoder(vector, reference.parameters) for _row, vector in rows
         ])
         obstacle_fraction = np.asarray([
             float(row["output_health"]["predicted_obstacle_fraction"])
@@ -178,9 +389,11 @@ def _stable_features(
         score = float(np.median(np.abs(values))) * agreement
         scores[index] = (score, agreement)
         eligible.append(index)
-    if len(eligible) < count:
+    if count is not None and len(eligible) < count:
         raise ValueError("too few stable obstacle-associated SAE features for causal validation")
-    selected = sorted(eligible, key=lambda index: (-scores[index][0], -spread[index], index))[:count]
+    selected = sorted(eligible, key=lambda index: (-scores[index][0], -spread[index], index))
+    if count is not None:
+        selected = selected[:count]
     return [
         {
             "feature_index": int(index),
@@ -214,6 +427,10 @@ def _probe_indices(
             eligible.append((index, code))
     if len(eligible) < count:
         raise ValueError("sequence has too few context-valid obstacle frames")
+    return _separated_probe_indices(eligible, count)
+
+
+def _separated_probe_indices(eligible: list[tuple[int, float]], count: int) -> list[int]:
     chosen: list[int] = []
     for index, _code in sorted(eligible, key=lambda item: (-item[1], item[0])):
         if all(abs(index - previous) >= 10 for previous in chosen):
@@ -221,6 +438,55 @@ def _probe_indices(
         if len(chosen) == count:
             return sorted(chosen)
     raise ValueError("sequence lacks separated high-activation obstacle probes")
+
+
+def _probeable_feature(
+    candidates: list[dict[str, Any]],
+    codes_by_sequence: dict[str, dict[str, list[float]]],
+    obstacle_indices_by_sequence: dict[str, list[int]],
+    frames_by_sequence: dict[str, list[Path]],
+    count: int,
+) -> tuple[dict[str, Any], dict[str, list[int]], list[dict[str, Any]]]:
+    """Choose by a pre-intervention coverage gate, preserving stability rank."""
+    coverage: list[dict[str, Any]] = []
+    for feature in candidates:
+        feature_index = int(feature["feature_index"])
+        plan: dict[str, list[int]] = {}
+        per_sequence: dict[str, Any] = {}
+        for sequence, obstacle_indices in obstacle_indices_by_sequence.items():
+            frames = frames_by_sequence[sequence]
+            frame_codes = codes_by_sequence[sequence]
+            eligible = [
+                (index, float(frame_codes[frames[index].name][feature_index]))
+                for index in obstacle_indices
+                if frames[index].name in frame_codes
+                and math.isfinite(float(frame_codes[frames[index].name][feature_index]))
+                and float(frame_codes[frames[index].name][feature_index]) > 0
+            ]
+            try:
+                selected = _separated_probe_indices(eligible, count)
+            except ValueError as error:
+                per_sequence[sequence] = {
+                    "positive_context_valid_obstacle_frames": len(eligible),
+                    "eligible": False,
+                    "reason": str(error),
+                }
+                continue
+            plan[sequence] = selected
+            per_sequence[sequence] = {
+                "positive_context_valid_obstacle_frames": len(eligible),
+                "eligible": True,
+                "selected_frame_indices": selected,
+            }
+        candidate_coverage = {
+            "feature_index": feature_index,
+            "eligible_in_all_probe_sequences": len(plan) == len(obstacle_indices_by_sequence),
+            "per_sequence": per_sequence,
+        }
+        coverage.append(candidate_coverage)
+        if candidate_coverage["eligible_in_all_probe_sequences"]:
+            return feature, plan, coverage
+    raise ValueError("no stable SAE feature has sufficient pre-intervention probe coverage")
 
 
 def _sign_tail(successes: int, trials: int) -> float:
@@ -273,15 +539,22 @@ def validate_causally(
     probe_sequences: int = 3,
     probes_per_sequence: int = 2,
     seeds: tuple[int, ...] = (0, 1, 2),
+    method_id: str = "H4",
+    feature_layer: str = "encoder",
 ) -> dict[str, Any]:
     import numpy as np
     from PIL import Image
 
     reference = ReferenceArtifact.load(reference_path)
-    if reference.method_id != "H4" or reference.parameters.get("converged") is not True:
-        raise ValueError("causal validation requires a converged frozen H4 reference")
+    if method_id not in {"H4", "H5"}:
+        raise ValueError("causal validation supports only H4 or H5")
+    if reference.method_id != method_id or reference.parameters.get("converged") is not True:
+        raise ValueError(f"causal validation requires a converged frozen {method_id} reference")
+    if reference.layer != feature_layer:
+        raise ValueError("causal validation layer does not match reference")
+    feature_encoder = encode_h4 if method_id == "H4" else encode_h5
     rows_by_sequence = {
-        sequence: list(FeatureCache(path).rows("encoder", dimensions=None, statistic="mean"))
+        sequence: list(FeatureCache(path).rows(feature_layer, dimensions=None, statistic="mean"))
         for sequence, path in sorted(bindings.items())
     }
     sequence_order = sorted(bindings)
@@ -291,11 +564,44 @@ def validate_causally(
     selection_ids = sequence_order[:-probe_sequences]
     if len(selection_ids) < 3:
         raise ValueError("feature selection requires at least three disjoint development sequences")
-    selected_features = _stable_features(
+    stable_features = _stable_features(
         reference,
         {sequence: rows_by_sequence[sequence] for sequence in selection_ids},
-        1,
+        None,
+        encoder=feature_encoder,
     )
+
+    frames_by_sequence: dict[str, list[Path]] = {}
+    obstacle_indices_by_sequence: dict[str, list[int]] = {}
+    codes_by_sequence: dict[str, dict[str, list[float]]] = {}
+    for sequence in sequence_ids:
+        frames = sorted((frame_root / sequence / "frames").glob("*L.jpg"))
+        annotations_dir = annotations_root / sequence / "ground_truth"
+        obstacle_indices = []
+        for index, frame in enumerate(frames):
+            if index < 5:
+                continue
+            with Image.open(frame) as image:
+                width, height = image.size
+            annotation = load_raw_annotation(
+                annotations_dir / f"{frame.stem}.mat", width, height
+            )
+            if annotation.obstacle_xyxy_zero_based_inclusive:
+                obstacle_indices.append(index)
+        frames_by_sequence[sequence] = frames
+        obstacle_indices_by_sequence[sequence] = obstacle_indices
+        codes_by_sequence[sequence] = {
+            row["frame_id"]: feature_encoder(vector, reference.parameters)
+            for row, vector in rows_by_sequence[sequence]
+        }
+    selected_feature, selected_probe_indices, feature_coverage = _probeable_feature(
+        stable_features,
+        codes_by_sequence,
+        obstacle_indices_by_sequence,
+        frames_by_sequence,
+        probes_per_sequence,
+    )
+    selected_features = [selected_feature]
 
     spec = ModelSpec(
         family="wasr_t",
@@ -306,26 +612,18 @@ def validate_causally(
         architecture="wasr_temporal_resnet101",
     )
     model = load_official_model(spec, device=device, fp16=False)
-    layer = model.backbone["layer4"]
+    layer = model.backbone["layer4"] if feature_layer == "encoder" else model.decoder.tcm
     decoder = np.asarray(reference.parameters["decoder"], dtype=np.float64)
     scale = np.asarray(reference.parameters["standardization_scale"], dtype=np.float64)
     controls: list[dict[str, Any]] = []
     probe_plan = []
     for sequence_index, sequence in enumerate(sequence_ids):
-        frames_dir = frame_root / sequence / "frames"
         annotations_dir = annotations_root / sequence / "ground_truth"
-        frames = sorted(frames_dir.glob("*L.jpg"))
-        sequence_rows = rows_by_sequence[sequence]
+        frames = frames_by_sequence[sequence]
         for local_index in range(probes_per_sequence):
             feature = selected_features[(sequence_index + local_index) % len(selected_features)]
             feature_index = int(feature["feature_index"])
-            codes = {
-                row["frame_id"]: encode_h4(vector, reference.parameters)[feature_index]
-                for row, vector in sequence_rows
-            }
-            target_index = _probe_indices(
-                frames, annotations_dir, probes_per_sequence, codes
-            )[local_index]
+            target_index = selected_probe_indices[sequence][local_index]
             decoded_raw = decoder[:, feature_index] * scale
             coefficient = -float(
                 feature["code_standard_deviation"]
@@ -385,8 +683,26 @@ def validate_causally(
                 })
 
     assessment = _assess(controls, reference.parameters)
+    if method_id == "H5":
+        reproducibility = reference.parameters.get("reproducibility_validation", {})
+        selected_index = int(selected_features[0]["feature_index"])
+        feature_stability = next(
+            (
+                value for value in reproducibility.get("feature_stability", [])
+                if int(value.get("feature_index", -1)) == selected_index
+            ),
+            None,
+        )
+        assessment["selected_feature_reproducibility"] = feature_stability
+        assessment["checks"]["reproducible_selected_feature"] = (
+            isinstance(feature_stability, dict) and feature_stability.get("passed") is True
+        )
+        assessment["eligible"] = all(assessment["checks"].values())
+        assessment["reason"] = (
+            "passed" if assessment["eligible"] else "causal_or_reproducibility_controls_failed"
+        )
     report = {
-        "schema_version": "horizon.h4-causal-validation.v1",
+        "schema_version": f"horizon.{method_id.lower()}-causal-validation.v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "partition": "development",
         "reference_artifact_sha256": _file_hash(reference_path),
@@ -396,9 +712,12 @@ def validate_causally(
         "feature_selection": {
             "rule": (
                 "strongest median absolute association with predicted obstacle fraction, "
-                "with at least 80% correlation-sign agreement across disjoint selection sequences"
+                "with at least 80% correlation-sign agreement across disjoint selection sequences; "
+                "then first stability-ranked feature with enough positive, separated, "
+                "context-valid obstacle probes in every predeclared probe sequence"
             ),
             "selected": selected_features,
+            "probe_coverage_checked": feature_coverage,
             "selected_before_intervention_outcomes": True,
             "selection_sequences": selection_ids,
             "causal_probe_sequences": sequence_ids,
@@ -416,7 +735,7 @@ def validate_causally(
         "limitations": [
             "Causal controls validate a bounded internal feature effect, not a semantic explanation.",
             "Development controls do not establish held-out fault-detection benefit or safety.",
-            "The intervention is spatially uniform over the final encoder activation map.",
+            f"The intervention is spatially uniform over the {feature_layer} activation map.",
         ],
     }
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -432,7 +751,7 @@ def validate_causally(
     }
     validated.pop("artifact_hash", None)
     validated["artifact_hash"] = canonical_hash(validated)
-    _write_json(output_dir / "h4-reference-validated.json", validated)
+    _write_json(output_dir / f"{method_id.lower()}-reference-validated.json", validated)
     return report
 
 
@@ -445,6 +764,12 @@ def main() -> None:
     fit.add_argument("--geometry", type=Path, required=True)
     fit.add_argument("--output", type=Path, required=True)
     fit.add_argument("--samples-per-sequence", type=int, default=40)
+    tune = subparsers.add_parser("tune")
+    tune.add_argument("--feature", action="append", required=True)
+    tune.add_argument("--split-manifest", type=Path, required=True)
+    tune.add_argument("--geometry", type=Path, required=True)
+    tune.add_argument("--output-dir", type=Path, required=True)
+    tune.add_argument("--samples-per-sequence", type=int, default=40)
     controls = subparsers.add_parser("controls")
     controls.add_argument("--feature", action="append", required=True)
     controls.add_argument("--reference", type=Path, required=True)
@@ -471,6 +796,21 @@ def main() -> None:
                 "fit_samples", "epochs_completed", "initial_loss", "final_loss",
                 "converged", "dead_features",
             )},
+        }, sort_keys=True))
+    elif args.command == "tune":
+        value = tune_reference(
+            bindings,
+            args.split_manifest,
+            args.geometry,
+            args.output_dir,
+            samples_per_sequence=args.samples_per_sequence,
+        )
+        print(json.dumps({
+            "output_dir": str(args.output_dir),
+            "selection_sha256": value["selection_sha256"],
+            "selected_configuration": value["selected_configuration"],
+            "reference_artifact_hash": value["reference_artifact_hash"],
+            "reference_fit": value["reference_fit"],
         }, sort_keys=True))
     else:
         value = validate_causally(

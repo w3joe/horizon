@@ -7,7 +7,7 @@ from typing import Any
 
 from .artifact import canonical_hash
 from .artifact import REQUIRED_PROVENANCE, require_finite
-from .models import fit_h2, fit_h3, fit_h4
+from .models import fit_h2, fit_h3, fit_h4, fit_h5
 
 
 def build_reference(
@@ -49,8 +49,37 @@ def build_reference(
             "completed_controls": False,
             "status": "pending",
         }
+    elif method_id == "H5":
+        sequence_lengths = [int(value) for value in options.get("sequence_lengths", [])]
+        if sum(sequence_lengths) != len(rows) or len(sequence_lengths) < 2:
+            raise ValueError("H5 requires sequence_lengths covering all rows")
+        sequences = []
+        offset = 0
+        for length in sequence_lengths:
+            sequences.append(rows[offset : offset + length])
+            offset += length
+        parameters = fit_h5(
+            sequences,
+            hidden=int(options.get("hidden", min(16, len(rows[0])))),
+            top_k=int(options.get("top_k", 4)),
+            epochs=int(options.get("epochs", 200)),
+            learning_rate=float(options.get("learning_rate", 0.003)),
+            temporal_weight=float(options.get("temporal_weight", 0.1)),
+            temporal_margin=float(options.get("temporal_margin", 0.25)),
+            seed=int(options.get("seed", 0)),
+            tolerance=float(options.get("tolerance", 1e-4)),
+            patience=int(options.get("patience", 60)),
+        )
+        parameters["offline_intervention_validation"] = intervention_validation or {
+            "completed_controls": False,
+            "status": "pending",
+        }
+        parameters["reproducibility_validation"] = options.get(
+            "reproducibility_validation",
+            {"passed": False, "status": "pending"},
+        )
     else:
-        raise ValueError("reference artifacts exist only for H2-H4")
+        raise ValueError("reference artifacts exist only for H2-H5")
     body = {
         "method_id": method_id,
         "version": version,

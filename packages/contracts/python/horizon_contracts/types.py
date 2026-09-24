@@ -190,7 +190,7 @@ class PerceptionHealth(TypedDict):
     schema_version: SchemaVersion
     health_id: str
     source_id: str
-    method_id: Literal['H0', 'H1', 'H2', 'H3', 'H4']
+    method_id: Literal['H0', 'H1', 'H2', 'H3', 'H4', 'H5']
     status: HealthStatus
     score: NotRequired[float | None]
     reason_codes: list[str]

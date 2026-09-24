@@ -138,7 +138,37 @@ is `horizon-runs/compute/a07-wasrt-sequence-003`; the authoritative clean launch
 metadata is `platform-run.json`, because the container correctly had no Git
 identity.
 
+H4 can also be exercised explicitly as a shadow monitor by supplying its
+validated development reference:
+
+```bash
+PYTHONPATH=services/perception:services/neural-health \
+python -m horizon_perception.live_service \
+  --source "$WASRT_SOURCE" \
+  --weights "$WASRT_WEIGHTS" \
+  --sequence "$MODD2_SEQUENCE/frames" \
+  --calibration "$MODD2_SEQUENCE/calibration.yaml" \
+  --geometry-config configs/perception/recorded-camera-live.json \
+  --collector-url http://127.0.0.1:8105 \
+  --run-id recorded-camera-h4-shadow --method H4 \
+  --reference-artifact "$H4_VALIDATED_REFERENCE"
+```
+
+Without a matching frozen health-calibration artifact, the service records the
+H4 representation score and artifact identity but publishes health as unknown.
+It does not grant camera authority, metric geometry, or free-space permission.
+The failed tuned 96-feature reference is not suitable for this command; use of
+any reference still remains a development/shadow exercise until calibration and
+held-out gates pass.
+
+H5 uses the same command shape with `--method H5` and the validated H5
+reference. Its first frame remains `unknown` because a previous temporal-fusion
+embedding is required; later frames may record reconstruction and temporal-code
+distance scores. Without a frozen calibration artifact, those scores remain
+shadow diagnostics and cannot increase camera authority.
+
 No calibration or held-out labels are consumed by live mode. H0/H1 may expose
-mechanistic conditions, but missed-obstacle risk remains unknown. H2-H4 remain
-offline development methods until their frozen calibration, matched controls,
-and held-out claim gates pass.
+mechanistic conditions, but missed-obstacle risk remains unknown. H2-H5 may be
+run for development diagnostics, including H4/H5 shadow scoring, but cannot gain
+runtime health authority until their frozen calibration, matched controls, and
+held-out claim gates pass.

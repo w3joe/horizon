@@ -19,9 +19,15 @@ candidate feature must:
 
 1. be non-degenerate in the selection data;
 2. show at least 80% correlation-sign agreement with WaSR-T's predicted
-   obstacle fraction across at least three selection sequences; and
+   obstacle fraction across at least three selection sequences;
 3. rank highest by median absolute per-sequence association before any
-   intervention outcome is observed.
+   intervention outcome is observed; and
+4. provide at least two positive, context-valid, separated obstacle probes in
+   every predeclared causal-probe sequence.
+
+The coverage check may move to the next stability-ranked feature, but it runs
+before any intervention outcome is observed. It cannot change the probe
+sequences or select a feature based on causal results.
 
 The causal arm then ablates that frozen SAE decoder direction on two separated,
 high-activation, obstacle-annotated frames from each of three other development
@@ -58,7 +64,28 @@ features. The frozen feature direction beat both controls in 15 of 18 trials
 sign test was 0.00377. The repository's independent experiment evaluator
 accepted every development causal-claim check.
 
-This opens the **development causal gate only**. H4 remains unavailable to the
-live RTA path until the ongoing calibration extraction produces matched H0-H4
-scores and thresholds, and a later sealed held-out comparison shows that H4
-improves fault detection over H1, H2, and H3 at the same false-positive target.
+This opens the **development causal gate only**. H4 may emit shadow diagnostics,
+but remains unavailable for live RTA health authority until calibration
+extraction produces matched H0-H4 scores and thresholds, and a later sealed
+held-out comparison shows that H4 improves fault detection over H1, H2, and H3
+at the same false-positive target.
+
+### Development-only tuning result (2026-09-24)
+
+A fixed 11-candidate grid was evaluated with leave-one-development-sequence-out
+validation over the same eight `kope81` sequences. The selection rule minimized
+mean reconstruction MSE, preferring a smaller representation and then stronger
+sparsity within one percent of the best result. It selected 96 features,
+learning rate 0.003, and L1 weight 0.003. The full fit converged in 415 epochs
+with no dead features and reduced mean cross-sequence reconstruction MSE by
+about 6.1% relative to the prior 64-feature configuration. Its worst-sequence
+MSE was about 2.1% higher, so reconstruction evidence was already mixed.
+
+The top stability-ranked feature lacked enough positive probes in one of the
+three frozen probe sequences. Under the pre-intervention coverage rule above,
+the next stability-ranked eligible feature was frozen. It beat both controls in
+only 11 of 18 trials (61.1%; one-sided sign-test p = 0.240) and therefore failed
+the development causal gate. This negative result is retained. It demonstrates
+that improved SAE reconstruction is not evidence of a stronger causal monitor.
+The validated 64-feature reference remains the best-supported development H4
+candidate; the tuned 96-feature reference is ineligible.

@@ -89,6 +89,7 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
         "cadence": bundle.get("cadence"),
         "gate_recovery": bundle.get("gate_recovery"),
         "authority_audit": bundle.get("authority_audit"),
+        "policy_shadow": bundle.get("policy_shadow"),
         "terminal_outcome": bundle.get("terminal_outcome"),
         "predeclared_censoring": bundle.get("predeclared_censoring"),
         "case_classification": odd_case_classification(bundle),

@@ -13,6 +13,8 @@ from horizon_perception.live import (
     RecordedCameraObservationBuilder,
     RecordedFrame,
 )
+from horizon_neural_health.artifact import ReferenceArtifact
+from horizon_neural_health.training import build_reference
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,7 +82,19 @@ def evidence(sequence: int = 0) -> InferenceEvidence:
                 "standard_deviation": 0.5,
                 "pooled_mean": [0.1] * 2048,
                 "pooled_standard_deviation": [0.2] * 2048,
-            }
+            },
+            "temporal_fusion": {
+                "name": "temporal_fusion",
+                "shape": [1, 2048, 12, 16],
+                "dtype": "torch.float32",
+                "finite": True,
+                "minimum": -2.0,
+                "maximum": 3.0,
+                "mean": 0.1,
+                "standard_deviation": 0.5,
+                "pooled_mean": [0.1 + sequence / 1000] * 2048,
+                "pooled_standard_deviation": [0.2] * 2048,
+            },
         },
         inference_ms=32.0,
         instrumentation_ms=18.0,
@@ -132,6 +146,104 @@ def test_recorded_inference_keeps_capture_expiry_and_exact_lineage(tmp_path: Pat
     assert "MISSING_FROZEN_CALIBRATION" in health["reason_codes"]
     assert "RISK_BAND_NOT_HELDOUT_VALIDATED" in health["reason_codes"]
     assert "pooled_mean" not in neural["payload"]["activation_summaries"]["encoder"]
+
+
+def test_h4_shadow_mode_publishes_score_but_never_camera_authority(tmp_path: Path) -> None:
+    reference = ReferenceArtifact.from_dict(build_reference(
+        "H4",
+        [[0.0] * 2048, [1.0] * 2048],
+        "encoder",
+        ["development-sequence"],
+        "h4-shadow-test",
+        fit_split="development",
+        intervention_validation={"claim_gate_passed": True, "status": "passed"},
+        provenance={
+            "model_weights_sha256": "2" * 64,
+            "preprocessing_sha256": "3" * 64,
+            "sensor_geometry_version": "test-intrinsics-only-v1",
+            "layer": "encoder",
+            "input_dimension": 2048,
+            "projection": {"method": "identity", "output_dimension": 2048},
+            "source_groups": ["development-sequence"],
+        },
+        hidden=2,
+        epochs=2,
+        seed=7,
+    ))
+    h4_builder = RecordedCameraObservationBuilder(
+        run_id="run",
+        branch_id="protected",
+        model_version="wasrt-test",
+        weights_sha256="2" * 64,
+        preprocessing_sha256="3" * 64,
+        geometry=geometry(),
+        method_id="H4",
+        reference=reference,
+    )
+    image = tmp_path / "00001L.jpg"
+    image.write_bytes(b"recorded-camera-frame")
+    frame = RecordedFrame(image, "recorded:00001L.jpg", "recorded", 1, 0.1, 1_000, 2_000)
+
+    _camera, neural = h4_builder.build(frame, evidence(1), completed_monotonic_ns=1_500)
+
+    health = neural["payload"]["perception_health"]
+    assert health["method_id"] == "H4"
+    assert health["status"] == "unknown"
+    assert health["score"] is not None
+    assert "MISSING_FROZEN_CALIBRATION" in health["reason_codes"]
+    assert neural["payload"]["health_detail"]["camera_free_space_usable"] is False
+
+
+def test_h5_shadow_mode_requires_temporal_pair_then_publishes_score(tmp_path: Path) -> None:
+    reference = ReferenceArtifact.from_dict(build_reference(
+        "H5",
+        [[0.0] * 2048, [0.1] * 2048, [0.9] * 2048, [1.0] * 2048],
+        "temporal_fusion",
+        ["dev-a", "dev-b"],
+        "h5-shadow-test",
+        fit_split="development",
+        intervention_validation={"claim_gate_passed": True, "status": "passed"},
+        provenance={
+            "model_weights_sha256": "2" * 64,
+            "preprocessing_sha256": "3" * 64,
+            "sensor_geometry_version": "test-intrinsics-only-v1",
+            "layer": "temporal_fusion",
+            "input_dimension": 2048,
+            "projection": {"method": "identity", "output_dimension": 2048},
+            "source_groups": ["dev-a", "dev-b"],
+        },
+        sequence_lengths=[2, 2],
+        hidden=2,
+        top_k=1,
+        epochs=2,
+        reproducibility_validation={
+            "completed_before_intervention_outcomes": True,
+        },
+    ))
+    h5_builder = RecordedCameraObservationBuilder(
+        run_id="run",
+        branch_id="protected",
+        model_version="wasrt-test",
+        weights_sha256="2" * 64,
+        preprocessing_sha256="3" * 64,
+        geometry=geometry(),
+        method_id="H5",
+        reference=reference,
+    )
+    image = tmp_path / "00001L.jpg"
+    image.write_bytes(b"recorded-camera-frame")
+    first = RecordedFrame(image, "recorded:00001L.jpg", "recorded", 1, 0.1, 1_000, 2_000)
+    second = RecordedFrame(image, "recorded:00002L.jpg", "recorded", 2, 0.2, 2_000, 3_000)
+
+    _camera, first_neural = h5_builder.build(first, evidence(1), completed_monotonic_ns=1_500)
+    _camera, second_neural = h5_builder.build(second, evidence(2), completed_monotonic_ns=2_500)
+
+    assert first_neural["payload"]["perception_health"]["score"] is None
+    health = second_neural["payload"]["perception_health"]
+    assert health["method_id"] == "H5"
+    assert health["status"] == "unknown"
+    assert health["score"] is not None
+    assert second_neural["payload"]["health_detail"]["camera_free_space_usable"] is False
 
 
 def test_bounded_queue_drops_oldest_without_reordering_survivors(tmp_path: Path) -> None:

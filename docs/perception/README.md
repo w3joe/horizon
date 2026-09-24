@@ -27,8 +27,9 @@ All methods return the bounded `PerceptionHealth` record described in `configs/p
 - H2 adds a regularized diagonal-covariance Mahalanobis distance on a fixed pooled embedding.
 - H3 adds PCA reconstruction error and activation novelty.
 - H4 adds a sparse autoencoder. Fitting may precede causal controls, but runtime H4 remains `unknown` until matched, random-direction, and equal-norm controls pass a separate claim gate. The current protocol is documented in [`h4-validation.md`](h4-validation.md).
+- H5 adds a hard-TopK sparse autoencoder at WaSR-T's temporal-fusion layer, a temporal contrastive objective, cross-seed selected-feature stability, and matched causal controls. Its development protocol and remaining deployment gates are documented in [`h5-validation.md`](h5-validation.md).
 
-H2-H4 use cached real hook outputs. The cache reader applies a deterministic fixed grouped projection, normally to 64 dimensions, before fitting so covariance/PCA work stays bounded. The projection dimension, selected layer, source groups, fit split, model pin, and reference hash belong in the immutable artifact.
+H2-H5 use cached real hook outputs. The cache reader applies a deterministic fixed grouped projection for H2/H3; H4 and H5 use all 2,048 spatially averaged channels from their declared layer. The projection dimension, selected layer, source groups, fit split, model pin, and reference hash belong in the immutable artifact.
 
 References may be fitted only on `development` or `nominal_reference` partitions. Threshold artifacts require the calibration split and a frozen hash. A health status may be calibrated for alerting while `missed_obstacle_risk` remains `unknown`: the current builder deliberately marks empirical calibration risk bins as unvalidated until a frozen held-out evaluation validates their coverage. Missing artifacts, mismatched hashes, features of the wrong dimension, and observations outside scope return `unknown`; they never silently become healthy.
 

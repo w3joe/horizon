@@ -166,7 +166,7 @@ class RecordedCameraObservationBuilder:
         calibration: CalibrationArtifact | None = None,
         reference: ReferenceArtifact | None = None,
     ):
-        if method_id not in {"H0", "H1", "H2", "H3", "H4"}:
+        if method_id not in {"H0", "H1", "H2", "H3", "H4", "H5"}:
             raise ValueError("unsupported health method")
         if geometry.get("metric_projection", {}).get("status") != "unavailable":
             raise ValueError("recorded-camera live mode currently requires metric projection unavailable")
@@ -179,6 +179,7 @@ class RecordedCameraObservationBuilder:
         self.method_id = method_id
         self.calibration = calibration
         self.reference = reference
+        self._previous_embedding: list[float] | None = None
 
     def build(
         self,
@@ -221,8 +222,13 @@ class RecordedCameraObservationBuilder:
             },
         }
         if self.reference is not None:
-            encoder = evidence.activation_summaries.get("encoder", {})
-            health_request["embedding"] = list(encoder.get("pooled_mean", []))
+            activation = evidence.activation_summaries.get(self.reference.layer, {})
+            embedding = list(activation.get("pooled_mean", []))
+            health_request["embedding"] = embedding
+            if self.method_id == "H5" and self._previous_embedding is not None:
+                health_request["previous_embedding"] = self._previous_embedding
+            if self.method_id == "H5":
+                self._previous_embedding = embedding
         rich_health = evaluate(health_request, self.calibration, self.reference)
         rich_health["camera_free_space_usable"] = False
         rich_health["missed_obstacle_risk"] = {

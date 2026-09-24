@@ -1,4 +1,4 @@
-"""Bounded perception-health monitors H0-H4."""
+"""Bounded perception-health monitors H0-H5."""
 
 from .artifact import CalibrationArtifact, FeatureCache, ReferenceArtifact
 from .contract import HealthStatus, PerceptionHealth

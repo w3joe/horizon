@@ -23,7 +23,6 @@ from socketserver import TCPServer
 import subprocess
 import tempfile
 import threading
-import time
 from typing import Any, IO
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -76,6 +75,10 @@ class PerceptionLaunchConfig:
     queue_capacity: int
     device: str = "mps"
     method: str = "H0"
+    reference_artifact: Path | None = None
+    reference_artifact_sha256: str | None = None
+    reference_version: str | None = None
+    reference_hash: str | None = None
 
     def command(
         self,
@@ -84,7 +87,7 @@ class PerceptionLaunchConfig:
         collector_url: str,
         run_id: str,
     ) -> list[str]:
-        return [
+        command = [
             str(python),
             "-m",
             "horizon_perception.live_service",
@@ -119,6 +122,9 @@ class PerceptionLaunchConfig:
             "--method",
             self.method,
         ]
+        if self.reference_artifact is not None:
+            command.extend(["--reference-artifact", str(self.reference_artifact)])
+        return command
 
     def public_identity(self) -> dict[str, object]:
         return {
@@ -134,6 +140,8 @@ class PerceptionLaunchConfig:
             "queue_capacity": self.queue_capacity,
             "device": self.device,
             "method": self.method,
+            "reference_version": self.reference_version,
+            "reference_hash": self.reference_hash,
             "pose_reactive": False,
             "metric_contacts_usable": False,
             "camera_free_space_usable": False,
@@ -205,6 +213,50 @@ def load_perception_config(
         runtime.get("queue_capacity"), "queue_capacity", minimum=1, maximum=64
     )
 
+    health_monitor = value.get("health_monitor", {"method": "H0"})
+    if not isinstance(health_monitor, dict):
+        raise ValueError("health_monitor must be an object")
+    method = health_monitor.get("method", "H0")
+    if method not in {"H0", "H1", "H2", "H3", "H4", "H5"}:
+        raise ValueError("unsupported health monitor method")
+    reference_artifact: Path | None = None
+    reference_artifact_sha256: str | None = None
+    reference_version: str | None = None
+    reference_hash: str | None = None
+    reference = health_monitor.get("reference_artifact")
+    if method in {"H2", "H3", "H4", "H5"}:
+        if not isinstance(reference, dict):
+            raise ValueError(f"{method} requires a reference_artifact")
+        relative_path = reference.get("data_relative_path")
+        expected_sha = reference.get("sha256")
+        if not isinstance(relative_path, str):
+            raise ValueError("reference artifact path is required")
+        relative = Path(relative_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("reference artifact path must stay within the data root")
+        if not isinstance(expected_sha, str) or re.fullmatch(r"[0-9a-f]{64}", expected_sha) is None:
+            raise ValueError("reference artifact SHA-256 is malformed")
+        reference_artifact = (external_data_root / relative).resolve()
+        try:
+            reference_artifact.relative_to(external_data_root.resolve())
+        except ValueError as exc:
+            raise ValueError("reference artifact escapes the data root") from exc
+        if not reference_artifact.is_file() or _sha256(reference_artifact) != expected_sha:
+            raise ValueError("reference artifact is missing or has the wrong SHA-256")
+        try:
+            reference_value = json.loads(reference_artifact.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("reference artifact is not valid JSON") from exc
+        if reference_value.get("method_id") != method:
+            raise ValueError("reference artifact method does not match health monitor")
+        reference_version = reference_value.get("version")
+        reference_hash = reference_value.get("artifact_hash")
+        if not isinstance(reference_version, str) or not isinstance(reference_hash, str):
+            raise ValueError("reference artifact identity is incomplete")
+        reference_artifact_sha256 = expected_sha
+    elif reference is not None:
+        raise ValueError(f"{method} must not declare a reference_artifact")
+
     source_dir = external_data_root / "sources/WaSR-T"
     weights = external_data_root / "weights/wasrt_mastr1325.pth"
     sequence_root = (
@@ -239,6 +291,11 @@ def load_perception_config(
         cadence_s=cadence_s,
         ttl_s=ttl_s,
         queue_capacity=queue_capacity,
+        method=method,
+        reference_artifact=reference_artifact,
+        reference_artifact_sha256=reference_artifact_sha256,
+        reference_version=reference_version,
+        reference_hash=reference_hash,
     )
 
 

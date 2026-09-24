@@ -136,6 +136,59 @@ def test_valid_config_resolves_one_bounded_left_camera_source(tmp_path: Path, mo
     assert not any(str(data) in str(value) for value in public.values())
 
 
+def test_h5_config_pins_reference_and_launches_shadow_monitor(tmp_path: Path) -> None:
+    repository, data, value = _write_fixture(tmp_path)
+    reference = data / "references/neural-health/h5.json"
+    reference.parent.mkdir(parents=True)
+    reference.write_text(json.dumps({
+        "method_id": "H5",
+        "version": "h5-fixture-v1",
+        "artifact_hash": "a" * 64,
+    }))
+    value["health_monitor"] = {
+        "method": "H5",
+        "mode": "shadow_only",
+        "reference_artifact": {
+            "data_relative_path": "references/neural-health/h5.json",
+            "sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
+        },
+    }
+    config_path = repository / "configs/perception/recorded-live.json"
+    config_path.write_text(json.dumps(value, indent=2) + "\n")
+
+    config = perception_runtime.load_perception_config(
+        config_path, repository_root=repository, external_data_root=data
+    )
+    command = config.command(
+        python=repository / ".venv/bin/python",
+        collector_url="http://127.0.0.1:8105",
+        run_id="h5-product",
+    )
+
+    assert config.method == "H5"
+    assert command[command.index("--method") + 1] == "H5"
+    assert command[command.index("--reference-artifact") + 1] == str(reference)
+    assert config.public_identity()["reference_version"] == "h5-fixture-v1"
+
+
+def test_h5_config_fails_closed_when_reference_is_missing(tmp_path: Path) -> None:
+    repository, data, value = _write_fixture(tmp_path)
+    value["health_monitor"] = {
+        "method": "H5",
+        "reference_artifact": {
+            "data_relative_path": "references/neural-health/missing.json",
+            "sha256": "0" * 64,
+        },
+    }
+    config_path = repository / "configs/perception/recorded-live.json"
+    config_path.write_text(json.dumps(value, indent=2) + "\n")
+
+    with pytest.raises(ValueError, match="missing or has the wrong SHA-256"):
+        perception_runtime.load_perception_config(
+            config_path, repository_root=repository, external_data_root=data
+        )
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [

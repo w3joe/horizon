@@ -1,4 +1,4 @@
-"""A02-loadable H0-H4 functions. Artifact paths are explicit request fields."""
+"""A02-loadable H0-H5 functions. Artifact paths are explicit request fields."""
 
 from __future__ import annotations
 
@@ -18,3 +18,4 @@ def h1(request: dict) -> dict: return _run("H1", request)
 def h2(request: dict) -> dict: return _run("H2", request)
 def h3(request: dict) -> dict: return _run("H3", request)
 def h4(request: dict) -> dict: return _run("H4", request)
+def h5(request: dict) -> dict: return _run("H5", request)

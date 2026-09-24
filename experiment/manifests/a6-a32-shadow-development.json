@@ -1,0 +1,148 @@
+{
+  "schema_version": "0.1.0",
+  "study_id": "a6-a32-shadow-development-20260924",
+  "experiment_mode": "full_pipeline_closed_loop",
+  "split": "development",
+  "protocol_frozen": false,
+  "calibration_hash": null,
+  "candidate_ids": ["A5"],
+  "health_ids": ["H_FIXED"],
+  "timing_profile_id": "idealized-front-zero-v1",
+  "scenarios": [
+    {
+      "scenario_id": "crossing-recoverable-v1",
+      "headline": false,
+      "stochastic": true,
+      "seed_count": 3,
+      "seed_offset": 0,
+      "observation_tape_hashes": [
+        "73c0cc86e4f7f9c3559b63e549a889b8413c5236c5d52d538f15faede80cea04",
+        "e84f0768c3724d7e7629445fccdacc506d17ec506482da84d5cd968068fde175",
+        "405c089fd889b755eef77eeda01a9401f2ff53d2de01f136588436f711aa82dd"
+      ],
+      "fault_schedule_hashes": [
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      ],
+      "ai_policy_versions": [
+        "decision-ai-fixture-unsafe_straight-v1",
+        "decision-ai-fixture-unsafe_straight-v1",
+        "decision-ai-fixture-unsafe_straight-v1"
+      ]
+    },
+    {
+      "scenario_id": "dense-traffic-v1",
+      "headline": false,
+      "stochastic": true,
+      "seed_count": 3,
+      "seed_offset": 10,
+      "observation_tape_hashes": [
+        "75656869bd18c6a258b988fb9f833c9d791ead3d62b305317166858081587dea",
+        "321193ec11abe0fcc87ae97cee83ae543a621020bc82635dd2cde530b4007f4f",
+        "516b6e9dbe25875ae40bc4d8891ad3acfb3a86fd95d4d7651b80ebbe0a952092"
+      ],
+      "fault_schedule_hashes": [
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      ],
+      "ai_policy_versions": [
+        "decision-ai-fixture-nominal-v1",
+        "decision-ai-fixture-nominal-v1",
+        "decision-ai-fixture-nominal-v1"
+      ]
+    },
+    {
+      "scenario_id": "vessel-degradation-v1",
+      "headline": false,
+      "stochastic": true,
+      "seed_count": 3,
+      "seed_offset": 20,
+      "observation_tape_hashes": [
+        "02754c7f6c879d6a73f2af318ea02c539066c3d76773b745bf4a530ec9d8e1d3",
+        "fe067cf62e5e26848728fda24a30abddd89f41906a274456411b09854fe7b76f",
+        "bebe096493834c9059991c14bdcf7a9c5e944de0097fdbb9362a2159aa63970b"
+      ],
+      "fault_schedule_hashes": [
+        "15a2f52e74dd33e9bdbe6547bb89fb588bd0ed0ade9764a18800d53757425e6a",
+        "15a2f52e74dd33e9bdbe6547bb89fb588bd0ed0ade9764a18800d53757425e6a",
+        "15a2f52e74dd33e9bdbe6547bb89fb588bd0ed0ade9764a18800d53757425e6a"
+      ],
+      "ai_policy_versions": [
+        "decision-ai-fixture-unsafe_straight-v1",
+        "decision-ai-fixture-unsafe_straight-v1",
+        "decision-ai-fixture-unsafe_straight-v1"
+      ]
+    },
+    {
+      "scenario_id": "initially-unrecoverable-v1",
+      "headline": false,
+      "stochastic": true,
+      "seed_count": 3,
+      "seed_offset": 30,
+      "observation_tape_hashes": [
+        "480ed116c03359f1563b96e27fcbc1b54605f65a548724397762d346c95a7274",
+        "849a98c30f5ea7b216a7bafaf5db416b9403b4be6dea8356295746e60430428b",
+        "f701f5f7b46d9dbc4461617ac2af60c991623676cfa987545291dafacdee84a4"
+      ],
+      "fault_schedule_hashes": [
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      ],
+      "ai_policy_versions": [
+        "decision-ai-fixture-unsafe_straight-v1",
+        "decision-ai-fixture-unsafe_straight-v1",
+        "decision-ai-fixture-unsafe_straight-v1"
+      ]
+    }
+  ],
+  "episode_contract": {
+    "a6_shadow": {
+      "bundle_id": "synthetic-a32-singapore-policy-shadow",
+      "version": "development-v1",
+      "valid_from_utc": "2026-09-01T00:00:00Z",
+      "valid_until_utc": "2027-01-01T00:00:00Z",
+      "evaluated_at_utc": "2026-09-24T12:00:00Z",
+      "source_pins": [
+        {
+          "source_id": "synthetic-a32-runtime-authority",
+          "revision": "development-v1",
+          "role": "runtime_authority",
+          "content_sha256": "7eb47d8cb3b58726972e6c76fcfeb4a58eb78b6f1afc31e98f85811e1d1d89a7"
+        },
+        {
+          "source_id": "synthetic-a32-mass-design-reference",
+          "revision": "development-v1",
+          "role": "design_assurance_reference",
+          "content_sha256": "b7fad1a7ce9095d04ce4bc6b29f98cdf6c53e3912acc361ad7126ee4a7554cef"
+        }
+      ],
+      "parameters": {
+        "maximum_clear_visibility_speed_mps": 4.0,
+        "stopping_distance_reserve_m": 20.0,
+        "minimum_early_action_lead_s": 30.0,
+        "substantial_course_change_deg": 20.0,
+        "substantial_speed_reduction_mps": 1.0,
+        "head_on_bearing_tolerance_deg": 10.0,
+        "reciprocal_course_tolerance_deg": 15.0,
+        "classification_ambiguity_deg": 2.0,
+        "overtaking_abaft_beam_deg": 112.5
+      },
+      "operational_context": {
+        "jurisdiction": "singapore",
+        "service_type": "government_non_commercial",
+        "power_driven": true,
+        "length_m": 12.0,
+        "gross_tonnage": 40.0,
+        "carries_passengers": false,
+        "towing": false,
+        "hazardous_cargo": false,
+        "remote_supervision": true,
+        "daylight": true,
+        "visibility": "clear"
+      }
+    }
+  }
+}

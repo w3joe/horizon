@@ -53,6 +53,13 @@ PYTHONPATH=. /opt/homebrew/bin/python3.12 -m experiment controller-evidence \
 PYTHONPATH=.:packages/contracts/python:services/assurance:services/simulator \
   /opt/homebrew/bin/python3.12 -m experiment candidate-acceptance \
   --output ../horizon-runs/development/a1-a5-working-acceptance.json
+
+PYTHONPATH=.:packages/contracts/python:services/assurance:services/gate:services/simulator:services/collector:services/fusion \
+  /opt/homebrew/bin/python3.12 -m experiment run-adapter \
+  --study-plan experiment/manifests/a6-a32-shadow-development.json \
+  --entrypoint experiment.harness.closed_loop:run_assured_episode \
+  --run-id a6-a32-shadow-30s-20260924-v2 --max-simulation-time-s 30 \
+  --output ../horizon-runs/development/a6-a32-shadow-30s-20260924-v2
 ```
 
 `plan` refuses methods until the relevant production entrypoint is registered in
@@ -85,6 +92,11 @@ at 50 Hz. No 20 Hz fresh-state assurance claim is made, and old proposals are ne
 new timestamps.
 `harness.runner.run_adapter_jobs` checks complete response identity and provenance, refuses duplicate
 or overwritten jobs, and routes replay to response-only scoring or closed loop to truth scoring.
+The A6 A32 companion manifest reuses the original 12 A5 episode identities and
+evaluates the observation-only policy shadow after each A5 decision. A6 work is
+measured but does not advance the injected simulation clock and never enters
+the gate or actuator path. Its source pins, lookout capabilities, vessel
+profile, and evidence adapter are explicitly synthetic development fixtures.
 
 The stage-2 commands enforce the frozen runtime/split identities in
 `configs/perception-stage2.json`. The drift command is descriptive development analysis. The

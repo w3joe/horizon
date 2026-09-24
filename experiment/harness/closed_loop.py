@@ -496,6 +496,18 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     from horizon_sim.engine import AuthoritativeSimulator
     from horizon_sim.experiment_adapter import _scenario_by_id
 
+    a6_shadow_config = request.get("a6_shadow")
+    if a6_shadow_config is not None:
+        if request.get("candidate_id") != "A5":
+            raise ValueError("A6 shadow observation requires candidate A5")
+        if not isinstance(a6_shadow_config, dict):
+            raise ValueError("a6_shadow must be an object")
+        from experiment.harness.a6_shadow import A6DevelopmentObserver
+
+        a6_observer = A6DevelopmentObserver(a6_shadow_config)
+    else:
+        a6_observer = None
+
     required = {
         "run_id", "episode_id", "branch_id", "experiment_mode", "split", "scenario_id",
         "seed", "observation_tape_hash", "fault_schedule_hash", "ai_policy_version",
@@ -805,6 +817,8 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                             candidate_wall_ns = max(
                                 0, time.monotonic_ns() - candidate_started
                             )
+                            if a6_observer is not None:
+                                a6_observer.evaluate(governor_input, decision)
                             actual_wall_timings_ns["candidate"].append(
                                 candidate_wall_ns
                             )
@@ -1094,6 +1108,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         "watchdog_actions": watchdog_actions,
         "protected_command_trace": copy.deepcopy(plant.command_trace),
         "authority_audit": authority_audit,
+        "policy_shadow": a6_observer.result() if a6_observer is not None else None,
         "authorized_proposal_sources": ["decision-ai-fixture"],
         "artifact_hashes": {
             "scenario": scenario.sha256,

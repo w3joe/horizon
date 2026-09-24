@@ -1,4 +1,4 @@
-"""Runtime H0-H4 evaluation through one bounded contract."""
+"""Runtime H0-H5 evaluation through one bounded contract."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from .artifact import CalibrationArtifact, ReferenceArtifact
 from .contract import HealthStatus, PerceptionHealth, unknown_record
-from .models import score_h2, score_h3, score_h4
+from .models import score_h2, score_h3, score_h4, score_h5_components
 
 
 def _entropy(probabilities: list[float]) -> float:
@@ -148,7 +148,6 @@ def _representation(
     if not isinstance(vector, list) or len(vector) != reference.feature_dimension:
         return unknown_record(payload, method_id, "missing_or_wrong_dimension_embedding")
     try:
-        conventional, reasons, invalid = _conventional(payload)
         numeric_vector = [float(x) for x in vector]
         if any(not math.isfinite(value) for value in numeric_vector):
             raise ValueError("embedding contains nonfinite values")
@@ -157,11 +156,22 @@ def _representation(
             raise ValueError("representation score is nonfinite")
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return unknown_record(payload, method_id, "invalid_representation_evidence")
+    try:
+        conventional, reasons, invalid = _conventional(payload)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        # The representation score is still useful as shadow evidence, but an
+        # incomplete conventional monitor must prevent any authority upgrade.
+        conventional, reasons, invalid = 0.0, ["conventional_evidence_incomplete"], True
     score = max(conventional, representation)
     reasons.extend(["feature_shift"] if representation >= (calibration.alarm_threshold if calibration else math.inf) else [])
     record = _record(payload, method_id, score, reasons, invalid, calibration, reference)
-    if record.statistics:
-        object.__setattr__(record, "statistics", {"health_score": score, "representation_score": representation})
+    # Preserve the representation score in shadow mode even when calibration
+    # is intentionally absent. The safety-facing status remains ``unknown``;
+    # this only makes pre-calibration H2-H4 behavior observable and auditable.
+    object.__setattr__(record, "statistics", {
+        "health_score": score,
+        "representation_score": representation,
+    })
     return record
 
 
@@ -180,7 +190,45 @@ def h4(payload, calibration=None, reference=None):
     return _representation(payload, "H4", score_h4, calibration, reference)
 
 
-METHODS = {"H0": h0, "H1": h1, "H2": h2, "H3": h3, "H4": h4}
+def h5(payload, calibration=None, reference=None):
+    validation = reference.parameters.get("offline_intervention_validation", {}) if reference else {}
+    if reference is not None and validation.get("claim_gate_passed") is not True:
+        return unknown_record(payload, "H5", "offline_intervention_validation_missing")
+    reproducibility = reference.parameters.get("reproducibility_validation", {}) if reference else {}
+    if reference is not None and reproducibility.get("completed_before_intervention_outcomes") is not True:
+        return unknown_record(payload, "H5", "reproducibility_validation_missing")
+    if reference is None:
+        return unknown_record(payload, "H5", "missing_reference_artifact")
+    vector = payload.get("embedding")
+    previous = payload.get("previous_embedding")
+    if not isinstance(vector, list) or not isinstance(previous, list):
+        return unknown_record(payload, "H5", "missing_current_or_previous_embedding")
+    if len(vector) != reference.feature_dimension or len(previous) != reference.feature_dimension:
+        return unknown_record(payload, "H5", "missing_or_wrong_dimension_embedding")
+    try:
+        components = score_h5_components(
+            [float(value) for value in vector],
+            reference.parameters,
+            [float(value) for value in previous],
+        )
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return unknown_record(payload, "H5", "invalid_spatiotemporal_evidence")
+    try:
+        conventional, reasons, invalid = _conventional(payload)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        conventional, reasons, invalid = 0.0, ["conventional_evidence_incomplete"], True
+    representation = components["reconstruction_mse"] + float(
+        reference.parameters["temporal_weight"]
+    ) * components["temporal_code_distance"]
+    score = max(conventional, representation)
+    if representation >= (calibration.alarm_threshold if calibration else math.inf):
+        reasons.append("spatiotemporal_feature_shift")
+    record = _record(payload, "H5", score, reasons, invalid, calibration, reference)
+    object.__setattr__(record, "statistics", {"health_score": score, **components})
+    return record
+
+
+METHODS = {"H0": h0, "H1": h1, "H2": h2, "H3": h3, "H4": h4, "H5": h5}
 
 
 def evaluate(payload: dict[str, Any], calibration: CalibrationArtifact | None = None, reference: ReferenceArtifact | None = None) -> dict[str, Any]:

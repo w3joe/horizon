@@ -310,7 +310,7 @@
         "schema_version": { "$ref": "#/$defs/SchemaVersion" },
         "health_id": { "type": "string" },
         "source_id": { "type": "string" },
-        "method_id": { "type": "string", "enum": ["H0", "H1", "H2", "H3", "H4"] },
+        "method_id": { "type": "string", "enum": ["H0", "H1", "H2", "H3", "H4", "H5"] },
         "status": { "$ref": "#/$defs/HealthStatus" },
         "score": { "type": ["number", "null"] },
         "reason_codes": { "type": "array", "items": { "type": "string" } },

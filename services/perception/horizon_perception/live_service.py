@@ -19,6 +19,7 @@ from .live import (
     preprocessing_sha256,
 )
 from .model import ModelSpec, sha256_file
+from horizon_neural_health.artifact import CalibrationArtifact, ReferenceArtifact
 
 
 SOURCE_COMMIT = "1b5360af20408e09bbf0116a0029f7e0c0800e7c"
@@ -56,10 +57,30 @@ def main() -> None:
     parser.add_argument("--ttl-s", type=float, default=3.0)
     parser.add_argument("--queue-capacity", type=int, default=2)
     parser.add_argument("--maximum-frames", type=int)
-    parser.add_argument("--method", choices=("H0", "H1"), default="H0")
+    parser.add_argument(
+        "--method", choices=("H0", "H1", "H2", "H3", "H4", "H5"), default="H0"
+    )
+    parser.add_argument("--reference-artifact", type=Path)
+    parser.add_argument("--health-calibration-artifact", type=Path)
     args = parser.parse_args()
 
     geometry = _load_geometry(args.geometry_config, args.calibration)
+    reference = (
+        ReferenceArtifact.load(args.reference_artifact)
+        if args.reference_artifact is not None
+        else None
+    )
+    health_calibration = (
+        CalibrationArtifact.load(args.health_calibration_artifact)
+        if args.health_calibration_artifact is not None
+        else None
+    )
+    if args.method in {"H2", "H3", "H4", "H5"} and reference is None:
+        raise ValueError(f"{args.method} requires --reference-artifact")
+    if reference is not None and reference.method_id != args.method:
+        raise ValueError("reference artifact method does not match --method")
+    if health_calibration is not None and health_calibration.method_id != args.method:
+        raise ValueError("health calibration artifact method does not match --method")
     sequence_id = args.sequence.parent.name if args.sequence.name == "frames" else args.sequence.name
     frames = sorted(args.sequence.glob(args.frame_glob))
     if not frames:
@@ -86,6 +107,8 @@ def main() -> None:
         preprocessing_sha256=preprocessing_sha256(),
         geometry=geometry,
         method_id=args.method,
+        calibration=health_calibration,
+        reference=reference,
     )
     service = LiveRecordedCameraService(
         infer=inference.process,
@@ -114,6 +137,16 @@ def main() -> None:
         "configuration_sha256": hashlib.sha256(
             args.geometry_config.read_bytes()
         ).hexdigest(),
+        "health_method": args.method,
+        "reference_artifact_hash": reference.artifact_hash if reference else None,
+        "health_calibration_artifact_hash": (
+            health_calibration.artifact_hash if health_calibration else None
+        ),
+        "health_authority": (
+            "calibrated_but_recorded_camera_forced_unknown"
+            if health_calibration is not None
+            else "shadow_only_missing_calibration"
+        ),
     })
     print(json.dumps(result, indent=2, sort_keys=True))
 

@@ -3,7 +3,17 @@ from __future__ import annotations
 import math
 
 from horizon_neural_health.artifact import CalibrationArtifact, ReferenceArtifact
-from horizon_neural_health.models import fit_h2, fit_h3, fit_h4, score_h2, score_h3, score_h4
+from horizon_neural_health.models import (
+    fit_h2,
+    fit_h3,
+    fit_h4,
+    fit_h5,
+    score_h2,
+    score_h3,
+    score_h4,
+    score_h4_components,
+    score_h5_components,
+)
 from horizon_neural_health.monitors import evaluate
 from horizon_neural_health.training import build_calibration, build_reference
 
@@ -83,6 +93,32 @@ def test_h4_small_sae_is_deterministic_and_finite():
     assert math.isfinite(score_h4([0.2, 0.1], first))
 
 
+def test_h4_score_exposes_reconstruction_and_sparsity_terms():
+    fit = fit_h4([[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]], hidden=2, epochs=5, seed=7)
+    components = score_h4_components([0.2, 0.1], fit)
+    assert set(components) == {"reconstruction_mse", "mean_activation", "active_fraction"}
+    assert components["reconstruction_mse"] >= 0
+    assert components["mean_activation"] >= 0
+    assert 0 <= components["active_fraction"] <= 1
+    assert score_h4([0.2, 0.1], fit) == (
+        components["reconstruction_mse"] + fit["l1"] * components["mean_activation"]
+    )
+
+
+def test_h5_topk_temporal_sae_is_sparse_and_deterministic():
+    sequences = [
+        [[-1.0, 0.0], [-0.8, 0.1], [-0.6, 0.2]],
+        [[0.6, 0.2], [0.8, 0.1], [1.0, 0.0]],
+    ]
+    first = fit_h5(sequences, hidden=4, top_k=1, epochs=8, seed=3)
+    second = fit_h5(sequences, hidden=4, top_k=1, epochs=8, seed=3)
+    assert first == second
+    components = score_h5_components([0.8, 0.1], first, [0.6, 0.2])
+    assert components["active_fraction"] <= 0.25
+    assert components["reconstruction_mse"] >= 0
+    assert components["temporal_code_distance"] >= 0
+
+
 def test_reference_fitting_honors_requested_convergence_rule():
     rows = [[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]]
     common = dict(layer="encoder", source_groups=["dev-sequence"], version="test-v1",
@@ -146,6 +182,28 @@ def test_h4_refuses_reference_without_intervention_controls():
     result = evaluate(request, CalibrationArtifact.from_dict(artifact), reference)
     assert result["status"] == "unknown"
     assert result["reasons"] == ["offline_intervention_validation_missing"]
+
+
+def test_h5_refuses_nonreproducible_dictionary_even_with_causal_controls():
+    reference = ReferenceArtifact.from_dict(build_reference(
+        "H5",
+        [[-1.0, 0.0], [-0.8, 0.1], [0.8, 0.1], [1.0, 0.0]],
+        "temporal_fusion",
+        ["dev-a", "dev-b"],
+        "h5-test-v1",
+        fit_split="development",
+        provenance=provenance("temporal_fusion", 2, ["dev-a", "dev-b"]),
+        intervention_validation={"claim_gate_passed": True, "status": "passed"},
+        sequence_lengths=[2, 2],
+        hidden=4,
+        top_k=1,
+        epochs=4,
+    ))
+    request = payload("H5", [0.8, 0.1])
+    request["previous_embedding"] = [1.0, 0.0]
+    result = evaluate(request, reference=reference)
+    assert result["status"] == "unknown"
+    assert result["reasons"] == ["reproducibility_validation_missing"]
 
 
 def test_calibration_threshold_is_tie_aware():

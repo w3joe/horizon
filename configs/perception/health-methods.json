@@ -11,7 +11,8 @@
     {"id": "H1", "entrypoint": "horizon_neural_health.entrypoints:h1", "reference_required": false},
     {"id": "H2", "entrypoint": "horizon_neural_health.entrypoints:h2", "reference_required": true},
     {"id": "H3", "entrypoint": "horizon_neural_health.entrypoints:h3", "reference_required": true},
-    {"id": "H4", "entrypoint": "horizon_neural_health.entrypoints:h4", "reference_required": true, "offline_intervention_validation_required": true}
+    {"id": "H4", "entrypoint": "horizon_neural_health.entrypoints:h4", "reference_required": true, "offline_intervention_validation_required": true},
+    {"id": "H5", "entrypoint": "horizon_neural_health.entrypoints:h5", "reference_required": true, "offline_intervention_validation_required": true, "temporal_context_required": true}
   ],
   "runtime_boundary": "health records may select a frozen uncertainty/mode policy; they never emit steering or metric obstacle bounds"
 }

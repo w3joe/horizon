@@ -204,7 +204,7 @@ export interface PerceptionHealth {
   schema_version: SchemaVersion;
   health_id: string;
   source_id: string;
-  method_id: "H0" | "H1" | "H2" | "H3" | "H4";
+  method_id: "H0" | "H1" | "H2" | "H3" | "H4" | "H5";
   status: HealthStatus;
   score?: number | null;
   reason_codes: Array<string>;
