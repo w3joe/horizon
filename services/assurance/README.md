@@ -11,6 +11,44 @@ kinematic velocity-QP baseline under its original version. A5 conditions explici
 limits on required health evidence, then combines predictive recoverability
 with the A4 filter. The implementations are distinct plugins.
 
+## A6 Singapore policy shadow
+
+`horizon_assurance.policy_shadow.A6PolicyShadow` is an observation-only first
+slice for a generic 12 m Singapore government/non-commercial, power-driven USV
+under remote supervision. Its bounded profile is below 300 GT and 50 m, carries
+no passengers or hazardous cargo, is not towing, and operates only in daylight
+and clear visibility. Restricted visibility is explicitly unsupported.
+
+A6 consumes an already-produced A5 decision and cannot produce an
+`AssuranceDecision`, register as an actuator candidate, call the gate, or issue
+a command. An A5 recovery, minimum-risk, invalid, mismatched, or otherwise
+non-permissive decision always withholds A6 support. A6 findings can never
+weaken the physical safety result. Missing, stale, malformed, or hash-mismatched
+policy bundles and missing or ambiguous evidence resolve to `unknown`, which
+withholds shadow support.
+
+The first rule set is deliberately narrow: lookout-evidence availability (R5),
+a configured safe-speed engineering proxy (R6), doubt treated as collision risk
+(R7), early/substantial-action evidence (R8), and clear-visibility encounter
+classification plus give-way/stand-on shadow duties (R13-R17). Thresholds are
+caller-supplied, hash-covered engineering parameters. They are not asserted to
+be statutory thresholds. Applicability is always one of `applicable`,
+`not_applicable`, or `unknown`; encounter boundaries inside the configured
+ambiguity band are `unknown`.
+
+Policy bundle metadata carries caller-computed SHA-256 pins for the canonical
+bundle content and each exact source artifact. This repository does not ship or
+invent source-content hashes. At least one source pin must be marked
+`runtime_authority`; design references have the separate
+`design_assurance_reference` role. The MASS Code may be used only in that
+design-assurance role and is not runtime law.
+
+This shadow makes no legal-compliance determination and must not be described
+as COLREG-compliant. Weapons, targeting, classified doctrine, and rules of
+engagement are outside its data model and scope. See
+[`docs/a6-singapore-policy-shadow.md`](docs/a6-singapore-policy-shadow.md) for
+the evidence fields, composition boundary, and limitations.
+
 A4 propagates target heading and speed through the eight-state plant, low-level
 PID, actuator lag, saturation, and live actuator limits. Its finite lattice
 enforces a discrete endpoint barrier inequality with declared state bounds and
