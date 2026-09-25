@@ -508,6 +508,14 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     else:
         a6_observer = None
 
+    a6_enforcement_config = request.get("a6_enforcement")
+    policy_enforcer = None
+    if a6_enforcement_config is not None:
+        if request.get("candidate_id") != "A5" or not isinstance(a6_enforcement_config, dict):
+            raise ValueError("A6 enforcement requires A5 and a configuration object")
+        from experiment.harness.a6_enforcement import development_enforcer
+        policy_enforcer = development_enforcer(a6_enforcement_config)
+
     required = {
         "run_id", "episode_id", "branch_id", "experiment_mode", "split", "scenario_id",
         "seed", "observation_tape_hash", "fault_schedule_hash", "ai_policy_version",
@@ -556,7 +564,9 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         branch_id=str(request["branch_id"]),
         plant=plant,
         reference=reference,
-        config=GateConfig(asynchronous_recovery_cache=False),
+        config=GateConfig(asynchronous_recovery_cache=False,
+                          a6_mode="enforce" if policy_enforcer else "disabled"),
+        policy_enforcer=policy_enforcer,
         assurance_config=assurance_config,
         monotonic_ns=clock,
     )
@@ -1109,6 +1119,13 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         "protected_command_trace": copy.deepcopy(plant.command_trace),
         "authority_audit": authority_audit,
         "policy_shadow": a6_observer.result() if a6_observer is not None else None,
+        "policy_enforcement": {
+            "mode": gate.config.a6_mode, "counts": dict(gate.policy_counts),
+            "evidence_provenance": "synthetic",
+            "events": [copy.deepcopy(event) for event in gate.telemetry
+                       if event.get("event_type") == "a6_policy_decision" or "a6" in event],
+            "timing": "A6 runs inside measured gate_submit; manual clock uses the declared gate service budget",
+        } if policy_enforcer else None,
         "authorized_proposal_sources": ["decision-ai-fixture"],
         "artifact_hashes": {
             "scenario": scenario.sha256,

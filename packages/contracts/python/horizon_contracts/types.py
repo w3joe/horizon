@@ -5,6 +5,39 @@ from typing import Any, Literal, NotRequired, TypedDict, TypeAlias
 SchemaVersion: TypeAlias = Literal['0.1.0']
 Sha256: TypeAlias = str
 ProvenanceKind: TypeAlias = Literal['recorded', 'synthetic', 'unavailable']
+class PolicyEvidence(TypedDict):
+    contract_type: Literal['PolicyEvidence']
+    schema_version: SchemaVersion
+    run_id: str
+    branch_id: str
+    tick_index: int
+    snapshot_sha256: Sha256
+    command_sha256: Sha256
+    observed_monotonic_ns: int
+    expires_monotonic_ns: int
+    provenance: ProvenanceKind
+    operational_context: dict[str, Any]
+    evidence: dict[str, Any]
+
+class A6PolicyDecision(TypedDict):
+    contract_type: Literal['A6PolicyDecision']
+    schema_version: SchemaVersion
+    assessment_id: str
+    evaluator_version: str
+    run_id: str
+    branch_id: str
+    tick_index: int
+    a5_decision_id: str
+    input_sha256: Sha256
+    decision_sha256: Sha256
+    bundle_sha256: Sha256 | None
+    evidence_sha256: Sha256 | None
+    authorization: Literal['authorize', 'withhold']
+    expires_monotonic_ns: int
+    compute_time_ns: int
+    reason_codes: list[str]
+    findings: list[dict[str, Any]]
+
 CapabilityStatus: TypeAlias = Literal['available', 'degraded', 'unavailable', 'output_only']
 HealthStatus: TypeAlias = Literal['healthy', 'degraded', 'invalid', 'unknown']
 Vector2: TypeAlias = list[float]

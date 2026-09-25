@@ -15,6 +15,8 @@
     { "$ref": "#/$defs/GovernorInput" },
     { "$ref": "#/$defs/RecoveryInput" },
     { "$ref": "#/$defs/AssuranceDecision" },
+    { "$ref": "#/$defs/PolicyEvidence" },
+    { "$ref": "#/$defs/A6PolicyDecision" },
     { "$ref": "#/$defs/GateReceipt" },
     { "$ref": "#/$defs/SimulationSnapshot" },
     { "$ref": "#/$defs/TrafficSnapshot" },
@@ -23,6 +25,47 @@
     { "$ref": "#/$defs/ArtifactManifest" }
   ],
   "$defs": {
+    "PolicyEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_type", "schema_version", "run_id", "branch_id", "tick_index", "snapshot_sha256", "command_sha256", "observed_monotonic_ns", "expires_monotonic_ns", "provenance", "operational_context", "evidence"],
+      "properties": {
+        "contract_type": {"const": "PolicyEvidence"},
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "run_id": {"type": "string", "minLength": 1},
+        "branch_id": {"type": "string", "minLength": 1},
+        "tick_index": {"type": "integer", "minimum": 0},
+        "snapshot_sha256": {"$ref": "#/$defs/Sha256"},
+        "command_sha256": {"$ref": "#/$defs/Sha256"},
+        "observed_monotonic_ns": {"type": "integer", "minimum": 0},
+        "expires_monotonic_ns": {"type": "integer", "minimum": 0},
+        "provenance": {"$ref": "#/$defs/ProvenanceKind"},
+        "operational_context": {"type": "object"},
+        "evidence": {"type": "object"}
+      }
+    },
+    "A6PolicyDecision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_type", "schema_version", "assessment_id", "evaluator_version", "run_id", "branch_id", "tick_index", "a5_decision_id", "input_sha256", "decision_sha256", "bundle_sha256", "evidence_sha256", "authorization", "expires_monotonic_ns", "compute_time_ns", "reason_codes", "findings"],
+      "properties": {
+        "contract_type": {"const": "A6PolicyDecision"},
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "assessment_id": {"type": "string"},
+        "evaluator_version": {"type": "string"},
+        "run_id": {"type": "string"},
+        "branch_id": {"type": "string"},
+        "tick_index": {"type": "integer", "minimum": 0},
+        "a5_decision_id": {"type": "string"},
+        "input_sha256": {"$ref": "#/$defs/Sha256"},
+        "decision_sha256": {"$ref": "#/$defs/Sha256"},
+        "bundle_sha256": {"oneOf": [{"$ref": "#/$defs/Sha256"}, {"type": "null"}]},
+        "evidence_sha256": {"oneOf": [{"$ref": "#/$defs/Sha256"}, {"type": "null"}]},
+        "authorization": {"enum": ["authorize", "withhold"]},
+        "expires_monotonic_ns": {"type": "integer", "minimum": 0},
+        "compute_time_ns": {"type": "integer", "minimum": 0},
+        "reason_codes": {"type": "array", "items": {"type": "string"}},
+        "findings": {"type": "array", "items": {"type": "object"}}
+      }
+    },
     "SchemaVersion": { "type": "string", "const": "0.1.0" },
     "Sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "ProvenanceKind": { "type": "string", "enum": ["recorded", "synthetic", "unavailable"] },

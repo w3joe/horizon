@@ -213,11 +213,13 @@ class HorizonStack:
         assurance_loop: bool = True,
         collector_link_proxy: bool = False,
         candidate: str = "A1",
+        a6_mode: str = "disabled",
         marine_config: Path | str | None = None,
         synchronize_startup: bool = True,
     ):
         self.directory = directory
         self.scenario = scenario
+        self.a6_mode = a6_mode
         self.policy = policy
         self.assurance_loop = assurance_loop
         self.candidate = candidate
@@ -512,6 +514,7 @@ class HorizonStack:
                 python,
                 "-m",
                 "horizon_gate.http_api",
+                "--a6-mode", self.a6_mode,
                 "--host",
                 "127.0.0.1",
                 "--port",

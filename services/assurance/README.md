@@ -11,7 +11,16 @@ kinematic velocity-QP baseline under its original version. A5 conditions explici
 limits on required health evidence, then combines predictive recoverability
 with the A4 filter. The implementations are distinct plugins.
 
-## A6 Singapore policy shadow
+## A6 Singapore policy enforcement
+
+The product now enforces A6 inside the actuator gate. Normal A5 commands need
+policy authorization; withholding selects checked recovery or explicitly
+unknown minimum-risk action. Source artifacts are verified at load, policy
+evidence is snapshot/command bound, and emergency overrides remain visible.
+See [the enforcement guide](docs/a6-policy-enforcement.md) for configuration,
+contracts, supported scope and deployment limitations.
+
+### Historical shadow evaluator
 
 `horizon_assurance.policy_shadow.A6PolicyShadow` is an observation-only first
 slice for a generic 12 m Singapore government/non-commercial, power-driven USV
@@ -19,7 +28,7 @@ under remote supervision. Its bounded profile is below 300 GT and 50 m, carries
 no passengers or hazardous cargo, is not towing, and operates only in daylight
 and clear visibility. Restricted visibility is explicitly unsupported.
 
-A6 consumes an already-produced A5 decision and cannot produce an
+The historical shadow evaluator consumes an already-produced A5 decision and cannot produce an
 `AssuranceDecision`, register as an actuator candidate, call the gate, or issue
 a command. An A5 recovery, minimum-risk, invalid, mismatched, or otherwise
 non-permissive decision always withholds A6 support. A6 findings can never

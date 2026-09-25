@@ -32,7 +32,7 @@ def _all_finite(value: Any) -> bool:
     return False
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=5)
 def _contract_validator(contract_type: str) -> Any | None:
     if jsonschema is None:
         return None
@@ -49,7 +49,7 @@ def _contract_validator(contract_type: str) -> Any | None:
     # Each entrypoint knows its required contract. Validate that exact schema,
     # retaining all nested constraints, rather than traversing every unrelated
     # branch of the public union on the 40 ms control path.
-    if contract_type not in {"GovernorInput", "RecoveryInput", "AssuranceDecision"}:
+    if contract_type not in {"GovernorInput", "RecoveryInput", "AssuranceDecision", "PolicyEvidence", "A6PolicyDecision"}:
         raise ValueError("unsupported control-path contract")
     return jsonschema.Draft202012Validator({
         "$defs": schema["$defs"], "$ref": f"#/$defs/{contract_type}"

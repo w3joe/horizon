@@ -1,5 +1,9 @@
 # A6 Singapore policy shadow: bounded first slice
 
+Historical shadow-mode documentation. The product also implements
+[gate-owned A6 enforcement](a6-policy-enforcement.md); the non-authority claims
+below apply to `A6PolicyShadow`, not to that enforcement wrapper.
+
 ## Claim boundary
 
 A6 is a deterministic engineering-policy shadow. It does not determine legal

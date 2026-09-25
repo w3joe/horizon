@@ -170,7 +170,9 @@ export function useConsoleFeed(scenarioId: ScenarioId, timeS: number, liveEnable
         }
         if (gateResult.status === "fulfilled" && gateResult.value) {
           const { observed_monotonic_ns, run_id, branch_id, epoch, quarantined, quarantine_reasons, recovery_latched, startup_recovery_ready, operator_acknowledged, last_tick } = gateResult.value;
-          setGateStatus({ observed_monotonic_ns: observed_monotonic_ns ?? null, run_id, branch_id, epoch: epoch ?? null, quarantined, quarantine_reasons, recovery_latched, startup_recovery_ready, operator_acknowledged, last_tick });
+          setGateStatus({ observed_monotonic_ns: observed_monotonic_ns ?? null, run_id, branch_id, epoch: epoch ?? null, quarantined, quarantine_reasons, recovery_latched, startup_recovery_ready, operator_acknowledged, last_tick,
+            a6_mode: gateResult.value.a6_mode, policy_counts: gateResult.value.policy_counts,
+            last_policy_decision: gateResult.value.last_policy_decision });
           if (typeof observed_monotonic_ns === "number" && Number.isFinite(observed_monotonic_ns)) setGateClock({ observedNs: observed_monotonic_ns, browserMs: performance.now() });
           markService("gate", true);
         } else {

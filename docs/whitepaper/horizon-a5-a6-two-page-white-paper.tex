@@ -18,14 +18,14 @@
 \setlength{\emergencystretch}{1em}
 \renewcommand{\arraystretch}{1.03}
 
-\title{Horizon A1--A6: From Runtime Safety Candidates to a Singapore Policy-Assurance Shadow}
+\title{Horizon A1--A6: Runtime Safety with Enforced Singapore Policy Assurance}
 \author{Tan Wee Joe}
 \affiliation{\institution{University College London}\city{London}\country{United Kingdom}}
 \email{tanweejoe@gmail.com}
 
 \begin{document}
 \begin{abstract}
-Horizon places an independent runtime-assurance governor between a vessel's decision AI and its actuators. Six architectures have been developed. A1--A5 progressively add probabilistic risk, bounded prediction, barrier filtering, and evidence-conditioned recovery to the physical-safety path. A6 is deliberately different: it is an observation-only Singapore policy shadow placed after A5. In the historical 60-branch development study, A5 achieved 99.83\% gate acceptance with three deadline misses, zero declared-recoverable collisions, and zero unsafe or stale acceptances. A current-code rerun applied A6 after every A5 decision over the same 12 episode identities: all 1,788 assessments withheld support because A5 always chose recovery, minimum-risk, or invalid action; A6 median latency was 0.178\,ms. The selected prototype architecture is therefore A5 for physical runtime assurance plus A6 for auditable policy shadowing. This is an engineering selection, not certification or a legal-compliance claim.
+Horizon places independent runtime assurance between a vessel's decision AI and its actuators. A1--A5 progressively add probabilistic risk, bounded prediction, barrier filtering, and evidence-conditioned recovery. A6 now enforces a bounded Singapore engineering-policy layer inside the actuator gate: normal A5 commands require policy authorization; withholding triggers checked recovery or explicitly unknown minimum-risk action. Historically, A5 achieved 99.83\% gate acceptance in 12 development branches. New three-seed normal-transit counterfactuals authorized all 72 normal commands under a permissive test policy; a restrictive speed policy admitted zero normal commands and substituted 72 recovery commands. These are synthetic functional experiments, not operational or legal qualification.
 \end{abstract}
 \keywords{runtime assurance, autonomous vessels, maritime policy, mechanistic interpretability}
 \maketitle
@@ -38,17 +38,17 @@ The external decision AI may propose heading and speed but cannot command actuat
 \begin{tikzpicture}[node distance=2mm,every node/.style={font=\scriptsize,align=center},box/.style={draw=hnavy,rounded corners=1pt,minimum width=.88\columnwidth,minimum height=4.8mm,inner sep=1.5pt},arr/.style={-{Latex[length=1.4mm]},hblue,thick}]
 \node[box,fill=hpale] (in) {Fused state, health, uncertainty, AI proposal};
 \node[box,fill=hnavy,text=white,below=of in] (a5) {Selected control path: A5 physical assurance};
-\node[box,fill=hnavy,text=white,below=of a5] (gate) {Independent gate and watchdog $\rightarrow$ actuators};
-\node[box,fill=hpale,below=of gate] (a6) {Selected audit path: A6 Singapore policy shadow};
-\node[box,fill=gray!12,below=of a6] (out) {Assessment only: supported / withheld + reasons};
-\draw[arr] (in)--(a5); \draw[arr] (a5)--(gate); \draw[arr,dashed] (a5.east) .. controls +(.55,0) and +(.55,0) .. (a6.east); \draw[arr] (a6)--(out);
+\node[box,fill=hpale,below=of a5] (a6) {Gate-owned A6: authorize / withhold exact command};
+\node[box,fill=hnavy,text=white,below=of a6] (gate) {Final physical, identity, and expiry checks};
+\node[box,fill=gray!12,below=of gate] (out) {Actuators; recovery overrides explicitly recorded};
+\draw[arr] (in)--(a5); \draw[arr] (a5)--(a6); \draw[arr] (a6)--(gate); \draw[arr] (gate)--(out);
 \end{tikzpicture}
-\caption{A5 controls the protected path; A6 can only observe it.}
+\caption{Normal actuation requires physical and policy authorization.}
 \label{fig:path}
 \end{figure}
 
 \section{A1--A6 progression}
-All six architectures are deterministic engineering implementations; none uses reinforcement learning. A1--A5 share one bounded governor-input to assurance-decision contract and were compared as alternative physical-safety candidates. A6 is a complementary policy assessment and is not eligible to issue a command.
+All six architectures are deterministic engineering implementations; none uses reinforcement learning. A1--A5 are alternative physical-safety candidates sharing one contract. A6 restricts A5's selected command through the exclusive gate; it does not independently propose maneuvers.
 
 \begin{table}[t]
 \centering
@@ -64,14 +64,14 @@ A2 & Analytic Gaussian collision-risk approximation & research\\
 A3 & Bounded rollout plus complete recovery continuation & retained\\
 A4 & Robust barrier correction plus 3DOF validation & retained\\
 A5 & Health-conditioned bounds, prediction, A4 filter, recovery & control lead\\
-A6 & Versioned Singapore policy proxies over matched A5 output & shadow lead\\
+A6 & Gate-enforced Singapore policy checks on exact A5 output & policy layer\\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 \textbf{A1} is transparent and fast, but a threshold result does not establish complete trajectory safety. \textbf{A2} represents uncertainty probabilistically, but its analytic risk score is uncalibrated and is not a hard safety bound. \textbf{A3} adds finite-horizon plant rollout and demands a complete safe continuation before issuance. \textbf{A4} searches the nonlinear vessel map for a barrier-compatible correction and validates the result with a full rollout. \textbf{A5} makes that path evidence-aware: healthy evidence retains nominal bounds and a 6\,m/s cap; degraded required evidence expands bounds by 1.5 and caps speed at 3\,m/s; invalid required evidence forces fallback. It attempts predictive recoverability, invokes A4 when needed, and falls back on incomplete, infeasible, or late results.
 
-\textbf{A6} verifies the identity and validity of the completed A5 decision, canonicalizes its inputs, checks policy-bundle hash and validity dates, uses three-valued applicability, and evaluates bounded engineering proxies for COLREG Rules 5--8 and 13--17. Its current profile is a 12\,m, 40\,GT, power-driven, remotely supervised Singapore government USV in daylight and clear visibility. A6 has no command, gate, plant, or actuator interface. The IMO MASS Code is design-assurance context rather than runtime law; applicable Singapore and international instruments remain controlling sources~\cite{imo-colreg,imo-mass,rsn-usv}.
+\textbf{A6} evaluates bounded engineering proxies for Rules 5--8 and 13--17. The development profile is a 12\,m, 40\,GT Singapore government USV under remote supervision in daylight and clear visibility. Source artifacts are hash-checked at load; fresh evidence binds the snapshot and command. Actual course/speed changes override adapter action claims. Unknown, unsupported, late or unsatisfied evidence withholds authority. Normal dispatch must precede policy, evidence and cycle expiry. Emergency recovery remains available and is labelled as a policy override. MASS design references and the broader maritime-policy context motivate the bounded model~\cite{imo-colreg,imo-mass,rsn-usv}; these engineering predicates do not establish statutory compliance.
 
 \section{A1--A5 comparative results}
 The initial development matrix contained 12 paired identities: four scenarios, three seeds, and five candidates per identity, for 60 branches. Scenarios covered recoverable crossing, dense traffic, vessel degradation, and initially unrecoverable encounters. Timing was idealized except for 20\,ms candidate and gate service, so the study compares architecture behaviour rather than production latency.
@@ -97,45 +97,46 @@ A4 & 99.44\% & 10 & 0 & 0\\
 
 None of the 45 declared-recoverable branches collided; all 15 deliberately unrecoverable branches collided. No unsafe or stale result was accepted. A1 and A2 often passed proposals the independent predictive gate rejected, producing acceptance below 9\%. A3--A5 actively selected recovery or minimum-risk commands and exceeded 99.4\% acceptance. A5 had the highest acceptance and fewer deadline misses than A3 or A4, so it became the physical-control lead. These small, development-set results do not prove statistical superiority or operational safety.
 
-\section{A6 matched experiment}
+\section{A6 shadow baseline and enforcement}
 \begin{sloppypar}
-The A6 companion run reused the exact 12 A5 episode identities from the historical design: four scenarios, three seeds, observation and fault hashes, AI policies, 30-second horizon, fixed health method, and idealized timing profile. A6 observed every completed A5 decision without advancing simulation time. The policy bundle, declared lookout capabilities, vessel-profile facts, and public-state evidence adapter were synthetic development fixtures; this was not legal validation.
+The earlier shadow run reused the 12 historical A5 episode identities, hashes, policies and 30-second horizon. It observed 1,788 decisions: 888 recovery, 885 minimum-risk and 15 invalid. All withheld policy support; median A6 latency was 0.178\,ms. This established conservative shadow behavior, but could not demonstrate enforcement on permissive commands.
 \end{sloppypar}
 
 \begin{table}[t]
 \centering
-\caption{A6 shadow on the matched A5 experiment.}
+\caption{New normal-transit counterfactuals: 3 seeds, 5 s each.}
 \label{tab:a6}
 \scriptsize
 \begin{tabularx}{\columnwidth}{@{}Xr@{}}
 \toprule
 Measure & Result\\
 \midrule
-Episodes / A6 assessments & 12 / 1,788\\
-A5 gate accepted / rejected & 1,773 / 15\\
-A5 recover / minimum-risk / invalid & 888 / 885 / 15\\
-A6 supported / withheld & 0 / 1,788\\
-A6 latency p50 / p95 / p99 & 0.178 / 0.281 / 0.318\,ms\\
-Collision episodes & 3 initially unrecoverable\\
+A5-only normal commands accepted & 72\\
+A6 permissive: authorized / normal accepted & 72 / 72\\
+A6 speed veto: normal / recovery accepted & 0 / 72\\
+A6 speed veto: initial vetoes / latched recoveries & 3 / 69\\
+Command-trace mismatches / collisions & 0 / 0\\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-Each scenario produced 447 A6 assessments and withheld all 447. Every assessment recorded physical A5 safety as dominant; the 15 invalid A5 decisions also recorded invalidity. The three collisions were the predeclared initially-unrecoverable cases. Compared with the historical source revision's three deadline-invalid decisions, the current-code rerun produced 15. Because measured host work can influence A5's deadline result, the two revision-specific counts remain separately labelled.
+The enforcement experiment compares A5 alone with two synthetic policy bundles on the same normal-transit seeds. The 6\,m/s test cap permits normal commands; the 1\,m/s cap vetoes the first command in each seed and latches recovery thereafter. Each arm also records 69 watchdog commands and 72 command-expiry events. The local-acceptance timing model has zero simulated gate service; measured wall work is separate. These results establish functional authorization and veto behavior, not timing readiness or uninterrupted autonomy. The implementation also corrects recovery priming's simulated-to-host deadline mapping.
+
+The original 12-episode, 30-second matrix was also rerun with enforcement: 1,770 gate acceptances and 18 deadline rejections, comprising 885 recovery, 885 minimum-risk and 18 invalid decisions. No normal command reached policy evaluation; these actions were explicit emergency overrides. Trace mismatches were zero; the three initially-unrecoverable episodes remained unsafe. Host-sensitive deadline counts are revision/run-specific.
 
 \section{Why the A5+A6 composition was selected}
-There is no honest single ranking of A1--A6 because A6 solves a different problem. \textbf{A5 was selected for the prototype control path} because it combined the best historical gate acceptance with evidence-conditioned conservatism, complete recovery validation, and fewer misses than the other model-based candidates. \textbf{A6 was selected for the audit path} because it adds a missing policy-evidence dimension without modifying A5, the gate, or actuators. It is hash-pinned, time-bounded, identity-matched, explicitly three-valued, and fail-closed: across all 1,788 matched decisions it never converted A5 recovery, minimum-risk, or invalid output into positive policy support. Its measured median local cost was 0.178\,ms.
+\textbf{A5 remains the physical-control lead}: it combines evidence-conditioned conservatism, recovery validation and favorable historical acceptance. \textbf{A6 is chosen as mandatory policy authorization}: the new counterfactuals show that changing policy changes which physically permissible commands reach the plant. Its assessments bind the complete input, decision, evidence and versioned bundle. This closes the previous observation-only gap while retaining physical revalidation and explicit emergency authority.
 
-The selection is architectural, not a claim that A6 understands all maritime law. Restricted visibility and broader vessel profiles remain unsupported. Weapons, targeting, classified doctrine, and rules of engagement are excluded. Policy-evidence adapters, authoritative source ingestion, legal review, target-computer timing, sustained-load tests, and wider encounter coverage are still required.
+Restricted visibility, channel/TSS navigation, unknown vessel classes and broader profiles withhold authorization. Weapons, targeting, classified doctrine and ROE remain excluded. This release vetoes A5's single selected command; it does not search alternative policy-compliant maneuvers. Recorded operational sources, live evidence integration, legal review and target-platform timing remain qualification work.
 
 \section{Neural-health input and verdict}
-H5 supplies a hash-pinned, shadow-only mechanistic monitor of WaSR-T's temporal-fusion representation. Its selected development feature beat random-direction and equal-norm causal controls in all 18 trials, but live scores remain unknown without frozen calibration. H5 therefore cannot prove obstacle-free water or increase A5/A6 authority.
+H5 monitors WaSR-T's temporal-fusion representation with a hash-pinned sparse feature. Its selected development feature beat random-direction and equal-norm causal controls in all 18 trials. An optional simulation-warning mode can reduce the AI's proposed speed; operational calibration remains unqualified. H5 cannot prove obstacle-free water or increase A5/A6 authority.
 
-The deployment verdict is: \emph{A5 control plus A6 shadow is ready for instrumented shadow trials, not autonomous-policy authority, certification, or legal-compliance claims}. A6 should remain advisory until authoritative policy ingestion, evidence freshness and provenance, target-platform latency, and independent scenario and legal review are complete.
+The product now defaults to \emph{A5 with enforced A6 authorization}. Without configured recorded sources and fresh policy evidence, normal autonomy is withheld. Recovery overrides are visible in gate telemetry and receipts. The delivered software enforces the bounded policy model; the evidence does not qualify autonomous vessel deployment or full maritime-law compliance.
 
 \paragraph{Reproducibility.}
 \begin{sloppypar}
-Plan: \path{experiment/manifests/a6-a32-shadow-development.json}. Result: \path{horizon-runs/development/a6-a32-shadow-30s-20260924-v2/analysis.json}. SHA-256: \texttt{\seqsplit{f18221263d9c14fc2e16eca5c8be466b951eab60cab9d45811d49d93b2d88357}}.
+Counterfactuals: \path{scripts/benchmark_a6_enforcement.py}. Result: \path{horizon-runs/development/a6-enforcement-counterfactual-20260925-v5/summary.json}. SHA-256: \texttt{\seqsplit{0f63c151344bf6f576257d38efc0302c511f0df127987d9f95223dbbf32543f1}}. Original scenario matrix: \path{experiment/manifests/a6-a32-enforcement-development.json}.
 \end{sloppypar}
 
 \balance

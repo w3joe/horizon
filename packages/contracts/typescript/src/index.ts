@@ -3,6 +3,41 @@
 export type SchemaVersion = "0.1.0";
 export type Sha256 = string;
 export type ProvenanceKind = "recorded" | "synthetic" | "unavailable";
+export interface PolicyEvidence {
+  contract_type: "PolicyEvidence";
+  schema_version: SchemaVersion;
+  run_id: string;
+  branch_id: string;
+  tick_index: number;
+  snapshot_sha256: Sha256;
+  command_sha256: Sha256;
+  observed_monotonic_ns: number;
+  expires_monotonic_ns: number;
+  provenance: ProvenanceKind;
+  operational_context: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+}
+
+export interface A6PolicyDecision {
+  contract_type: "A6PolicyDecision";
+  schema_version: SchemaVersion;
+  assessment_id: string;
+  evaluator_version: string;
+  run_id: string;
+  branch_id: string;
+  tick_index: number;
+  a5_decision_id: string;
+  input_sha256: Sha256;
+  decision_sha256: Sha256;
+  bundle_sha256: Sha256 | null;
+  evidence_sha256: Sha256 | null;
+  authorization: "authorize" | "withhold";
+  expires_monotonic_ns: number;
+  compute_time_ns: number;
+  reason_codes: Array<string>;
+  findings: Array<Record<string, unknown>>;
+}
+
 export type CapabilityStatus = "available" | "degraded" | "unavailable" | "output_only";
 export type HealthStatus = "healthy" | "degraded" | "invalid" | "unknown";
 export type Vector2 = Array<number>;

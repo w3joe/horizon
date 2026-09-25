@@ -18,8 +18,9 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from horizon_assurance.configuration import NavigationReference
+from horizon_assurance.policy_enforcement import A6PolicyEnforcer
 
-from .core import ActuatorGate, HTTPPlantClient
+from .core import ActuatorGate, GateConfig, HTTPPlantClient
 
 
 MAX_BODY_BYTES = 2_000_000
@@ -299,7 +300,16 @@ def main() -> None:
     parser.add_argument("--decision-token-file", required=True)
     parser.add_argument("--recovery-token-file", required=True)
     parser.add_argument("--operator-token-file", required=True)
+    parser.add_argument("--a6-mode", choices=("enforce", "disabled"), default="enforce")
+    parser.add_argument("--a6-policy-config", help="Immutable recorded-source policy deployment JSON")
+    parser.add_argument("--a6-evidence-file", help="Trusted adapter's atomically replaced PolicyEvidence JSON")
     args = parser.parse_args()
+    if bool(args.a6_policy_config) != bool(args.a6_evidence_file):
+        parser.error("--a6-policy-config and --a6-evidence-file must be supplied together")
+    policy_enforcer = (
+        A6PolicyEnforcer.from_files(args.a6_policy_config, args.a6_evidence_file)
+        if args.a6_policy_config else A6PolicyEnforcer()
+    )
 
     plant_token = _read_secret(args.plant_token_file)
     decision_token = os.environ.get("HORIZON_GATE_DECISION_TOKEN") or __import__("secrets").token_urlsafe(32)
@@ -319,6 +329,8 @@ def main() -> None:
         decision_token=decision_token,
         recovery_token=recovery_token,
         operator_token=operator_token,
+        config=GateConfig(a6_mode=args.a6_mode),
+        policy_enforcer=policy_enforcer,
     )
     runtime = GateRuntime(
         gate,

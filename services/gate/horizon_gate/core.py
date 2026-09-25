@@ -20,6 +20,7 @@ from urllib.request import HTTPHandler, Request, build_opener
 from horizon_assurance.configuration import AssuranceConfig, NavigationReference
 from horizon_assurance.health_policy import required_health_evidence
 from horizon_assurance.predictive import Assessment, BoundedPredictiveChecker
+from horizon_assurance.policy_enforcement import A6PolicyEnforcer
 from horizon_assurance.validation import (
     InputRejected,
     validate_decision_identity,
@@ -56,6 +57,7 @@ class GateConfig:
     retained_snapshot_ids: int = 4_096
     asynchronous_recovery_cache: bool = True
     allowed_candidates: tuple[str, ...] = ("A1", "A2", "A3", "A4", "A5")
+    a6_mode: str = "disabled"
 
 
 class PlantClient(Protocol):
@@ -162,6 +164,7 @@ class ActuatorGate:
         config: GateConfig | None = None,
         assurance_config: AssuranceConfig | None = None,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
+        policy_enforcer: A6PolicyEnforcer | None = None,
     ):
         self.run_id = run_id
         self.branch_id = branch_id
@@ -171,6 +174,11 @@ class ActuatorGate:
         self.recovery_token = recovery_token or secrets.token_urlsafe(32)
         self.operator_token = operator_token or secrets.token_urlsafe(32)
         self.config = config or GateConfig()
+        if self.config.a6_mode not in {"disabled", "enforce"}:
+            raise ValueError("a6_mode must be disabled or enforce")
+        self.policy_enforcer = policy_enforcer or A6PolicyEnforcer()
+        self.last_policy_decision: dict[str, Any] | None = None
+        self.policy_counts = {"authorize": 0, "withhold": 0, "emergency_override": 0}
         self._monotonic_ns = monotonic_ns
         gate_assurance_config = assurance_config or AssuranceConfig(
             prediction_horizon_s=self.config.command_validity_s
@@ -354,7 +362,7 @@ class ActuatorGate:
                 return False, ["RECOVERY_INPUT_DEADLINE_MISSED"]
             selection = self.checker.recovery_from_current(
                 governor_input,
-                host_deadline_ns=validation_deadline,
+                host_deadline_ns=time.monotonic_ns() + max(0, validation_deadline - self._monotonic_ns()),
             )
             completion = self._monotonic_ns()
             if completion >= validation_deadline:
@@ -462,7 +470,7 @@ class ActuatorGate:
                 raise InputRejected(health_reasons)
             selection = self.checker.recovery_from_current(
                 recovery_input,
-                host_deadline_ns=deadline,
+                host_deadline_ns=time.monotonic_ns() + max(0, deadline - self._monotonic_ns()),
             )
         except InputRejected as exc:
             return False, list(exc.reason_codes)
@@ -810,6 +818,10 @@ class ActuatorGate:
             start_epoch = self.epoch
             start_generation = self.control_generation
 
+        # Own immutable submission copies throughout validation and dispatch.
+        decision = copy.deepcopy(decision)
+        governor_input = copy.deepcopy(governor_input)
+
         try:
             assessment, source_valid_until_ns = self._validate_submission(
                 decision, governor_input, arrival, start_epoch
@@ -864,10 +876,11 @@ class ActuatorGate:
                 return self._local_rejection(decision, ["SOURCE_QUARANTINED"], completion)
             proposed_clear_decisions = self.clear_decisions
             substituted = False
-            if action == "pass" and self.recovery_latched:
+            if (action == "pass" or (action == "modify" and self.config.a6_mode == "enforce")) and self.recovery_latched:
                 proposed_clear_decisions += 1
                 if not (
-                    proposed_clear_decisions >= self.config.release_clear_decisions
+                    action == "pass"
+                    and proposed_clear_decisions >= self.config.release_clear_decisions
                     and self.operator_acknowledged
                 ):
                     if self.stored_recovery and completion < self.stored_recovery.host_valid_until_ns:
@@ -875,16 +888,68 @@ class ActuatorGate:
                         action = "recover"
                         reasons.append("RECOVERY_RELEASE_HANDSHAKE_PENDING")
                         substituted = True
+                    elif self.config.a6_mode == "enforce":
+                        own = governor_input["snapshot"]["ownship"]
+                        command = {"heading_rad": float(own["heading_rad"]),
+                                   "speed_mps": min(1.0, max(0.0, float(own["velocity_body_mps"][0])))}
+                        action = "minimum_risk"
+                        reasons.extend(("RECOVERY_RELEASE_HANDSHAKE_PENDING", "MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE"))
+                        substituted = True
                     else:
                         return self._local_rejection(
                             decision, ["RECOVERY_RELEASE_HANDSHAKE_PENDING"], completion
                         )
+
+        policy_decision = None
+        policy_fallback = False
+        if self.config.a6_mode == "enforce":
+            if action in {"pass", "modify"}:
+                policy_decision = self.policy_enforcer.evaluate(
+                    governor_input, decision, now_ns=clock()
+                )
+                with self.lock:
+                    self.last_policy_decision = copy.deepcopy(policy_decision)
+                    self.policy_counts[policy_decision["authorization"]] += 1
+                    self.telemetry.append({
+                        "event_id": self._next_event_id(), "event_type": "a6_policy_decision",
+                        "epoch": start_epoch, "host_monotonic_ns": clock(),
+                        "policy_decision": copy.deepcopy(policy_decision),
+                    })
+                    if policy_decision["authorization"] != "authorize":
+                        reasons.extend(policy_decision["reason_codes"])
+                        reasons.append("A6_POLICY_WITHHELD")
+                        stored = self.stored_recovery
+                        if (stored is not None and stored.plant_epoch == start_epoch
+                                and clock() < stored.host_valid_until_ns):
+                            command = copy.deepcopy(stored.command)
+                            source_valid_until_ns = min(source_valid_until_ns, stored.host_valid_until_ns)
+                            action = "recover"
+                        else:
+                            own = governor_input["snapshot"]["ownship"]
+                            command = {"heading_rad": float(own["heading_rad"]),
+                                       "speed_mps": min(1.0, max(0.0, float(own["velocity_body_mps"][0])))}
+                            action = "minimum_risk"
+                            reasons.append("MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE")
+                        substituted = True
+                        policy_fallback = True
+                    else:
+                        source_valid_until_ns = min(source_valid_until_ns, policy_decision["expires_monotonic_ns"])
+                        reasons.append("A6_POLICY_AUTHORIZED")
+            if action in {"recover", "minimum_risk"}:
+                reasons.append("A6_EMERGENCY_POLICY_OVERRIDE")
 
         # A cached recovery selected after evaluating a different command must
         # itself pass the complete checker against this input.
         selected_assessment = (
             self.checker.assess(governor_input, command) if substituted else assessment
         )
+        if policy_fallback and action == "recover" and not selected_assessment.safe:
+            own = governor_input["snapshot"]["ownship"]
+            command = {"heading_rad": float(own["heading_rad"]),
+                       "speed_mps": min(1.0, max(0.0, float(own["velocity_body_mps"][0])))}
+            action = "minimum_risk"
+            reasons.extend(("A6_CACHED_RECOVERY_REVALIDATION_FAILED", "MINIMUM_RISK_UNDER_UNKNOWN_ASSURANCE"))
+            selected_assessment = self.checker.assess(governor_input, command)
         with self.lock:
             completion = clock()
             stale_reasons: list[str] = []
@@ -904,7 +969,7 @@ class ActuatorGate:
                     [*selected_assessment.reason_codes, "ACTUAL_COMMAND_REVALIDATION_FAILED"],
                     completion,
                 )
-            if original_action in {"pass", "modify"} and self.config.startup_interlock_required:
+            if action in {"pass", "modify"} and self.config.startup_interlock_required:
                 if (
                     self.stored_recovery is None
                     or completion >= self.stored_recovery.host_valid_until_ns
@@ -919,7 +984,7 @@ class ActuatorGate:
             self.last_supervisor_host_ns = completion
             self.last_tick = int(decision["tick_index"])
             self._remember_snapshot(str(decision["input_snapshot_id"]))
-            if original_action == "recover" and selected_assessment.safe:
+            if (original_action == "recover" or policy_fallback) and action == "recover" and selected_assessment.safe:
                 remote_expiry = int(decision["expires_monotonic_ns"])
                 if decision.get("recovery") is not None:
                     remote_expiry = min(
@@ -927,9 +992,9 @@ class ActuatorGate:
                     )
                 self.stored_recovery = StoredRecovery(
                     command=copy.deepcopy(command),
-                    host_valid_until_ns=self._map_remote_expiry(
+                    host_valid_until_ns=min(source_valid_until_ns, self._map_remote_expiry(
                         governor_input, remote_expiry, completion
-                    ),
+                    )),
                     source_decision_id=str(decision["decision_id"]),
                     source_input=copy.deepcopy(governor_input),
                     input_kind="GovernorInput",
@@ -937,6 +1002,10 @@ class ActuatorGate:
                     proposal_id=str(governor_input["proposal"]["command_id"]),
                     plant_epoch=self.epoch,
                 )
+                self.recovery_latched = True
+                self.clear_decisions = 0
+                self.operator_acknowledged = False
+            elif policy_fallback:
                 self.recovery_latched = True
                 self.clear_decisions = 0
                 self.operator_acknowledged = False
@@ -948,7 +1017,7 @@ class ActuatorGate:
                     self.clear_decisions = 0
                     self.operator_acknowledged = False
 
-            assurance_status = selected_assessment.status
+            assurance_status = "unknown" if action == "minimum_risk" else selected_assessment.status
             authority = {
                 "pass": "autonomy",
                 "modify": "filtered_autonomy",
@@ -970,9 +1039,22 @@ class ActuatorGate:
                 ),
                 source_valid_until_ns=source_valid_until_ns,
             )
+            if self.config.a6_mode == "enforce":
+                if action in {"recover", "minimum_risk"}:
+                    self.policy_counts["emergency_override"] += 1
+                reservation.event["a6"] = {
+                    "authorization": "emergency_override" if action in {"recover", "minimum_risk"} else "authorize",
+                    "assessment_id": policy_decision["assessment_id"] if policy_decision else None,
+                    "actual_action": action,
+                }
             schedule_cache = original_action in {"pass", "modify"} and not self.recovery_latched
             cache_epoch = self.epoch
         receipt = self._send_reserved(reservation, now_ns=now_ns)
+        if self.config.a6_mode == "enforce":
+            # The standard receipt exposes substitution to every client.
+            receipt["reason_codes"] = list(dict.fromkeys([*receipt.get("reason_codes", []), *(
+                reason for reason in reasons if reason.startswith("A6_")
+            )]))
         if schedule_cache and receipt.get("accepted"):
             self._schedule_recovery_cache(
                 governor_input, decision, epoch=cache_epoch
@@ -1038,9 +1120,13 @@ class ActuatorGate:
             ]
             status = "unknown"
 
+        if self.config.a6_mode == "enforce":
+            reasons.append("A6_EMERGENCY_POLICY_OVERRIDE")
         with self.lock:
             if self.epoch != takeover_epoch or self.control_generation != takeover_generation:
                 return None
+            if self.config.a6_mode == "enforce":
+                self.policy_counts["emergency_override"] += 1
             reservation = self._reserve_actuation(
                 decision_id=f"watchdog:{self.epoch}:{now}",
                 command=command,
@@ -1077,6 +1163,7 @@ class ActuatorGate:
             self.last_tick = -1
             self.last_recovery_tick = -1
             self.last_recovery_input_id = None
+            self.last_policy_decision = None
             self.seen_snapshot_ids.clear()
             self._snapshot_order.clear()
             self.stored_recovery = None
@@ -1130,6 +1217,9 @@ class ActuatorGate:
                 "observed_monotonic_ns": observed_monotonic_ns,
                 "run_id": self.run_id,
                 "branch_id": self.branch_id,
+                "a6_mode": self.config.a6_mode,
+                "last_policy_decision": copy.deepcopy(self.last_policy_decision),
+                "policy_counts": dict(self.policy_counts),
                 "epoch": self.epoch,
                 "quarantined": self.quarantined,
                 "quarantine_reasons": list(dict.fromkeys(self.quarantine_reasons)),

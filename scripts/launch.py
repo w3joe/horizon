@@ -769,6 +769,10 @@ def argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--run-id")
+    parser.add_argument("--a6-mode", choices=("enforce", "disabled"), default="enforce",
+                        help="A6 command policy enforcement; disabled is for legacy development baselines")
+    parser.add_argument("--a6-policy-config")
+    parser.add_argument("--a6-evidence-file")
     parser.add_argument(
         "--verify-reset",
         action="store_true",
@@ -792,6 +796,10 @@ def main() -> int:
     args = parser.parse_args()
     if args.smoke_seconds < 0:
         parser.error("--smoke-seconds must be non-negative")
+    if bool(args.a6_policy_config) != bool(args.a6_evidence_file):
+        parser.error("--a6-policy-config and --a6-evidence-file must be supplied together")
+    if args.a6_mode == "enforce" and args.candidate != "A5":
+        parser.error("A6 enforcement requires A5; use --a6-mode disabled for A1–A4 baselines")
     try:
         scheduling = build_process_scheduling_plan(args.gate_cpu_isolation)
     except SchedulingIsolationError as exc:
@@ -864,6 +872,10 @@ def main() -> int:
             "--decision-token-file", str(secrets_dir / "gate-decision.token"),
             "--recovery-token-file", str(secrets_dir / "gate-recovery.token"),
             "--operator-token-file", str(secrets_dir / "gate-operator.token"),
+            "--a6-mode", args.a6_mode,
+            *(["--a6-policy-config", str(Path(args.a6_policy_config).resolve()),
+               "--a6-evidence-file", str(Path(args.a6_evidence_file).resolve())]
+              if args.a6_policy_config else []),
         ],
         "assurance": assurance_command(
             host=host,
@@ -940,6 +952,7 @@ def main() -> int:
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "repository_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "candidate_id": args.candidate,
+        "a6_mode": args.a6_mode,
         "ports": ports,
         "unavailable": unavailable,
         "runtime_status": "starting",

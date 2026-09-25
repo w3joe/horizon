@@ -90,6 +90,7 @@ def _episode_diagnostics(bundle: dict[str, Any]) -> dict[str, Any]:
         "gate_recovery": bundle.get("gate_recovery"),
         "authority_audit": bundle.get("authority_audit"),
         "policy_shadow": bundle.get("policy_shadow"),
+        "policy_enforcement": bundle.get("policy_enforcement"),
         "terminal_outcome": bundle.get("terminal_outcome"),
         "predeclared_censoring": bundle.get("predeclared_censoring"),
         "case_classification": odd_case_classification(bundle),

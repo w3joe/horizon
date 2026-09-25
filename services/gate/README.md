@@ -1,5 +1,11 @@
 # Horizon independent actuator gate
 
+The standalone service defaults to A6 policy enforcement. Normal A5 commands
+require a gate-owned policy authorization; missing policy/evidence fails closed
+to recovery. Configure `--a6-policy-config` and `--a6-evidence-file` together.
+Use `--a6-mode disabled` only for explicit legacy development baselines. See
+[A6 configuration and semantics](../assurance/docs/a6-policy-enforcement.md).
+
 The gate is a separate process on port 8102 and is the only holder of the
 simulator's per-run plant capability.  A supervisor bearer token authorizes a
 decision submission but does not make it safe: the gate independently checks

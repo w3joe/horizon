@@ -211,6 +211,9 @@ export interface CollectorDiagnostics {
 }
 
 export interface GateStatus {
+  a6_mode?: "enforce" | "disabled";
+  policy_counts?: { authorize: number; withhold: number; emergency_override: number };
+  last_policy_decision?: { authorization: "authorize" | "withhold"; reason_codes: string[]; a5_decision_id: string } | null;
   observed_monotonic_ns: number | null;
   run_id?: string;
   branch_id?: string;

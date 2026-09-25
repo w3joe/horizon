@@ -23,6 +23,8 @@ export function EvidencePanel({ packet, selectedEvent }: { packet: ConsolePacket
         <dl className="gate-readiness">
           <div><dt>Candidate</dt><dd>{decision ? `${decision.candidate_id} · ${decision.candidate_version}` : "unknown"}</dd></div>
           <div><dt>Gate epoch</dt><dd>{packet.gateStatus?.epoch ?? "unknown"}</dd></div>
+          <div><dt>A6 policy enforcement</dt><dd>{packet.serviceFreshness.gate.state === "live" ? packet.gateStatus?.a6_mode ?? "unknown" : "status unavailable"}</dd></div>
+          <div><dt>Policy decisions (run)</dt><dd>{packet.gateStatus?.policy_counts ? `${packet.gateStatus.policy_counts.authorize} authorized · ${packet.gateStatus.policy_counts.withhold} withheld` : "unavailable"}</dd></div>
           <div><dt>Recovery primed</dt><dd>{packet.gateStatus?.startup_recovery_ready === true ? "yes" : packet.gateStatus?.startup_recovery_ready === false ? "no" : "unknown"}</dd></div>
           <div><dt>Quarantine</dt><dd>{packet.gateStatus?.quarantined === true ? "active" : packet.gateStatus?.quarantined === false ? "clear" : "unknown"}</dd></div>
           <div><dt>Receipt age</dt><dd>{packet.authority.receiptAgeS === null ? "unknown" : `${packet.authority.receiptAgeS.toFixed(2)} s`}</dd></div>
