@@ -160,16 +160,34 @@ class FixturePolicy:
         ):
             raise ValueError("invalid H5 simulation threshold")
         score = warning.get("score")
-        if warning.get("status") == "unknown" and score is None:
-            return False
-        if (
+        if score is not None and (
             isinstance(score, bool) or not isinstance(score, (int, float))
             or not math.isfinite(score) or score < 0
         ):
             raise ValueError("invalid H5 simulation score")
-        active = score >= threshold
-        if warning.get("status") != ("warning" if active else "below_threshold"):
-            raise ValueError("H5 simulation status does not match score")
+        frozen = False
+        if "frozen_feed" in warning:
+            guard = warning["frozen_feed"]
+            if not isinstance(guard, dict):
+                raise ValueError("invalid H5 frozen feed evidence")
+            count = guard.get("consecutive_duplicates")
+            minimum = guard.get("minimum_consecutive_duplicates")
+            if (
+                guard.get("method") != "exact_decoded_rgb_repeat"
+                or type(count) is not int or not 0 <= count <= 64
+                or type(minimum) is not int or not 1 <= minimum <= 64
+            ):
+                raise ValueError("invalid H5 frozen feed evidence")
+            frozen = count >= minimum
+            expected = "warning" if frozen else "below_threshold"
+            if guard.get("status") != expected and not (
+                guard.get("status") == "unknown" and count == 0
+            ):
+                raise ValueError("H5 frozen feed status does not match evidence")
+        active = (score is not None and score >= threshold) or frozen
+        expected = "warning" if active else ("unknown" if score is None else "below_threshold")
+        if warning.get("status") != expected:
+            raise ValueError("H5 simulation status does not match evidence")
         return active
 
     @staticmethod

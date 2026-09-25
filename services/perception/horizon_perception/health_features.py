@@ -91,13 +91,19 @@ class ConventionalHealthTracker:
 
         image_bytes = image_path.read_bytes()
         digest = hashlib.sha256(image_bytes).hexdigest()
-        image = pil_to_tensor(Image.open(image_path).convert("RGB")).float().div_(255.0)
+        with Image.open(image_path) as source:
+            rgb = source.convert("RGB")
+        # Compare decoded content, so changing JPEG metadata cannot hide a replay.
+        pixel_digest = hashlib.sha256(
+            str(rgb.size).encode() + b":" + rgb.tobytes()
+        ).hexdigest()
+        image = pil_to_tensor(rgb).float().div_(255.0)
         luma = 0.299 * image[0] + 0.587 * image[1] + 0.114 * image[2]
         kernel = torch.tensor([[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]])[None, None]
         laplacian = torch.nn.functional.conv2d(luma[None, None], kernel, padding=1)
         variance = float(laplacian.var(unbiased=False).item())
         blur = 1.0 / (1.0 + variance / self.config.blur_laplacian_scale)
-        frozen = 1.0 if self.previous_digest == digest else 0.0
+        frozen = 1.0 if self.previous_digest == pixel_digest else 0.0
         timestamp_fault = 0.0
         if self.previous_timestamp_ns is not None:
             delta = timestamp_ns - self.previous_timestamp_ns
@@ -128,12 +134,15 @@ class ConventionalHealthTracker:
             "horizon_error": horizon_error,
             "temporal_output_change": temporal_change,
         }
-        self.previous_digest = digest
+        self.previous_digest = pixel_digest
         self.previous_timestamp_ns = timestamp_ns
         self.previous_probabilities = probabilities.detach().float().cpu()
         return {
             "checks": checks,
-            "raw": {"laplacian_variance": variance, "image_sha256": digest},
+            "raw": {
+                "laplacian_variance": variance, "image_sha256": digest,
+                "decoded_rgb_sha256": pixel_digest,
+            },
             "capability": {key: value is not None for key, value in checks.items()},
             "complete": all(value is not None for value in checks.values()),
         }

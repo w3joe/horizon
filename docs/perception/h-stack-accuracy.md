@@ -1,5 +1,14 @@
 # H0-H5 missed-obstacle proxy accuracy experiment
 
+## Freeze-guard rerun (2026-09-25)
+
+The [paired H5 rerun](../../experiment/reports/h5-freeze-accuracy-20260925.md)
+rescored the same 10,110 evaluation frames with the new freeze guard. Results
+were unchanged: 7/33 proxy misses detected and 193 false warnings. All 337
+duplicate frames were isolated repeats; none reached the guard's three-repeat
+minimum. This does not negate the separate sustained-freeze test, but it shows
+no improvement in missed-obstacle detection on this broader dataset.
+
 ## Result (2026-09-24)
 
 H5 was the strongest ranking method in this collection-group-disjoint

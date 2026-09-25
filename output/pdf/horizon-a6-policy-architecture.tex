@@ -1,0 +1,221 @@
+\documentclass[10pt,a4paper,twoside]{article}
+\usepackage[margin=20mm,headheight=20pt]{geometry}
+\usepackage{amsmath,amssymb,booktabs,tabularx,array}
+\usepackage{xcolor,microtype,enumitem,fancyhdr,xurl}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{hnavy}{HTML}{112B45}
+\definecolor{hblue}{HTML}{1E78B4}
+\definecolor{hpale}{HTML}{EAF4F8}
+\definecolor{hgray}{HTML}{526579}
+\definecolor{hwarn}{HTML}{FFF3D6}
+\hypersetup{pdftitle={Horizon A6 Implemented Policies},pdfauthor={Horizon Project}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LO,LE]{\small\color{hnavy}\textbf{HORIZON} \textbar\ A6 Technical Note}
+\fancyhead[RO,RE]{\small\color{hgray}Implemented Policies}
+\fancyfoot[C]{\small\color{hgray}\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{hblue}\leaders\hrule height \headrulewidth\hfill}}
+\fancypagestyle{plain}{\fancyhf{}\fancyhead[LO,LE]{\small\color{hnavy}\textbf{HORIZON} \textbar\ A6 Technical Note}\fancyhead[RO,RE]{\small\color{hgray}Implemented Policies}\fancyfoot[C]{\small\color{hgray}\thepage}\renewcommand{\headrulewidth}{0.4pt}}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4.5pt}
+\setlist[itemize]{leftmargin=5mm,itemsep=1.5pt,topsep=2pt}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\sectionbar}[1]{\vspace{4pt}{\large\bfseries\color{hnavy}#1}\par\vspace{-2pt}{\color{hblue}\rule{\textwidth}{0.7pt}}\vspace{2pt}}
+\newcommand{\rulehead}[2]{\vspace{3pt}{\large\bfseries\color{hnavy}#1 -- #2}\par\vspace{-2pt}{\color{hblue}\rule{\textwidth}{0.45pt}}\vspace{1pt}}
+\newcommand{\modelbox}[1]{\begingroup\setlength{\fboxsep}{8pt}\colorbox{hpale}{\parbox{\dimexpr\textwidth-2\fboxsep\relax}{#1}}\endgroup}
+\newcommand{\warningbox}[1]{\begingroup\setlength{\fboxsep}{8pt}\colorbox{hwarn}{\parbox{\dimexpr\textwidth-2\fboxsep\relax}{#1}}\endgroup}
+
+\begin{document}
+\begin{center}
+  {\color{hnavy}\fontsize{24}{28}\selectfont\bfseries Horizon A6 Implemented Policies}\par
+  \vspace{3pt}{\large\color{hgray}Gate-owned maritime policy authorization over A5 physical assurance}\par
+  \vspace{8pt}{\small Technical note based on the current Horizon implementation \textbar\ September 2026}
+\end{center}
+
+\modelbox{\textbf{Purpose.} A6 is a restrictive authorization layer over A5. A5 first selects a physically safe and recoverable command. A6 then determines whether that exact command is supported by the configured operational policy and trusted evidence. A6 may preserve or reduce A5 authority, but it cannot make an unsafe A5 decision safe.}
+
+\begin{equation}
+  \operatorname{NormalDispatch}(a)=S_{\mathrm{A5}}(a,x,\epsilon)
+  \land P_{\mathrm{A6}}(a,e,\pi)\land G(a),
+\end{equation}
+where $S_{\mathrm{A5}}$ is physical-safety approval, $P_{\mathrm{A6}}$ is policy authorization using evidence $e$ and bundle $\pi$, and $G$ is the exclusive gate's identity, freshness, expiry and integrity validation.
+
+\sectionbar{1. Bounded operational scope}
+A6 currently evaluates a clear-visibility, daylight engineering-policy slice. Normal authorization requires the declared profile below.
+\begin{center}\small
+\begin{tabularx}{\textwidth}{@{}lYlY@{}}
+\toprule
+Field & Required value & Field & Required value \\
+\midrule
+Jurisdiction & Singapore & Service & Government, non-commercial \\
+Vessel type & Power-driven & Length & Greater than 0 and under 50 m \\
+Gross tonnage & At least 0 and under 300 GT & Passengers & None \\
+Towing & False & Hazardous cargo & False \\
+Supervision & Remote supervisor available & Conditions & Daylight, clear visibility \\
+Narrow channel & Explicitly false & Traffic separation scheme & Explicitly false \\
+\bottomrule
+\end{tabularx}
+\end{center}
+The current development profile is a 12 m, 40 GT vessel. Restricted visibility, unknown context, unsupported contact classes, narrow channels, and traffic-separation schemes withhold normal authority. Supported encounters are power-driven vessels in sight.
+
+\sectionbar{2. Implemented navigation-rule proxies}
+\rulehead{Rule 5}{Lookout}
+A6 requires fresh evidence that all declared lookout capabilities are available:
+\[
+  V_{\mathrm{visual}}\land V_{\mathrm{auditory}}\land
+  V_{\mathrm{radar}}\land V_{\mathrm{supervisor}}\land V_{\mathrm{fresh}}.
+\]
+If any value is false, missing, or stale, the lookout proxy is not satisfied or unknown and normal authority is withheld. This checks availability, not lookout effectiveness.
+
+\rulehead{Rule 6}{Safe speed}
+The exact A5-selected speed must remain within the configured limit, traffic assessment must be available, and the vessel must be able to stop within clear distance:
+\begin{equation}
+  v_{\mathrm{cmd}}\leq v_{\max},
+  \qquad d_{\mathrm{stop}}+d_{\mathrm{reserve}}\leq d_{\mathrm{clear}}.
+\end{equation}
+For command-independent live evidence, A6 binds stopping distance conservatively:
+\begin{equation}
+  d_{\mathrm{stop}}=v\,t_{\mathrm{response}}+\frac{v^2}{2a_{\min}},
+  \qquad v=\max(v_{\mathrm{current}},v_{\mathrm{cmd}}).
+\end{equation}
+The development bundle uses $v_{\max}=4\,\mathrm{m/s}$ and $d_{\mathrm{reserve}}=20\,\mathrm{m}$. These are configurable engineering thresholds, not universal legal definitions of safe speed.
+
+\rulehead{Rule 7}{Risk of collision}
+For every supported contact, A6 checks that collision-risk evidence exists and that doubt is treated conservatively:
+\[
+  \mathrm{risk\ doubt}\Longrightarrow \mathrm{treated\ as\ collision\ risk}.
+\]
+If doubt is declared but the encounter is not treated as risk, Rule 7 is not satisfied. Missing risk evidence produces an unknown result.
+
+\rulehead{Rule 8}{Action to avoid collision}
+Where collision risk is identified, action must be sufficiently early, substantial, and detectable. The development thresholds require
+\begin{equation}
+  t_{\mathrm{lead}}\geq30\,\mathrm{s}
+\end{equation}
+and either
+\begin{equation}
+  |\Delta\psi|\geq20^\circ
+  \qquad\text{or}\qquad
+  \Delta v_{\mathrm{reduction}}\geq1\,\mathrm{m/s}.
+\end{equation}
+A6 derives course change, speed reduction and detectability from the actual command selected by A5. It overrides any external action claim.
+
+\rulehead{Rule 13}{Overtaking}
+The encounter is classified as overtaking when ownship approaches from more than the configured abaft-the-beam angle:
+\begin{equation}
+  |\beta_{\mathrm{contact\ view}}|>112.5^\circ.
+\end{equation}
+Ownship is assigned the give-way duty, and its action must pass the early, substantial and detectable tests.
+
+\rulehead{Rule 14}{Head-on situation}
+A head-on proxy requires relative bearing within $10^\circ$ of directly ahead and course difference within $15^\circ$ of reciprocal courses. A $2^\circ$ ambiguity band protects classification boundaries. Ownship is assigned give-way duty and must make a positive course change, representing the expected starboard action, while also satisfying the Rule 8 thresholds.
+
+\rulehead{Rule 15}{Crossing situation}
+A contact on the starboard side assigns ownship the give-way duty. A contact on the port side assigns ownship the stand-on duty. Classification uses relative bearing and withholds authorization when geometry is incomplete or within the ambiguity band.
+
+\rulehead{Rule 16}{Action by give-way vessel}
+When ownship is the give-way vessel, the current proxy requires
+\begin{equation}
+  (t_{\mathrm{lead}}\geq30)
+  \land\left(|\Delta\psi|\geq20^\circ
+  \lor \Delta v_{\mathrm{reduction}}\geq1\right)
+  \land \mathrm{detectable}.
+\end{equation}
+The quantities use seconds, degrees and metres per second respectively.
+
+\rulehead{Rule 17}{Action by stand-on vessel}
+For the supported stand-on slice, A6 checks that course and speed are maintained. The command is treated as maintaining them when approximately
+\begin{equation}
+  |\Delta\psi|<1^\circ,\qquad |\Delta v|<0.1\,\mathrm{m/s}.
+\end{equation}
+This proxy does not model every condition in which a stand-on vessel may or must intervene.
+
+\sectionbar{3. Encounter classification}
+\begin{center}\small
+\begin{tabularx}{\textwidth}{@{}lYYl@{}}
+\toprule
+Encounter & Classification evidence & Assigned ownship duty & Rules \\
+\midrule
+Overtaking & Contact view beyond $112.5^\circ$ abaft beam & Give way & R13, R16 \\
+Head-on & Near-zero bearing and near-reciprocal courses & Give way & R14, R16 \\
+Crossing, contact starboard & Positive relative bearing & Give way & R15, R16 \\
+Crossing, contact port & Negative relative bearing & Stand on & R15, R17 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+Incomplete or boundary-ambiguous geometry is classified as unknown. A6 withholds normal authority rather than guessing the encounter duty.
+
+\sectionbar{4. Gate and evidence policies}
+\begin{itemize}
+  \item \textbf{A5 safety dominates.} Only valid A5 \texttt{pass} or \texttt{modify} decisions with an issued command are eligible for normal authorization.
+  \item \textbf{Exact-command binding.} A6 evaluates the command A5 selected, not the original decision-AI proposal.
+  \item \textbf{Trusted evidence only.} Evidence comes from a gate-configured adapter, not from the decision AI.
+  \item \textbf{Recorded provenance.} Operational bundles require recorded provenance, a runtime-authority source pin, and source-artifact hash validation.
+  \item \textbf{Identity binding.} Run, branch, tick, snapshot hash, A5 decision and command hash must agree.
+  \item \textbf{Freshness and expiry.} Authorization expires at the earliest A5 decision, cycle deadline, evidence, or policy-bundle expiry.
+  \item \textbf{Fail closed.} Missing, malformed, mismatched, stale, unsupported, unresolved or late evidence causes withholding.
+  \item \textbf{Compute budget.} The default evaluation budget is 10 ms; exceeding it causes withholding.
+  \item \textbf{No authority expansion.} A6 cannot authorize a physically impermissible command.
+\end{itemize}
+
+\sectionbar{5. Withholding and recovery}
+When A6 withholds a normal command, the gate attempts a fresh stored recovery and rechecks it against the current A5 input. If no valid stored recovery exists, the gate derives its canonical minimum-risk command and marks assurance unknown.
+
+A5 recovery, minimum-risk, recovery-latch and watchdog actions may retain emergency safety authority under \texttt{A6\_EMERGENCY\_POLICY\_OVERRIDE}. This is explicitly not A6 policy authorization.
+\begin{equation}
+  a_{\mathrm{dispatch}}=
+  \begin{cases}
+    a_{\mathrm{A5}}, & \text{A5 safe and A6 authorized},\\
+    a_{\mathrm{recovery}}, & \text{normal authority withheld and recovery valid},\\
+    a_{\mathrm{minimum\ risk}}, & \text{otherwise, with assurance unknown}.
+  \end{cases}
+\end{equation}
+
+\sectionbar{6. Current exclusions}
+\warningbox{\textbf{Not a complete legal-compliance system.} A6 implements bounded engineering proxies for Rules 5--8 and 13--17. It does not establish full COLREG, Singapore regulatory, vessel-certification, or operational compliance.}
+
+The current implementation does not cover:
+\begin{itemize}
+  \item Rule 2 general responsibility;
+  \item Rule 9 narrow channels or Rule 10 traffic-separation schemes;
+  \item Rule 12 sailing vessels, Rule 18 vessel responsibilities, or Rule 19 restricted visibility;
+  \item complete multi-contact rule conflict resolution;
+  \item auditory sensor interpretation or complete live vessel-policy feeds;
+  \item weapons, targeting, classified doctrine, rules of engagement, or naval mission policy;
+  \item alternative-manoeuvre search after a policy veto.
+\end{itemize}
+
+\sectionbar{7. Development parameters}
+\begin{center}\small
+\begin{tabularx}{\textwidth}{@{}Yl@{}}
+\toprule
+Policy parameter & Development value \\
+\midrule
+Maximum clear-visibility speed & $4\,\mathrm{m/s}$ \\
+Stopping-distance reserve & $20\,\mathrm{m}$ \\
+Minimum early-action lead & $30\,\mathrm{s}$ \\
+Substantial course change & $20^\circ$ \\
+Substantial speed reduction & $1\,\mathrm{m/s}$ \\
+Head-on bearing tolerance & $10^\circ$ \\
+Reciprocal-course tolerance & $15^\circ$ \\
+Classification ambiguity band & $2^\circ$ \\
+Overtaking abaft-beam boundary & $112.5^\circ$ \\
+\bottomrule
+\end{tabularx}
+\end{center}
+These are versioned development settings. Operational values require a recorded, hash-pinned policy source, applicability review and deployment-specific approval.
+
+\sectionbar{Implementation references}
+\begin{itemize}
+  \item \path{services/assurance/horizon_assurance/policy_shadow.py} --- scope, classification, findings and bundle validation;
+  \item \path{services/assurance/horizon_assurance/policy_enforcement.py} --- evidence binding, authorization, expiry and fail-closed enforcement;
+  \item \path{services/assurance/docs/a6-policy-enforcement.md} --- configuration, command behavior and limitations;
+  \item \path{experiment/manifests/a6-a32-enforcement-development.json} --- development thresholds and vessel profile.
+\end{itemize}
+
+{\footnotesize\color{hgray}\textbf{Interpretation note.} A \emph{satisfied} finding means that the configured engineering predicate passed using the supplied bounded evidence. It is not a legal judgment and must not be reported as unrestricted COLREG compliance.}
+\end{document}

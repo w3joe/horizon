@@ -98,7 +98,8 @@ observed at readiness. SIGINT/SIGTERM stops the supervisor and its perception
 child; the central launcher retains its existing five-second bounded shutdown
 and forced-kill fallback.
 
-This configuration selects local MPS float32 H0 processing. It is a finite
+This configuration selects local MPS float32 WaSR-T processing with H5 simulation
+warnings. It is a finite
 296-frame recorded source, not a sustained sensor daemon. When the sequence is
 exhausted, diagnostics report completion and fresh health naturally expires;
 records are never replayed or renewed. The optional process does not establish
@@ -177,11 +178,38 @@ The checked-in `configs/perception/recorded-camera-live.json` now selects
   --perception-config configs/perception/recorded-camera-live.json
 ```
 
-The experimental trigger is the H5 representation score at or above
+The experimental neural trigger is the H5 representation score at or above
 `2.731332008015018`, taken from the `kope67` threshold fit in the
 [proxy accuracy experiment](h-stack-accuracy.md). The config binds it to that
 experiment's H5 reference hash and records the source report hash. It is a demo
 threshold, not a calibrated missed-obstacle probability.
+
+H5's simulation warning also includes a separate frozen-feed guard. The pinned
+WaSR-T model aggregates temporal features but does not detect camera freezes;
+the guard belongs to Horizon's monitoring wrapper, not the neural network.
+`health_monitor.simulation_warning.frozen_feed.minimum_consecutive_duplicates`
+is set to **3**. It raises a warning on the third consecutive duplicate of the
+last changing image (four identical observations including that original).
+The conventional image check compares exact decoded RGB pixels and dimensions,
+so changes to file metadata alone do not defeat it. One or two repeated frames
+do not trigger this guard. Re-encoding that changes pixels, near-static images,
+or a camera that stops delivering frames entirely require other checks; missing
+frames still expire through the existing freshness path.
+
+The counter resets on changed pixels, missing duplicate evidence, stale
+publication, a source-sequence change, reversed ordering, or an expired previous
+frame. It counts consecutive processed observations, so dropped input frames
+and inference speed affect elapsed detection time. Three repeats are a demo
+debounce setting, not a validated vessel safety threshold.
+
+`simulation_h5_warning.reason_codes` distinguishes `frozen_feed` from
+`spatiotemporal_feature_shift`. Its `frozen_feed` object includes the method,
+count, threshold and status. The representation score and its calibration
+threshold are unchanged; a frozen-feed warning can coexist with a low or missing
+neural score. This is an additional camera-integrity check, not evidence that
+the trained H5 representation now recognizes freezes.
+The [mock-failure rerun](../../experiment/reports/h5-frozen-feed-20260925.md)
+records detection, recovery and unchanged neural scores on identical inputs.
 
 For each fresh temporal pair, the producer publishes a separate
 `simulation_h5_warning` with status `warning`, `below_threshold`, or `unknown`.
@@ -191,8 +219,9 @@ status is `warning`; A5 and the actuator gate still validate the proposed
 command. The inference trace records `candidate_scores.h5_simulation_warning`
 and the consumed health ID so the response is auditable.
 
-A below-threshold score leaves the fixture's ordinary navigation proposal in
-place. Missing, expired, invalid or first-frame evidence remains unknown; it
+A below-threshold score without a freeze trigger leaves the fixture's ordinary
+navigation proposal in place. Missing or first-frame evidence remains unknown
+unless an independent freeze trigger is available; expired evidence is unusable. It
 does not assert healthy perception. Temporal pairs cannot cross source sequences
 or reuse an expired previous frame. Recorded video still does not respond to
 the simulated boat, so this demonstrates a control response to recorded H5

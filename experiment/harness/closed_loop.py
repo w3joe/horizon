@@ -572,6 +572,14 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
     )
     mode = str(request["ai_policy_version"]).removeprefix("decision-ai-fixture-").removesuffix("-v1")
     policy = _fixture_policy_class()(mode, monotonic_ns=clock)
+    h5_replay = None
+    if request.get("h5_warning_replay") is not None:
+        from experiment.harness.h5_replay import H5WarningReplay
+
+        h5_replay = H5WarningReplay(
+            request["h5_warning_replay"], run_id=simulator.run_id,
+            branch_id=simulator.branch_id, epoch_ns=epoch_ns,
+        )
     collector = CollectorStore()
     fusion = FusionEngine()
     simulator_observation_cursor = 0
@@ -633,6 +641,9 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                 )
             if not page["has_more"]:
                 break
+        if h5_replay is not None:
+            for observation in h5_replay.observations(clock()):
+                collector.ingest(observation, received_ns=clock(), clock_domain="host_monotonic")
         batch = collector.batch(branch=simulator.branch_id, after_cursor=collector_cursor)
         collector_cursor = int(batch["cursor"])
         fusion.update_batch(batch, now_ns=clock())
@@ -739,13 +750,18 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                 except NotReady:
                     policy_snapshot = None
                 if policy_snapshot is not None:
-                    proposal, trace = policy.propose(policy_snapshot)
+                    perception_context = fusion.perception_context(now_ns=request_started_ns)
+                    proposal, trace = policy.propose(policy_snapshot, perception_context)
                     autonomy_proposal_trace.append(
                         {
                             "simulation_time_s": simulator.simulation_time_s,
                             "source_id": proposal["source_id"],
                             "origin_snapshot_time_s": policy_snapshot["simulation_time_s"],
                             "command": copy.deepcopy(proposal["command"]),
+                            "h5_warning_active": bool(trace["candidate_scores"].get("h5_simulation_warning")),
+                            "perception_frame_id": (
+                                perception_context["frame_id"] if perception_context else None
+                            ),
                         }
                     )
                     # The proposal consumes the last completed fusion snapshot.
@@ -764,6 +780,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                             trace,
                             request_monotonic_ns=request_started_ns,
                             now_ns=clock(),
+                            requested_perception_context=perception_context,
                         )
                     except NotReady:
                         governor_input = None
@@ -803,6 +820,7 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
                                     trace,
                                     request_monotonic_ns=request_started_ns,
                                     now_ns=clock(),
+                                    requested_perception_context=perception_context,
                                 )
                             except NotReady:
                                 # The stage scheduler advanced the plant and
@@ -1095,6 +1113,17 @@ def run_assured_episode(request: dict[str, Any]) -> dict[str, Any]:
         },
         "completed": reached_scenario_horizon,
         "mission_completed": final_remaining <= 15.0,
+        "mission_progress": {
+            "first_arrival_time_s": next((
+                float(row["simulation_time_s"]) for row in simulator.truth_log
+                if float(row["mission_progress"]["distance_remaining_m"]) <= 15.0
+            ), None),
+            "final_distance_remaining_m": final_remaining,
+            "minimum_distance_remaining_m": min(
+                float(row["mission_progress"]["distance_remaining_m"])
+                for row in simulator.truth_log
+            ),
+        },
         "terminal_outcome": terminal_outcome,
         "predeclared_censoring": copy.deepcopy(predeclared_censoring),
         "recoverability_class": scenario.recoverability_class,

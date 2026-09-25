@@ -181,6 +181,8 @@ class RecordedCameraObservationBuilder:
         self.calibration = calibration
         self.reference = reference
         self.simulation_warning = copy.deepcopy(simulation_warning)
+        self._freeze_minimum: int | None = None
+        self._consecutive_duplicates = 0
         if simulation_warning is not None:
             threshold = simulation_warning.get("threshold")
             if (
@@ -190,6 +192,12 @@ class RecordedCameraObservationBuilder:
                 or not math.isfinite(threshold) or threshold <= 0
             ):
                 raise ValueError("simulation warning requires H5, a positive threshold and matching reference")
+            if "frozen_feed" in simulation_warning:
+                freeze = simulation_warning["frozen_feed"]
+                minimum = freeze.get("minimum_consecutive_duplicates") if isinstance(freeze, dict) else None
+                if type(minimum) is not int or not 1 <= minimum <= 64:
+                    raise ValueError("frozen feed requires minimum_consecutive_duplicates between 1 and 64")
+                self._freeze_minimum = minimum
         self._previous_embedding: list[float] | None = None
         self._previous_frame: RecordedFrame | None = None
 
@@ -202,6 +210,21 @@ class RecordedCameraObservationBuilder:
     ) -> list[dict[str, Any]]:
         if completed_monotonic_ns < frame.captured_monotonic_ns:
             raise ValueError("inference completion precedes frame capture")
+        previous = self._previous_frame
+        continuous = (
+            previous is not None and previous.sequence_id == frame.sequence_id
+            and previous.sequence < frame.sequence
+            and previous.captured_monotonic_ns < frame.captured_monotonic_ns
+            <= previous.valid_until_monotonic_ns
+        )
+        fresh = completed_monotonic_ns < frame.valid_until_monotonic_ns
+        checks = evidence.conventional_health.get("checks") or {}
+        duplicate = checks.get("frozen_frame")
+        freeze_available = continuous and fresh and type(duplicate) in (int, float) and duplicate in (0, 1)
+        self._consecutive_duplicates = (
+            min(self._consecutive_duplicates + 1, 64)
+            if freeze_available and duplicate == 1 else 0
+        )
         layer_summaries = _bounded_layer_summaries(evidence.activation_summaries)
         frame_sha = sha256_file(frame.path)
         perception_id = f"{self.run_id}:{self.branch_id}:recorded-camera:{frame.sequence}"
@@ -237,13 +260,9 @@ class RecordedCameraObservationBuilder:
             activation = evidence.activation_summaries.get(self.reference.layer, {})
             embedding = list(activation.get("pooled_mean", []))
             health_request["embedding"] = embedding
-            previous = self._previous_frame
             if (
                 self.method_id == "H5" and self._previous_embedding is not None
-                and previous is not None and previous.sequence_id == frame.sequence_id
-                and previous.sequence < frame.sequence
-                and previous.captured_monotonic_ns < frame.captured_monotonic_ns
-                <= previous.valid_until_monotonic_ns
+                and continuous
             ):
                 health_request["previous_embedding"] = self._previous_embedding
             if self.method_id == "H5":
@@ -367,29 +386,43 @@ class RecordedCameraObservationBuilder:
             },
         }
         if self.simulation_warning is not None:
-            # Use exactly the representation score evaluated by the proxy study,
-            # not the maximum with conventional checks. This is a demo trigger,
-            # never a calibrated risk band or a healthy-camera assertion.
+            # Preserve the original representation score and threshold. A separate
+            # camera-integrity trigger covers repeats that a low H5 score can miss.
             statistics = rich_health.get("statistics", {})
             reconstruction = statistics.get("reconstruction_mse")
             distance = statistics.get("temporal_code_distance")
             score = None
             if (
                 reconstruction is not None and distance is not None
-                and completed_monotonic_ns < frame.valid_until_monotonic_ns
+                and fresh
             ):
                 score = reconstruction + self.reference.parameters["temporal_weight"] * distance
             threshold = self.simulation_warning["threshold"]
-            state = "unknown" if score is None else (
-                "warning" if score >= threshold else "below_threshold"
-            )
+            frozen = self._freeze_minimum is not None and self._consecutive_duplicates >= self._freeze_minimum
+            reasons = []
+            if score is not None and score >= threshold:
+                reasons.append("spatiotemporal_feature_shift")
+            if frozen:
+                reasons.append("frozen_feed")
+            state = "warning" if reasons else ("unknown" if score is None else "below_threshold")
             neural["payload"]["simulation_h5_warning"] = {
                 "mode": "simulation_warning",
                 "status": state,
                 "score": score,
                 "threshold": threshold,
                 "reference_hash": self.reference.artifact_hash,
+                "reason_codes": reasons,
             }
+            if self._freeze_minimum is not None:
+                neural["payload"]["simulation_h5_warning"]["frozen_feed"] = {
+                    "method": "exact_decoded_rgb_repeat",
+                    "minimum_consecutive_duplicates": self._freeze_minimum,
+                    "consecutive_duplicates": self._consecutive_duplicates,
+                    "status": "unknown" if not freeze_available else (
+                        "warning" if frozen else "below_threshold"
+                    ),
+                }
+            shared_health["reason_codes"].extend(f"H5_SIMULATION_{reason.upper()}" for reason in reasons)
             shared_health["reason_codes"].append(f"H5_SIMULATION_{state.upper()}")
         json.dumps([perception, neural], allow_nan=False)
         return [perception, neural]

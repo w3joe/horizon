@@ -60,6 +60,9 @@
     "mode": "simulation_warning",
     "simulation_warning": {
       "threshold": 2.731332008015018,
+      "frozen_feed": {
+        "minimum_consecutive_duplicates": 3
+      },
       "reference_hash": "e00b7ec982d0cefc5c8382940018f35c32d6cbe01893b754d09baf41713a67e4",
       "source_report_artifact_hash": "bf3e4a70c81ec4f8ae626f375f43cce13c898f1941780828f22783bbb1981ed2",
       "scope": "experimental_proxy_threshold_simulation_speed_reduction_only"

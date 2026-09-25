@@ -57,5 +57,8 @@ This does not make H5 deployment-ready. All model selection and causal evidence
 come from the `kope81` development collection; inputs are spatially averaged;
 there is no calibrated fault threshold, sealed held-out H1–H5 comparison,
 spatial causal localization, collateral-effect study, or target-runtime latency
-qualification. Runtime use remains fail-closed and shadow-only until those
-independent gates pass.
+qualification. Safety-facing health remains fail-closed until those independent
+gates pass. The [simulation warning wrapper](live-recorded-camera.md) can lower
+simulated speed on an experimental neural threshold or a separate exact-repeat
+camera guard. That guard does not change the trained H5 representation or extend
+the neural validation claims above to frozen-feed detection.

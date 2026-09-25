@@ -196,9 +196,8 @@ def test_h4_shadow_mode_publishes_score_but_never_camera_authority(tmp_path: Pat
     assert neural["payload"]["health_detail"]["camera_free_space_usable"] is False
 
 
-@pytest.mark.parametrize("mode", ["shadow_only", "simulation_warning"])
-def test_h5_modes_require_temporal_pair_then_publish_score(tmp_path: Path, mode: str) -> None:
-    reference = ReferenceArtifact.from_dict(build_reference(
+def h5_reference() -> ReferenceArtifact:
+    return ReferenceArtifact.from_dict(build_reference(
         "H5",
         [[0.0] * 2048, [0.1] * 2048, [0.9] * 2048, [1.0] * 2048],
         "temporal_fusion",
@@ -223,6 +222,11 @@ def test_h5_modes_require_temporal_pair_then_publish_score(tmp_path: Path, mode:
             "completed_before_intervention_outcomes": True,
         },
     ))
+
+
+@pytest.mark.parametrize("mode", ["shadow_only", "simulation_warning"])
+def test_h5_modes_require_temporal_pair_then_publish_score(tmp_path: Path, mode: str) -> None:
+    reference = h5_reference()
     h5_builder = RecordedCameraObservationBuilder(
         run_id="run",
         branch_id="protected",
@@ -289,6 +293,72 @@ def test_h5_modes_require_temporal_pair_then_publish_score(tmp_path: Path, mode:
                 geometry=geometry(), method_id="H5", reference=reference,
                 simulation_warning=bad_config,
             )
+
+
+@pytest.mark.parametrize("interruption", ["changed", "stale", "gap", "sequence", "reordered", "missing"])
+def test_h5_freeze_guard_debounces_and_resets(tmp_path: Path, interruption: str) -> None:
+    reference = h5_reference()
+    monitored = RecordedCameraObservationBuilder(
+        run_id="run", branch_id="protected", model_version="wasrt-test",
+        weights_sha256="2" * 64, preprocessing_sha256="3" * 64,
+        geometry=geometry(), method_id="H5", reference=reference,
+        simulation_warning={"threshold": 10, "reference_hash": reference.artifact_hash,
+                            "frozen_feed": {"minimum_consecutive_duplicates": 3}},
+    )
+    image = tmp_path / "frame.jpg"
+    image.write_bytes(b"frame")
+
+    def build(index, *, duplicate=1.0, sequence_id="clip", capture=None, stale=False, embedding=True):
+        stamp = 1_000_000_000 + index * 100_000_000 if capture is None else capture
+        frame = RecordedFrame(image, f"{sequence_id}:{index}", sequence_id, index, index / 10,
+                              stamp, stamp + 3_000_000_000)
+        inferred = evidence(index)
+        inferred.conventional_health["checks"]["frozen_frame"] = duplicate
+        if not embedding:
+            inferred.activation_summaries["temporal_fusion"]["pooled_mean"] = []
+        _, neural = monitored.build(frame, inferred, completed_monotonic_ns=(
+            frame.valid_until_monotonic_ns if stale else stamp + 1
+        ))
+        OBSERVATION_VALIDATOR.validate(neural)
+        assert neural["payload"]["perception_health"]["status"] == "unknown"
+        return neural["payload"]["simulation_h5_warning"]
+
+    assert build(0)["status"] == "unknown"
+    assert build(1)["status"] == "below_threshold"
+    assert build(2)["status"] == "below_threshold"
+    warning = build(3)
+    assert warning["status"] == "warning"
+    assert warning["score"] < warning["threshold"]
+    assert warning["reason_codes"] == ["frozen_feed"]
+    assert warning["frozen_feed"]["consecutive_duplicates"] == 3
+    interruption_args = {
+        "changed": {"duplicate": 0.0}, "stale": {"stale": True},
+        "gap": {"capture": 10_000_000_000}, "sequence": {"sequence_id": "new"},
+        "reordered": {"capture": 1_000_000_000}, "missing": {"duplicate": None},
+    }[interruption]
+    reset = build(4, **interruption_args)
+    assert reset["status"] != "warning"
+    assert reset["frozen_feed"]["consecutive_duplicates"] == 0
+    # A fresh sequence can detect a freeze even when neural scoring is unavailable.
+    assert build(10, sequence_id="next", embedding=False)["status"] == "unknown"
+    assert build(11, sequence_id="next", embedding=False)["status"] == "unknown"
+    assert build(12, sequence_id="next", embedding=False)["status"] == "unknown"
+    independent = build(13, sequence_id="next", embedding=False)
+    assert independent["status"] == "warning"
+    assert independent["score"] is None
+
+
+@pytest.mark.parametrize("minimum", [True, 0, -1, 65, 3.0, None])
+def test_h5_rejects_invalid_freeze_configuration(minimum):
+    reference = h5_reference()
+    with pytest.raises(ValueError, match="frozen feed requires"):
+        RecordedCameraObservationBuilder(
+            run_id="run", branch_id="protected", model_version="wasrt-test",
+            weights_sha256="2" * 64, preprocessing_sha256="3" * 64,
+            geometry=geometry(), method_id="H5", reference=reference,
+            simulation_warning={"threshold": 10, "reference_hash": reference.artifact_hash,
+                                "frozen_feed": {"minimum_consecutive_duplicates": minimum}},
+        )
 
 
 def test_bounded_queue_drops_oldest_without_reordering_survivors(tmp_path: Path) -> None:

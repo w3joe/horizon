@@ -483,8 +483,11 @@ def test_exact_legacy_baseline_is_the_only_missing_field_compatibility() -> None
     assert future_mode["reason_codes"] == ["OPERATING_MODE_QUALIFICATION_MISSING"]
 
 
-@pytest.mark.parametrize("score, expected_speed", [(1.0, 4.0), (3.0, 1.0), (None, 4.0)])
-def test_h5_simulation_warning_changes_proposal_and_reaches_a5_gate(score, expected_speed) -> None:
+@pytest.mark.parametrize("score, duplicates, expected_speed", [
+    (1.0, None, 4.0), (3.0, None, 1.0), (None, None, 4.0),
+    (1.0, 2, 4.0), (1.0, 3, 1.0), (None, 3, 1.0),
+])
+def test_h5_simulation_warning_changes_proposal_and_reaches_a5_gate(score, duplicates, expected_speed) -> None:
     now_ns = time.monotonic_ns()
     record = neural_observation(now_ns)
     record["payload"]["perception_health"].update(method_id="H5", score=score)
@@ -495,6 +498,14 @@ def test_h5_simulation_warning_changes_proposal_and_reaches_a5_gate(score, expec
         "threshold": 2.7,
         "reference_hash": "a" * 64,
     }
+    if duplicates is not None:
+        warning["frozen_feed"] = {
+            "method": "exact_decoded_rgb_repeat", "minimum_consecutive_duplicates": 3,
+            "consecutive_duplicates": duplicates,
+            "status": "warning" if duplicates >= 3 else "below_threshold",
+        }
+        if duplicates >= 3:
+            warning["status"] = "warning"
     record["payload"]["simulation_h5_warning"] = warning
     batch = batch_with_neural(now_ns, record)
     engine = FusionEngine()
@@ -575,6 +586,29 @@ def test_invalid_h5_demo_scores_cannot_drive_fixture(score) -> None:
         },
     }
     with pytest.raises(ValueError, match="invalid H5 simulation score"):
+        FixturePolicy._simulation_h5_warning(
+            {"contract_type": "SimulationSnapshot", "display_only": True}, context, now_ns
+        )
+
+
+@pytest.mark.parametrize("overrides", [
+    {"consecutive_duplicates": True}, {"consecutive_duplicates": -1},
+    {"minimum_consecutive_duplicates": 0}, {"status": "below_threshold"},
+    {"status": "unknown"}, {"method": "unsupported"},
+])
+def test_invalid_h5_freeze_evidence_cannot_drive_fixture(overrides):
+    now_ns = time.monotonic_ns()
+    context = {
+        "method_id": "H5", "valid_until_monotonic_ns": now_ns + 1_000_000,
+        "simulation_h5_warning": {
+            "mode": "simulation_warning", "status": "warning", "score": 0.1, "threshold": 2.7,
+            "frozen_feed": {
+                "method": "exact_decoded_rgb_repeat", "minimum_consecutive_duplicates": 3,
+                "consecutive_duplicates": 3, "status": "warning", **overrides,
+            },
+        },
+    }
+    with pytest.raises(ValueError, match="frozen feed"):
         FixturePolicy._simulation_h5_warning(
             {"contract_type": "SimulationSnapshot", "display_only": True}, context, now_ns
         )

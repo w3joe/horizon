@@ -1,0 +1,289 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[margin=20mm,headheight=20pt]{geometry}
+\usepackage{amsmath,amssymb,booktabs,tabularx,array}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xurl}
+
+\definecolor{hnavy}{HTML}{112B45}
+\definecolor{hblue}{HTML}{1E78B4}
+\definecolor{hpale}{HTML}{EAF4F8}
+\definecolor{hgray}{HTML}{526579}
+
+\hypersetup{
+  pdftitle={Horizon A5 Mathematical Models},
+  pdfauthor={Horizon Project},
+  pdfsubject={Technical description of the mathematical models implemented in A5}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{hnavy}\textbf{HORIZON} \textbar\ A5 Technical Note}
+\fancyhead[R]{\small\color{hgray}Mathematical Models}
+\fancyfoot[C]{\small\color{hgray}\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{hblue}\leaders\hrule height \headrulewidth\hfill}}
+\fancypagestyle{plain}{%
+  \fancyhf{}
+  \fancyhead[L]{\small\color{hnavy}\textbf{HORIZON} \textbar\ A5 Technical Note}
+  \fancyhead[R]{\small\color{hgray}Mathematical Models}
+  \fancyfoot[C]{\small\color{hgray}\thepage}
+  \renewcommand{\headrulewidth}{0.4pt}
+}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\setlist[itemize]{leftmargin=5mm,itemsep=2pt,topsep=3pt}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\newcommand{\sectionbar}[1]{%
+  \vspace{4pt}%
+  {\large\bfseries\color{hnavy}#1}\par
+  \vspace{-2pt}{\color{hblue}\rule{\textwidth}{0.7pt}}\vspace{2pt}%
+}
+\newcommand{\modelbox}[1]{%
+  \begingroup\setlength{\fboxsep}{8pt}%
+  \colorbox{hpale}{\parbox{\dimexpr\textwidth-2\fboxsep\relax}{#1}}%
+  \endgroup
+}
+
+\begin{document}
+
+\begin{center}
+  {\color{hnavy}\fontsize{25}{29}\selectfont\bfseries Horizon A5 Mathematical Models}\par
+  \vspace{3pt}
+  {\large\color{hgray}Evidence-conditioned predictive safety and recoverability filter}\par
+  \vspace{8pt}
+  {\small Technical note based on the current Horizon implementation \textbar\ September 2026}
+\end{center}
+
+\modelbox{\textbf{System classification.} A5 is a deterministic, finite-horizon, model-predictive safety filter and recoverability supervisor. It does not learn a policy or forecast trajectories with a neural network. It simulates a bounded nonlinear vessel model, checks geometric and physical safety margins, and issues the requested command only when a safe continuation can be demonstrated within the configured horizon.}
+
+\sectionbar{1. State and command representation}
+
+The simulated vessel state is
+\begin{equation}
+  x = [N,\ E,\ \psi,\ u,\ v,\ r,\ \delta,\ \tau]^{\mathsf T},
+\end{equation}
+where $N,E$ are north/east position, $\psi$ is heading, $u,v$ are surge and sway velocity, $r$ is yaw rate, $\delta$ is rudder angle, and $\tau$ is normalized thrust. A high-level command specifies desired heading $\psi_{\mathrm{cmd}}$ and speed $u_{\mathrm{cmd}}$.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYl@{}}
+\toprule
+Quantity & Meaning & Current default \\
+\midrule
+$\Delta t$ & Plant integration timestep & $0.02\,\mathrm{s}$ \\
+$\delta_{\max}$ & Rudder magnitude limit & $35^{\circ}$ \\
+$\dot\delta_{\max}$ & Rudder rate limit & $12^{\circ}/\mathrm{s}$ \\
+$T_\delta, T_\tau$ & Rudder and thrust lag constants & $0.8\,\mathrm{s},\ 1.5\,\mathrm{s}$ \\
+$u_{\max}$ & Nominal command-speed limit & $6\,\mathrm{m/s}$ \\
+$T_{\mathrm{handoff}}$ & Recovery handoff time & $4.0\,\mathrm{s}$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\sectionbar{2. Low-level heading and speed control}
+
+The wrapped heading error and requested rudder are
+\begin{align}
+  e_\psi &= \operatorname{wrap}(\psi_{\mathrm{cmd}}-\psi),\\
+  \delta_{\mathrm{req}} &= \operatorname{clip}
+  \left(k_\psi e_\psi-k_r r,-\delta_{\max},\delta_{\max}\right).
+\end{align}
+The speed controller first estimates the thrust required to balance drag,
+\begin{align}
+  D_{\mathrm{eq}} &= d_u u_{\mathrm{cmd}}+d_{uu}u_{\mathrm{cmd}}|u_{\mathrm{cmd}}|,\\
+  \tau_{\mathrm{req}} &= \operatorname{clip}\left(
+  \frac{D_{\mathrm{eq}}}{F_{\mathrm{forward}}}
+  +k_u(u_{\mathrm{cmd}}-u),-1,1\right).
+\end{align}
+This is proportional heading/speed feedback with yaw-rate damping, not an AI controller.
+
+\sectionbar{3. Actuator model}
+
+Rudder and thrust use a rate-limited first-order response. For actuator $a$,
+\begin{equation}
+  a_{k+1}=a_k+\operatorname{clip}\left(
+  \frac{a_{\mathrm{req}}-a_k}{T_a}\Delta t,
+  -\dot a_{\max}\Delta t,\dot a_{\max}\Delta t\right),
+\end{equation}
+followed by magnitude saturation. This prevents the predictor from assuming instantaneous rudder or propulsion changes.
+
+\sectionbar{4. Nonlinear three-degree-of-freedom vessel model}
+
+The propulsion force is piecewise linear in normalized thrust:
+\begin{equation}
+F_{\mathrm{prop}}=
+\begin{cases}
+F_{\mathrm{forward}}\tau, & \tau\geq 0,\\
+F_{\mathrm{reverse}}\tau, & \tau<0.
+\end{cases}
+\end{equation}
+Rudder side force and yaw moment are
+\begin{equation}
+  F_{\mathrm{rudder}}=-K_yu|u|\delta,
+  \qquad M_{\mathrm{rudder}}=K_nu|u|\delta.
+\end{equation}
+Linear-quadratic damping is used in each body axis:
+\begin{equation}
+  D_u=d_u u+d_{uu}u|u|,\qquad
+  D_v=d_v v+d_{vv}v|v|,\qquad
+  D_r=d_r r+d_{rr}r|r|.
+\end{equation}
+The body-frame equations of motion are
+\begin{align}
+  \dot u &= \frac{F_{\mathrm{prop}}+F_{\mathrm{env},x}-D_u+m_vvr}{m_u},\\
+  \dot v &= \frac{F_{\mathrm{rudder}}+F_{\mathrm{env},y}-D_v-m_uur}{m_v},\\
+  \dot r &= \frac{M_{\mathrm{rudder}}-D_r-(m_v-m_u)uv}{I_z}.
+\end{align}
+The current coefficients describe a synthetic 12 m patrol craft; they have not been calibrated as a certified model of a specific vessel.
+
+\sectionbar{5. Navigation kinematics and numerical rollout}
+
+The earth-frame kinematics are
+\begin{align}
+  \dot N &= \cos\psi\,u-\sin\psi\,v+c_N,\\
+  \dot E &= \sin\psi\,u+\cos\psi\,v+c_E,\\
+  \dot\psi &= r,
+\end{align}
+where $(c_N,c_E)$ is the current vector. Current is applied to earth-frame motion while hull damping uses through-water body velocity. The implementation uses semi-implicit Euler integration: velocities are updated first, then heading and position.
+
+\sectionbar{6. Contact-motion model}
+
+Each contact follows constant-velocity extrapolation:
+\begin{equation}
+  p_i(t)=p_i(0)+v_i t.
+\end{equation}
+The contact heading is taken from declared heading or inferred from velocity, and its hull is an oriented rigid polygon. A5 therefore predicts kinematic motion, but not another vessel's intent, route choice, or future manoeuvre.
+
+\sectionbar{7. Evidence-conditioned bounded uncertainty}
+
+For an object with declared bounded errors, A5 grows the uncertainty radius as
+\begin{equation}
+\begin{split}
+  R(t)={}&R_{\mathrm{position}}+tR_{\mathrm{speed}}
+  +2R_{\mathrm{hull}}\sin\left(\frac{\min(\pi,|\epsilon_\psi|)}{2}\right)\\
+  &+2tV_{\mathrm{coupled}}\sin\left(\frac{\min(\pi,|\epsilon_\psi|)}{2}\right).
+\end{split}
+\end{equation}
+Current uncertainty contributes an additional $t\|\epsilon_{\mathrm{current}}\|$. Observation age is included for contacts. Evidence health conditions these bounds and authority:
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Health & Bound multiplier & Command-speed cap \\
+\midrule
+Healthy & $1.0$ & $6\,\mathrm{m/s}$ \\
+Degraded & $1.5$ & $3\,\mathrm{m/s}$ \\
+Invalid & Unbounded / fail closed & recovery, at most $1\,\mathrm{m/s}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+This is a deterministic bounded-error policy. Covariance is not converted into a hard bound; a missing required bound produces an unknown result rather than invented confidence.
+
+\sectionbar{8. Collision geometry and clearance}
+
+Ownship and contact hulls are oriented polygons. Their swept polygon over a geometry interval is the convex hull of the start and end hull corners. The collision safety margin is
+\begin{equation}
+  m_{\mathrm{col}}(t)=d_{\mathrm{signed}}
+  (P_{\mathrm{own}},P_{\mathrm{contact}})
+  -R_{\mathrm{own}}(t)-R_{\mathrm{contact}}(t)-d_{\mathrm{required}}.
+\end{equation}
+A checked interval is safe when $m_{\mathrm{col}}(t)\geq0$. Conservative center-distance, axis-aligned bounding-box, and synchronized-endpoint screens are used before full swept-polygon geometry. The result is a sampled engineering envelope, not an exact reachable set.
+
+\sectionbar{9. Boundary, corridor, and depth constraints}
+
+For a navigable boundary $B$, the swept-hull margin is
+\begin{equation}
+  m_{\mathrm{boundary}}=
+  d_{\mathrm{signed}}(P_{\mathrm{own}},B)
+  -R_{\mathrm{inflation}}-d_{\mathrm{required}}.
+\end{equation}
+Convex boundaries can also be checked using inward half-planes,
+\begin{equation}
+  d_e(p)=n_e^{\mathsf T}p+c_e,
+\end{equation}
+with every applicable edge margin required to remain non-negative.
+
+For a depth zone, the grounding margin is
+\begin{equation}
+  m_{\mathrm{depth}}=D_{\mathrm{reference}}-D_{\mathrm{uncertainty}}
+  -D_{\mathrm{draft}}-D_{\mathrm{underkeel}}.
+\end{equation}
+The constraint applies when the swept hull or uncertainty tube touches the depth-zone polygon.
+
+\sectionbar{10. Actuator feasibility margin}
+
+At every rollout state,
+\begin{equation}
+  m_{\mathrm{act}}=\min\{\delta-\delta_{\min},\delta_{\max}-\delta,
+  \tau-\tau_{\min},\tau_{\max}-\tau\}.
+\end{equation}
+A negative value indicates an actuator-limit violation.
+
+\sectionbar{11. Predictive recoverability}
+
+A5 first simulates the requested command. At the predicted four-second handoff state, it tests a finite recovery library over a second horizon. The current default library combines heading offsets approximately
+\begin{equation}
+  \Delta\psi\in\{-70^\circ,-35^\circ,0,35^\circ,70^\circ\}
+\end{equation}
+with commanded speeds
+\begin{equation}
+  u_{\mathrm{cmd}}\in\{0,1,2\}\ \mathrm{m/s}.
+\end{equation}
+The request is recoverable only if at least one complete continuation satisfies every applicable constraint. When no continuation is fully safe, the minimum-risk choice maximizes its worst margin:
+\begin{equation}
+  j^*=\arg\max_j\ \min_k m_{j,k}.
+\end{equation}
+
+\sectionbar{12. A4 barrier correction embedded in A5}
+
+If requested-command recoverability fails, A5 invokes A4's finite nonlinear command-lattice search. Candidates are ordered by intervention cost
+\begin{equation}
+  J=w_\psi\left(\frac{\operatorname{wrap}(\psi-\psi_{\mathrm{req}})}{\pi}\right)^2
+  +\left(\frac{u-u_{\mathrm{req}}}{u_{\max}}\right)^2,
+  \qquad w_\psi=4.
+\end{equation}
+For each candidate, the nonlinear plant is simulated for barrier step $\Delta$. Every safety margin $h_i$ must satisfy
+\begin{equation}
+  h_i(\Delta)-\rho\geq\alpha h_i(0),
+  \qquad \alpha=\max(0,1-\lambda\Delta).
+\end{equation}
+With the current defaults, $\lambda=0.2\,\mathrm{s}^{-1}$, $\Delta=2\,\mathrm{s}$, $\alpha=0.6$, and residual reserve $\rho=0.5\,\mathrm{m}$. The corresponding primal violation is
+\begin{equation}
+  p=\max\left(0,\max_i\left[\alpha h_i(0)-(h_i(\Delta)-\rho)\right]\right).
+\end{equation}
+Because the finite lattice is sorted by $J$, the first feasible candidate is the least-intervening feasible lattice command. A5 then subjects it to the full-horizon 3DOF assessment before issuance. This is discrete enumeration, not a continuous QP or nonlinear MPC optimizer.
+
+\sectionbar{13. Decision rule and technical boundary}
+
+The complete decision sequence is:
+\begin{enumerate}[leftmargin=7mm,itemsep=2pt,topsep=3pt]
+  \item condition uncertainty and speed authority on evidence health;
+  \item simulate the requested command and require a safe recovery continuation;
+  \item if that fails, search the A4 barrier-correction lattice and fully revalidate it;
+  \item otherwise issue a checked recovery, minimum-risk command, or deadline fallback;
+  \item treat missing, unbounded, late, or invalid evidence as unknown and fail closed.
+\end{enumerate}
+
+\modelbox{\textbf{Not implemented inside A5.} There is no trained trajectory predictor, transformer, reinforcement-learning policy, Bayesian intent model, Monte Carlo propagation, continuous optimizer, exact reachability calculation, or formal control-barrier-function certificate. State fusion can occur upstream, but A5 itself consumes the fused estimate and explicit bounded errors. Navigation-rule policy is handled separately by A6 rather than inferred by A5.}
+
+\sectionbar{Implementation references}
+
+The equations and decision flow in this note correspond to the current implementation in:
+\begin{itemize}
+  \item \path{services/simulator/horizon_sim/model.py} --- plant, controller, actuator and integration model;
+  \item \path{services/assurance/horizon_assurance/predictive.py} --- bounded rollout, geometry and safety margins;
+  \item \path{services/assurance/horizon_assurance/candidates.py} --- A4 correction and A5 decision/recovery logic;
+  \item \path{services/assurance/horizon_assurance/configuration.py} --- configurable horizons, limits and recovery library.
+\end{itemize}
+
+{\footnotesize\color{hgray}\textbf{Interpretation note.} These models support reproducible software experiments and runtime engineering checks. They do not by themselves establish real-vessel calibration, statistical accuracy, regulatory compliance, or operational safety qualification.}
+
+\end{document}
