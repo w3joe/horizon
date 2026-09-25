@@ -1,0 +1,273 @@
+{
+  "source_report_sha256": "9735b4a617be6f47b5ca327c912f7683cad8f01632bc588e75fec3453c8dc3d2",
+  "source_report_artifact_hash": "bf3e4a70c81ec4f8ae626f375f43cce13c898f1941780828f22783bbb1981ed2",
+  "evaluation_records": 10110,
+  "positives": 33,
+  "negatives": 10077,
+  "prevalence": 0.0032640949554896144,
+  "method": "Cached activation rescoring; original references and thresholds; no model execution, fitting, or held-out access. Equal scores enter each threshold together. ROC area uses trapezoids; grouped AP uses recall increments times precision. Export removes only collinear axis-aligned points.",
+  "scorer_sha256": "0215db86add5931ec812bed4f6d345060da128152e38b4d6468dd1525d54f746",
+  "builder_sha256": "f29d345ca9038776e653d8d6c40b255a3175ef550b545823e0d0dd76c9720aad",
+  "verified_inputs": {
+    "kope75-00-00013780-00014195/nominal/features": "32fdfa84bef3ba65d6ba3bd3355fd00de8e1f98ee94bdd13339e5c83a428dbef",
+    "kope75-00-00013780-00014195/nominal/labels": "df4f9167669080b047ac85bf600c47543fe8a8c81cb910f56aafaf682a4d49d0",
+    "kope75-00-00013780-00014195/blur-v1/features": "62b2d0c299a8a1c35309ef545970def0158f9d0838a3d635362342636815b8cb",
+    "kope75-00-00013780-00014195/blur-v1/labels": "75e2429aa9ab2dde6b3f6403af88a8b39ebced55a0d8d213b132dcdb08a26a9d",
+    "kope75-00-00013780-00014195/underexposure-v1/features": "443210dfa100cff5a45a2fd60801963278dd6af6e6e5ce84db26a269b461c05c",
+    "kope75-00-00013780-00014195/underexposure-v1/labels": "a60677aefae2dae79ed0fa87677cad4ad9f3e272b78d31861a225af005d8c9c8",
+    "kope75-00-00013780-00014195/occlusion-v1/features": "67d201a1b09d68cc42c3fcd457d1efccbaac56768d0400c1f64a1d43f014d057",
+    "kope75-00-00013780-00014195/occlusion-v1/labels": "c06952fb491e5f32df30e46557f5f561d891f5569a52c0296f21017c0210afc8",
+    "kope75-00-00013780-00014195/jpeg-v1/features": "e358d631e23b2e82af672661cf443031b2857f7eb94d439bc2dcbec914d6c396",
+    "kope75-00-00013780-00014195/jpeg-v1/labels": "84421e4cda4698020bdcda2a316d9b94eed32d5cf93e5d4301c1cc4a429f445a",
+    "kope75-00-00013780-00014195/temporal-drop-v1/features": "bdb6977b4689286d0e87fdb6f0c6b55e6a50750844dc8c4bfdc67732efba7275",
+    "kope75-00-00013780-00014195/temporal-drop-v1/labels": "529791d39d297a631d0ae109eed2f2e502d4c6e0802e2291f2c77c1362d66f5e",
+    "kope75-00-00021500-00022160/nominal/features": "9ecd950b1306e3c43759a0c9026711c97654994d2a0b0acba36b3af6afa11465",
+    "kope75-00-00021500-00022160/nominal/labels": "a9f795bc34e9b383fbf8b0b1fd344011d15ac24d3766961450dea0d94280d702",
+    "kope75-00-00021500-00022160/blur-v1/features": "4da4a3519969bd774e302a8bf94735255ad62a08768c42837d46cc5784eb030d",
+    "kope75-00-00021500-00022160/blur-v1/labels": "0169f0e3e14111e73895ef67a3f855b80aec96ac090cbb8d798eeefa4bbec528",
+    "kope75-00-00021500-00022160/underexposure-v1/features": "718f209fafc716eb17ab9d7975b7814e1d59d8d22f42074fb5dc53c73acfa684",
+    "kope75-00-00021500-00022160/underexposure-v1/labels": "fd9b3f203ddaf9a5ef13a02e579a1f0b0cde7fed785e294d6d886d99bad7fa68",
+    "kope75-00-00021500-00022160/occlusion-v1/features": "834dc25d3ee006815b81917f46320d9157f4dc3be9c22959c057d8a5555c4684",
+    "kope75-00-00021500-00022160/occlusion-v1/labels": "51729648b4b6f2b72e9fc2e5bfed52d381c7dc7c3e6ca64a6f7b8f2d7e65d57d",
+    "kope75-00-00021500-00022160/jpeg-v1/features": "52c41426b37b872eb00c6c08dd3f59c78d513a7235dc5d6bef90da3259a497f1",
+    "kope75-00-00021500-00022160/jpeg-v1/labels": "3078ab0621ccbaf9bcf70b1e0bb30c1ce81d13a6c33602ec7b61b8a71249f98c",
+    "kope75-00-00021500-00022160/temporal-drop-v1/features": "be5955e83235edaea1d5569a3aed69a285fb519902d8c08f0bfac88b08d72c84",
+    "kope75-00-00021500-00022160/temporal-drop-v1/labels": "fcbfd2e39332b0f20a45cf76da89061ac27a6cfa48f12dac214cd49543c9a448",
+    "kope75-00-00037550-00037860/nominal/features": "17964e648894cdfcfb120809f28537a8f69e4852c53002d2d0be2e411f3c28ee",
+    "kope75-00-00037550-00037860/nominal/labels": "a5b0faf682e7e393e9d8ba3681d0dc92bf4fb3ee9e839142f68de9f8dc4e5e48",
+    "kope75-00-00037550-00037860/blur-v1/features": "ca84dd39b6eabb0428cbb5d4267e7924c23236126df41c47139a994457280eae",
+    "kope75-00-00037550-00037860/blur-v1/labels": "ed89e1ed9d09c2946af58f6c48a872384dc9f0acfb57aaa1b19d17f6378baeec",
+    "kope75-00-00037550-00037860/underexposure-v1/features": "1553df50d70525750d09447a65cb2c4b5b9f8c4b00b6dd26e85d553194b25b42",
+    "kope75-00-00037550-00037860/underexposure-v1/labels": "1b93520945c31d308aa26050ce3812b201ff2de96f0f55e54007489e8b74208f",
+    "kope75-00-00037550-00037860/occlusion-v1/features": "1e331057e229caff92510bd87351e6a200a1cd4d01917e751dc37813a6ee93c2",
+    "kope75-00-00037550-00037860/occlusion-v1/labels": "f11504ce07717cd2ec50c5a1b201cab166778c06d9c552f3ed0da78de6150dd9",
+    "kope75-00-00037550-00037860/jpeg-v1/features": "5ff78211cb1207abf86af0a2477e54e13587aa6c0b55a0694966dbdf23eff8b6",
+    "kope75-00-00037550-00037860/jpeg-v1/labels": "7c4558140a2ff8c5df873a35cf2fe1e052a38f4d413023a4b6b4de7ecc9096e0",
+    "kope75-00-00037550-00037860/temporal-drop-v1/features": "ca74ca069d99c3527d508b7f97a9f274cc5eaa177662764a9cd39f02b6ee75bd",
+    "kope75-00-00037550-00037860/temporal-drop-v1/labels": "4e438593f0b0adc3aed0db343ad94dcbb7509919d2eef3e098fa1fb499d01ce9",
+    "kope75-00-00062200-00062500/nominal/features": "f97175e9372e66fc904471421ad0213ba60724f241990858e83026cb2f991a80",
+    "kope75-00-00062200-00062500/nominal/labels": "f3f33b1dd8b05032237819bc68bd6ce4126084602cea76bf1de12eafd3ade958",
+    "kope75-00-00062200-00062500/blur-v1/features": "89a9b148828cadac50caf4924a25bba94091b4fbda2e1cf7a6191299976baa9f",
+    "kope75-00-00062200-00062500/blur-v1/labels": "9776336cf646d59e530f1b0d994d0874be8def5b0e1e2f9e21bc3b3e0d8a70d3",
+    "kope75-00-00062200-00062500/underexposure-v1/features": "345556c1a6916e3f507a92cbc166ba2a6ed6eed1bcb374d79a3fa47b9c3cea6b",
+    "kope75-00-00062200-00062500/underexposure-v1/labels": "f7378a796b2832ad882cd5a34a6a9e58462feadaf6b060953239654b92782a22",
+    "kope75-00-00062200-00062500/occlusion-v1/features": "256fdef6bc9f0f89ae1b577272e73b5f9879cc20a46c0858493b93f3ffd15d63",
+    "kope75-00-00062200-00062500/occlusion-v1/labels": "95067748132bf56056e71f7a7f2b3b4faf975685a721089083b2f400ba0bc15e",
+    "kope75-00-00062200-00062500/jpeg-v1/features": "691c856a97ceb4e4c94cf4d5a16ef7e2778670b141795d5168cb70edee704c22",
+    "kope75-00-00062200-00062500/jpeg-v1/labels": "a8cb3362621354ab8c03b240c1e96463485c5bd31a08f78e5e317355182c2a48",
+    "kope75-00-00062200-00062500/temporal-drop-v1/features": "d33246417321df18e07ebc0f1b2b7c45e0172369e518e343bd6f9dd377c0b2c7",
+    "kope75-00-00062200-00062500/temporal-drop-v1/labels": "33cb4402209db976b36aa3110181ed4b2650ac13a26baaba971c41d7ecfddb22"
+  },
+  "methods": {
+    "H0": {
+      "threshold": 0.7331234812736511,
+      "metrics": {
+        "sample_count": 10110,
+        "positive_count": 33,
+        "negative_count": 10077,
+        "confusion": {
+          "true_positive": 3,
+          "true_negative": 9900,
+          "false_positive": 177,
+          "false_negative": 30
+        },
+        "accuracy": 0.9795252225519288,
+        "accuracy_wilson_95": [
+          0.9765770380827102,
+          0.9821091252441901
+        ],
+        "balanced_accuracy": 0.5366721697474898,
+        "precision": 0.016666666666666666,
+        "recall": 0.09090909090909091,
+        "recall_wilson_95": [
+          0.03140337104926305,
+          0.23572943534351032
+        ],
+        "specificity": 0.9824352485858887,
+        "false_positive_rate": 0.01756475141411129,
+        "f1": 0.028169014084507043,
+        "auroc": 0.6637677760035605,
+        "average_precision": 0.010295118928862384
+      },
+      "grouped_average_precision": 0.010295118928862384,
+      "files": {
+        "roc": {
+          "points": 66,
+          "sha256": "eb1a2bcbe72fe6a5f8bf6e2083a55ad8873dda2efe59ec516ef826399227a6f6"
+        },
+        "pr": {
+          "points": 67,
+          "sha256": "e8860b2bf8b1dfed55507a7fc6013120d03844e1c48204568769ff5c78de689a"
+        }
+      }
+    },
+    "H2": {
+      "threshold": 39.97827691740072,
+      "metrics": {
+        "sample_count": 10110,
+        "positive_count": 33,
+        "negative_count": 10077,
+        "confusion": {
+          "true_positive": 0,
+          "true_negative": 9261,
+          "false_positive": 816,
+          "false_negative": 33
+        },
+        "accuracy": 0.9160237388724035,
+        "accuracy_wilson_95": [
+          0.9104579865475594,
+          0.9212734497051104
+        ],
+        "balanced_accuracy": 0.45951175945221795,
+        "precision": 0.0,
+        "recall": 0.0,
+        "recall_wilson_95": [
+          0.0,
+          0.10427343003561192
+        ],
+        "specificity": 0.9190235189044359,
+        "false_positive_rate": 0.0809764810955641,
+        "f1": 0.0,
+        "auroc": 0.6387964190881726,
+        "average_precision": 0.004249115977430738
+      },
+      "grouped_average_precision": 0.004256863956542187,
+      "files": {
+        "roc": {
+          "points": 66,
+          "sha256": "f7f4dd329f3fe7117893a4e5ad262dcd8802c8f45272d89842a3ac244c5785b1"
+        },
+        "pr": {
+          "points": 66,
+          "sha256": "cd34120bda24eb82956c3d6dfe56a09ce84f7e91c55e71a9f30cd4644d6149c3"
+        }
+      }
+    },
+    "H3": {
+      "threshold": 0.9851951608569004,
+      "metrics": {
+        "sample_count": 10110,
+        "positive_count": 33,
+        "negative_count": 10077,
+        "confusion": {
+          "true_positive": 1,
+          "true_negative": 9317,
+          "false_positive": 760,
+          "false_negative": 32
+        },
+        "accuracy": 0.9216617210682493,
+        "accuracy_wilson_95": [
+          0.9162622523591638,
+          0.9267408652692556
+        ],
+        "balanced_accuracy": 0.4774418793472083,
+        "precision": 0.001314060446780552,
+        "recall": 0.030303030303030304,
+        "recall_wilson_95": [
+          0.005369272089651725,
+          0.15319061673168066
+        ],
+        "specificity": 0.9245807283913863,
+        "false_positive_rate": 0.07541927160861372,
+        "f1": 0.002518891687657431,
+        "auroc": 0.5209974108455799,
+        "average_precision": 0.0035724334213142403
+      },
+      "grouped_average_precision": 0.003582262418876707,
+      "files": {
+        "roc": {
+          "points": 65,
+          "sha256": "57909d41a0faeab695fd0d507cc9998a4b740e369b11c31ba35f01e7f90ecf21"
+        },
+        "pr": {
+          "points": 65,
+          "sha256": "9832e42dca7df055a81773ae2b38632ef64918098b2d4ac817bc76be7e256275"
+        }
+      }
+    },
+    "H4": {
+      "threshold": 1.5358523539894104,
+      "metrics": {
+        "sample_count": 10110,
+        "positive_count": 33,
+        "negative_count": 10077,
+        "confusion": {
+          "true_positive": 0,
+          "true_negative": 10003,
+          "false_positive": 74,
+          "false_negative": 33
+        },
+        "accuracy": 0.9894164193867458,
+        "accuracy_wilson_95": [
+          0.9872275148450874,
+          0.9912335280883912
+        ],
+        "balanced_accuracy": 0.4963282723032649,
+        "precision": 0.0,
+        "recall": 0.0,
+        "recall_wilson_95": [
+          0.0,
+          0.10427343003561192
+        ],
+        "specificity": 0.9926565446065297,
+        "false_positive_rate": 0.007343455393470255,
+        "f1": 0.0,
+        "auroc": 0.6414577450600076,
+        "average_precision": 0.006643478412591994
+      },
+      "grouped_average_precision": 0.006649662560937462,
+      "files": {
+        "roc": {
+          "points": 66,
+          "sha256": "a95160395ed40d94fa17cc098456bf2d55e90435e8e34535fab6654ea51a01b9"
+        },
+        "pr": {
+          "points": 66,
+          "sha256": "01759acbb0784944a900564d430eeb17a8658bfa66aae2ba4465c1d42b6f25ed"
+        }
+      }
+    },
+    "H5": {
+      "threshold": 2.731332008015018,
+      "metrics": {
+        "sample_count": 10110,
+        "positive_count": 33,
+        "negative_count": 10077,
+        "confusion": {
+          "true_positive": 7,
+          "true_negative": 9884,
+          "false_positive": 193,
+          "false_negative": 26
+        },
+        "accuracy": 0.9783382789317507,
+        "accuracy_wilson_95": [
+          0.9753135834588877,
+          0.9809995943152234
+        ],
+        "balanced_accuracy": 0.596484343283986,
+        "precision": 0.035,
+        "recall": 0.21212121212121213,
+        "recall_wilson_95": [
+          0.1067588656643618,
+          0.3775197758712936
+        ],
+        "specificity": 0.9808474744467599,
+        "false_positive_rate": 0.019152525553240096,
+        "f1": 0.06008583690987125,
+        "auroc": 0.7121076799552536,
+        "average_precision": 0.0514644965621453
+      },
+      "grouped_average_precision": 0.05146449656214531,
+      "files": {
+        "roc": {
+          "points": 67,
+          "sha256": "9df2f50d52c20f9412ab7b1d0d8dd32bc1b8d745f2fe3860fa905dd76c5eb797"
+        },
+        "pr": {
+          "points": 67,
+          "sha256": "faeca916a2f4a262a05887afebb9b1489c862cce19b1cbaaf62138c54e0ca4f2"
+        }
+      }
+    }
+  }
+}

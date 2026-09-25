@@ -1,0 +1,105 @@
+{
+  "derived_on": "2026-09-25",
+  "method": "Descriptive reanalysis of archived per-frame timings; no model execution. p95 uses linear interpolation at (n-1)*0.95; all frames retained.",
+  "compute_subtotal_definition": "inference_ms + device_to_cpu + cpu_resize + health_features; hook time is already inside inference_ms.",
+  "excluded_stages": [
+    "decode",
+    "preprocessing",
+    "model load",
+    "mask/image writing",
+    "publication",
+    "H5 SAE scoring",
+    "fusion",
+    "A6 authorization",
+    "gate/actuation"
+  ],
+  "runs": [
+    {
+      "run_id": "a07-modd2-dev-runtime-alignment-003",
+      "features_path": "horizon-runs/compute/a07-modd2-dev-runtime-alignment-003/features.jsonl",
+      "features_sha256": "f924129d05e2c0ff61a4dcbd827e66f2f5319f856ee6be4877b05c25bc89f56e",
+      "manifest_sha256": "474ab75388a8c5d1af224e23c28a9bef68ab6474f5b8a19fbb2bd4f160b78cd9",
+      "device": "cuda",
+      "fp16": true,
+      "frame_count": 296,
+      "stages": {
+        "forward": {
+          "count": 296,
+          "p50_ms": 34.906797499999996,
+          "p95_ms": 37.067316500000004,
+          "maximum_ms": 40.361771
+        },
+        "cpu_health": {
+          "count": 296,
+          "p50_ms": 108.3084115,
+          "p95_ms": 125.90546375,
+          "maximum_ms": 141.468908
+        },
+        "compute_subtotal": {
+          "count": 296,
+          "p50_ms": 144.74544500000002,
+          "p95_ms": 162.92435825,
+          "maximum_ms": 185.360673
+        }
+      }
+    },
+    {
+      "run_id": "a07-wasrt-sequence-003",
+      "features_path": "horizon-runs/compute/a07-wasrt-sequence-003/features.jsonl",
+      "features_sha256": "a6836aa0ccd273134168e0a79f32eaa2589d0d6eab53d1e1285481a00be4d721",
+      "manifest_sha256": "0c7e6b2817d1de14d5150fde888dace06f82e3a56b397c9435e38a35bfd677cb",
+      "device": "cuda",
+      "fp16": true,
+      "frame_count": 85,
+      "stages": {
+        "forward": {
+          "count": 85,
+          "p50_ms": 32.147367,
+          "p95_ms": 33.3222134,
+          "maximum_ms": 34.601179
+        },
+        "cpu_health": {
+          "count": 85,
+          "p50_ms": 62.349011,
+          "p95_ms": 70.1642236,
+          "maximum_ms": 71.732883
+        },
+        "compute_subtotal": {
+          "count": 85,
+          "p50_ms": 95.469822,
+          "p95_ms": 103.4843746,
+          "maximum_ms": 104.748279
+        }
+      }
+    },
+    {
+      "run_id": "a07-modd2-dev-kope81-00006800",
+      "features_path": "horizon-runs/compute/a07-modd2-dev-kope81-00006800/features.jsonl",
+      "features_sha256": "6ecbf7bf663cc2899d712f8713d937b5ac8bcaacbd19a14bf351393f74e2cacb",
+      "manifest_sha256": "8591eb97d9ae7dc0aedb83322d94b195e7af25075d8a67cd2fc36875452fa642",
+      "device": "mps",
+      "fp16": false,
+      "frame_count": 296,
+      "stages": {
+        "forward": {
+          "count": 296,
+          "p50_ms": 799.9213125,
+          "p95_ms": 819.50467675,
+          "maximum_ms": 839.923459
+        },
+        "cpu_health": {
+          "count": 296,
+          "p50_ms": 75.36933300000001,
+          "p95_ms": 91.316531,
+          "maximum_ms": 104.341334
+        },
+        "compute_subtotal": {
+          "count": 296,
+          "p50_ms": 877.3916865,
+          "p95_ms": 903.1784682499999,
+          "maximum_ms": 936.473043
+        }
+      }
+    }
+  ]
+}

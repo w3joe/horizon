@@ -6,7 +6,7 @@ An autonomous vessel can receive stale sensor data, trust a frozen camera, or pr
 
 This hackathon prototype brings that idea into a working maritime simulator: a replaceable decision AI, sensor fusion, predictive safety checks, an exclusive actuator gate, and a console that shows **what the AI proposed, what was actually issued, and why**.
 
-[Try the demo](#run-locally) · [Judge walkthrough](#a-three-minute-judge-walkthrough) · [Architecture](#how-it-works) · [Measured results](#what-we-have-tested) · [Technical docs](#explore-the-repository)
+[White paper (PDF)](whitepaper/horizon-runtime-assurance-white-paper.pdf) · [LaTeX source](whitepaper/) · [Try the demo](#run-locally) · [Judge walkthrough](#a-three-minute-judge-walkthrough) · [Architecture](#how-it-works) · [Measured results](#what-we-have-tested) · [Technical docs](#explore-the-repository)
 
 ![Recorded A5 safety replay: the protected vessel maintains clearance while the evaluation-only counterfactual reaches a collision.](docs/demo/screenshots/hackathon-recorded-comparison.jpg)
 
