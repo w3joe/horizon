@@ -79,6 +79,8 @@ class PerceptionLaunchConfig:
     reference_artifact_sha256: str | None = None
     reference_version: str | None = None
     reference_hash: str | None = None
+    health_mode: str = "shadow_only"
+    simulation_warning_threshold: float | None = None
 
     def command(
         self,
@@ -142,6 +144,8 @@ class PerceptionLaunchConfig:
             "method": self.method,
             "reference_version": self.reference_version,
             "reference_hash": self.reference_hash,
+            "health_mode": self.health_mode,
+            "simulation_warning_threshold": self.simulation_warning_threshold,
             "pose_reactive": False,
             "metric_contacts_usable": False,
             "camera_free_space_usable": False,
@@ -257,6 +261,20 @@ def load_perception_config(
     elif reference is not None:
         raise ValueError(f"{method} must not declare a reference_artifact")
 
+    health_mode = health_monitor.get("mode", "shadow_only")
+    if health_mode not in {"shadow_only", "simulation_warning"}:
+        raise ValueError("unsupported health monitor mode")
+    warning_threshold = None
+    if health_mode == "simulation_warning":
+        warning = health_monitor.get("simulation_warning")
+        if method != "H5" or not isinstance(warning, dict):
+            raise ValueError("simulation_warning requires H5 and threshold configuration")
+        if warning.get("reference_hash") != reference_hash:
+            raise ValueError("simulation warning threshold reference mismatch")
+        warning_threshold = _finite_number(
+            warning.get("threshold"), "simulation warning threshold", minimum=1e-12, maximum=1e12
+        )
+
     source_dir = external_data_root / "sources/WaSR-T"
     weights = external_data_root / "weights/wasrt_mastr1325.pth"
     sequence_root = (
@@ -296,6 +314,8 @@ def load_perception_config(
         reference_artifact_sha256=reference_artifact_sha256,
         reference_version=reference_version,
         reference_hash=reference_hash,
+        health_mode=health_mode,
+        simulation_warning_threshold=warning_threshold,
     )
 
 

@@ -163,12 +163,48 @@ held-out gates pass.
 
 H5 uses the same command shape with `--method H5` and the validated H5
 reference. Its first frame remains `unknown` because a previous temporal-fusion
-embedding is required; later frames may record reconstruction and temporal-code
-distance scores. Without a frozen calibration artifact, those scores remain
-shadow diagnostics and cannot increase camera authority.
+embedding is required; later frames record reconstruction and temporal-code
+distance scores. Camera health and missed-obstacle risk remain unknown without
+the required calibration and validation.
+
+### Active H5 warnings in the simulation
+
+The checked-in `configs/perception/recorded-camera-live.json` now selects
+`health_monitor.mode: simulation_warning`. Start the simulator stack with:
+
+```bash
+.venv/bin/python scripts/launch.py \
+  --perception-config configs/perception/recorded-camera-live.json
+```
+
+The experimental trigger is the H5 representation score at or above
+`2.731332008015018`, taken from the `kope67` threshold fit in the
+[proxy accuracy experiment](h-stack-accuracy.md). The config binds it to that
+experiment's H5 reference hash and records the source report hash. It is a demo
+threshold, not a calibrated missed-obstacle probability.
+
+For each fresh temporal pair, the producer publishes a separate
+`simulation_h5_warning` with status `warning`, `below_threshold`, or `unknown`.
+Fusion forwards it with the exact frame and inference lineage only in simulator
+context. The decision-AI fixture caps its proposed speed at **1 m/s** when the
+status is `warning`; A5 and the actuator gate still validate the proposed
+command. The inference trace records `candidate_scores.h5_simulation_warning`
+and the consumed health ID so the response is auditable.
+
+A below-threshold score leaves the fixture's ordinary navigation proposal in
+place. Missing, expired, invalid or first-frame evidence remains unknown; it
+does not assert healthy perception. Temporal pairs cannot cross source sequences
+or reuse an expired previous frame. Recorded video still does not respond to
+the simulated boat, so this demonstrates a control response to recorded H5
+evidence, not closed-loop camera validation.
+
+Set `health_monitor.mode` back to `shadow_only` to collect scores without the
+simulation warning response. Other decision-AI implementations do not acquire
+this behavior automatically. Camera geometry, free-space permission, risk bands,
+and real-vessel authority are unchanged.
 
 No calibration or held-out labels are consumed by live mode. H0/H1 may expose
 mechanistic conditions, but missed-obstacle risk remains unknown. H2-H5 may be
-run for development diagnostics, including H4/H5 shadow scoring, but cannot gain
-runtime health authority until their frozen calibration, matched controls, and
-held-out claim gates pass.
+run for development diagnostics, including H4/H5 shadow scoring and H5's
+simulation-only warning response, but cannot gain runtime health authority until
+their frozen calibration, matched controls, and held-out claim gates pass.

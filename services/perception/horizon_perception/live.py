@@ -165,6 +165,7 @@ class RecordedCameraObservationBuilder:
         method_id: str = "H0",
         calibration: CalibrationArtifact | None = None,
         reference: ReferenceArtifact | None = None,
+        simulation_warning: dict[str, Any] | None = None,
     ):
         if method_id not in {"H0", "H1", "H2", "H3", "H4", "H5"}:
             raise ValueError("unsupported health method")
@@ -179,7 +180,18 @@ class RecordedCameraObservationBuilder:
         self.method_id = method_id
         self.calibration = calibration
         self.reference = reference
+        self.simulation_warning = copy.deepcopy(simulation_warning)
+        if simulation_warning is not None:
+            threshold = simulation_warning.get("threshold")
+            if (
+                method_id != "H5" or reference is None
+                or simulation_warning.get("reference_hash") != reference.artifact_hash
+                or isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+                or not math.isfinite(threshold) or threshold <= 0
+            ):
+                raise ValueError("simulation warning requires H5, a positive threshold and matching reference")
         self._previous_embedding: list[float] | None = None
+        self._previous_frame: RecordedFrame | None = None
 
     def build(
         self,
@@ -225,10 +237,18 @@ class RecordedCameraObservationBuilder:
             activation = evidence.activation_summaries.get(self.reference.layer, {})
             embedding = list(activation.get("pooled_mean", []))
             health_request["embedding"] = embedding
-            if self.method_id == "H5" and self._previous_embedding is not None:
+            previous = self._previous_frame
+            if (
+                self.method_id == "H5" and self._previous_embedding is not None
+                and previous is not None and previous.sequence_id == frame.sequence_id
+                and previous.sequence < frame.sequence
+                and previous.captured_monotonic_ns < frame.captured_monotonic_ns
+                <= previous.valid_until_monotonic_ns
+            ):
                 health_request["previous_embedding"] = self._previous_embedding
             if self.method_id == "H5":
                 self._previous_embedding = embedding
+                self._previous_frame = frame
         rich_health = evaluate(health_request, self.calibration, self.reference)
         rich_health["camera_free_space_usable"] = False
         rich_health["missed_obstacle_risk"] = {
@@ -346,6 +366,31 @@ class RecordedCameraObservationBuilder:
                 "_collector": {"ancestor_ids": [frame.frame_id, perception_id]},
             },
         }
+        if self.simulation_warning is not None:
+            # Use exactly the representation score evaluated by the proxy study,
+            # not the maximum with conventional checks. This is a demo trigger,
+            # never a calibrated risk band or a healthy-camera assertion.
+            statistics = rich_health.get("statistics", {})
+            reconstruction = statistics.get("reconstruction_mse")
+            distance = statistics.get("temporal_code_distance")
+            score = None
+            if (
+                reconstruction is not None and distance is not None
+                and completed_monotonic_ns < frame.valid_until_monotonic_ns
+            ):
+                score = reconstruction + self.reference.parameters["temporal_weight"] * distance
+            threshold = self.simulation_warning["threshold"]
+            state = "unknown" if score is None else (
+                "warning" if score >= threshold else "below_threshold"
+            )
+            neural["payload"]["simulation_h5_warning"] = {
+                "mode": "simulation_warning",
+                "status": state,
+                "score": score,
+                "threshold": threshold,
+                "reference_hash": self.reference.artifact_hash,
+            }
+            shared_health["reason_codes"].append(f"H5_SIMULATION_{state.upper()}")
         json.dumps([perception, neural], allow_nan=False)
         return [perception, neural]
 

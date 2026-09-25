@@ -65,6 +65,15 @@ def main() -> None:
     args = parser.parse_args()
 
     geometry = _load_geometry(args.geometry_config, args.calibration)
+    monitor = json.loads(args.geometry_config.read_text()).get("health_monitor", {})
+    monitor_mode = monitor.get("mode", "shadow_only")
+    if monitor_mode not in {"shadow_only", "simulation_warning"}:
+        raise ValueError("unsupported health monitor mode")
+    simulation_warning = None
+    if monitor_mode == "simulation_warning" and args.method == monitor.get("method"):
+        simulation_warning = monitor.get("simulation_warning")
+        if not isinstance(simulation_warning, dict):
+            raise ValueError("simulation_warning configuration is required")
     reference = (
         ReferenceArtifact.load(args.reference_artifact)
         if args.reference_artifact is not None
@@ -109,6 +118,7 @@ def main() -> None:
         method_id=args.method,
         calibration=health_calibration,
         reference=reference,
+        simulation_warning=simulation_warning,
     )
     service = LiveRecordedCameraService(
         infer=inference.process,

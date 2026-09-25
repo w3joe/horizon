@@ -136,7 +136,8 @@ def test_valid_config_resolves_one_bounded_left_camera_source(tmp_path: Path, mo
     assert not any(str(data) in str(value) for value in public.values())
 
 
-def test_h5_config_pins_reference_and_launches_shadow_monitor(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["shadow_only", "simulation_warning"])
+def test_h5_config_pins_reference_and_launches_selected_mode(tmp_path: Path, mode: str) -> None:
     repository, data, value = _write_fixture(tmp_path)
     reference = data / "references/neural-health/h5.json"
     reference.parent.mkdir(parents=True)
@@ -147,7 +148,8 @@ def test_h5_config_pins_reference_and_launches_shadow_monitor(tmp_path: Path) ->
     }))
     value["health_monitor"] = {
         "method": "H5",
-        "mode": "shadow_only",
+        "mode": mode,
+        "simulation_warning": {"threshold": 2.731332008015018, "reference_hash": "a" * 64},
         "reference_artifact": {
             "data_relative_path": "references/neural-health/h5.json",
             "sha256": hashlib.sha256(reference.read_bytes()).hexdigest(),
@@ -169,6 +171,17 @@ def test_h5_config_pins_reference_and_launches_shadow_monitor(tmp_path: Path) ->
     assert command[command.index("--method") + 1] == "H5"
     assert command[command.index("--reference-artifact") + 1] == str(reference)
     assert config.public_identity()["reference_version"] == "h5-fixture-v1"
+    assert config.public_identity()["health_mode"] == mode
+    if mode == "simulation_warning":
+        assert config.public_identity()["simulation_warning_threshold"] == 2.731332008015018
+        for changes in ({"threshold": -1}, {"reference_hash": "b" * 64}):
+            invalid = json.loads(json.dumps(value))
+            invalid["health_monitor"]["simulation_warning"].update(changes)
+            config_path.write_text(json.dumps(invalid))
+            with pytest.raises(ValueError, match="simulation warning"):
+                perception_runtime.load_perception_config(
+                    config_path, repository_root=repository, external_data_root=data
+                )
 
 
 def test_h5_config_fails_closed_when_reference_is_missing(tmp_path: Path) -> None:

@@ -529,7 +529,7 @@ class FusionEngine:
         if source is None or nested is None:
             return None
         payload = source["payload"]
-        return {
+        context = {
             "context_type": "RecordedCameraPerceptionContext",
             "health_id": str(nested["health_id"]),
             "health_status": str(nested["status"]),
@@ -547,6 +547,15 @@ class FusionEngine:
             "metric_contacts_usable": False,
             "calibrated_risk_band": "unknown",
         }
+        if (
+            nested["method_id"] == "H5"
+            and self.snapshot is not None and self.snapshot.get("display_only") is True
+            and self.reference is not None
+            and self.reference.get("reference_type") == "SimulatorReference"
+            and isinstance(payload.get("simulation_h5_warning"), dict)
+        ):
+            context["simulation_h5_warning"] = copy.deepcopy(payload["simulation_h5_warning"])
+        return context
 
     def _health(self, now_ns: int, trace: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         records: list[dict[str, Any]] = []

@@ -12,7 +12,7 @@ import jsonschema
 import pytest
 
 from horizon_collector.store import CollectorStore
-from horizon_assurance.candidates import A1ThresholdSimplex
+from horizon_assurance.candidates import A1ThresholdSimplex, A5EvidenceHybrid
 from horizon_assurance.configuration import AssuranceConfig, NavigationReference
 from horizon_fusion import http_api as fusion_http_api
 from horizon_fusion.core import FusionEngine, NotReady
@@ -481,3 +481,100 @@ def test_exact_legacy_baseline_is_the_only_missing_field_compatibility() -> None
     assert future_mode["status"] == "unknown"
     assert future_mode["capability"] == "unavailable"
     assert future_mode["reason_codes"] == ["OPERATING_MODE_QUALIFICATION_MISSING"]
+
+
+@pytest.mark.parametrize("score, expected_speed", [(1.0, 4.0), (3.0, 1.0), (None, 4.0)])
+def test_h5_simulation_warning_changes_proposal_and_reaches_a5_gate(score, expected_speed) -> None:
+    now_ns = time.monotonic_ns()
+    record = neural_observation(now_ns)
+    record["payload"]["perception_health"].update(method_id="H5", score=score)
+    warning = {
+        "mode": "simulation_warning",
+        "status": "unknown" if score is None else ("warning" if score >= 2.7 else "below_threshold"),
+        "score": score,
+        "threshold": 2.7,
+        "reference_hash": "a" * 64,
+    }
+    record["payload"]["simulation_h5_warning"] = warning
+    batch = batch_with_neural(now_ns, record)
+    engine = FusionEngine()
+    engine.update_batch(batch, now_ns=now_ns)
+    snapshot = engine.decision_snapshot(now_ns=now_ns)
+    context = engine.perception_context(now_ns=now_ns)
+    assert context["simulation_h5_warning"] == warning
+    assert context["health_status"] == "unknown"
+    assert context["camera_free_space_usable"] is False
+    policy = FixturePolicy("nominal")
+    proposal, trace = policy.propose(snapshot, context)
+    assert proposal["command"]["speed_mps"] == expected_speed
+    assert trace["candidate_scores"]["h5_simulation_warning"] == (1.0 if expected_speed == 1.0 else 0.0)
+    assert context["health_id"] in trace["consumed_input_ids"]
+    governor = engine.assemble(
+        proposal, trace,
+        now_ns=max(now_ns, trace["completed_monotonic_ns"]),
+        request_monotonic_ns=now_ns, requested_perception_context=context,
+    )
+    reference = NavigationReference.from_simulator_reference(batch["reference"])
+    config = AssuranceConfig(prediction_horizon_s=5.0, recovery_horizon_s=5.0)
+    decision = A5EvidenceHybrid(reference, config).evaluate(governor)
+    assert decision["action"] == "pass", decision
+    assert decision["issued_command"]["speed_mps"] == expected_speed
+
+    class Plant:
+        def __init__(self):
+            self.envelopes = []
+
+        def command(self, envelope):
+            self.envelopes.append(deepcopy(envelope))
+            received = time.monotonic_ns()
+            return {
+                "contract_type": "GateReceipt", "schema_version": "0.1.0",
+                "receipt_id": "h5-demo-receipt", "run_id": envelope["run_id"],
+                "branch_id": envelope["branch_id"], "decision_id": envelope["decision_id"],
+                "command_id": envelope["command_id"], "authority": envelope["authority"],
+                "accepted": True, "reason_codes": [],
+                "received_monotonic_ns": received, "actuated_monotonic_ns": received,
+                "actual_command": envelope["command"],
+            }
+
+        def snapshot(self):
+            return {"simulation_time_s": governor["simulation_time_s"]}
+
+    plant = Plant()
+    gate = ActuatorGate(
+        run_id=governor["run_id"], branch_id=governor["branch_id"],
+        plant=plant, reference=reference, decision_token="decision-secret",
+        recovery_token="recovery-secret", operator_token="operator-secret",
+        config=GateConfig(startup_interlock_required=False, asynchronous_recovery_cache=False),
+        assurance_config=config,
+    )
+    try:
+        receipt = gate.submit(decision, governor, token="decision-secret")
+        assert receipt["accepted"], receipt
+        assert plant.envelopes[0]["command"]["speed_mps"] == expected_speed
+    finally:
+        gate.close()
+
+    expired_context = deepcopy(context)
+    expired_context["valid_until_monotonic_ns"] = now_ns - 1
+    expired_proposal, _ = FixturePolicy("nominal").propose(snapshot, expired_context)
+    assert expired_proposal["command"]["speed_mps"] == 4.0
+    assert engine.perception_context(now_ns=now_ns + 2_000_000_000) is None
+    real_snapshot = deepcopy(snapshot)
+    real_snapshot["display_only"] = False
+    assert not FixturePolicy._simulation_h5_warning(real_snapshot, context, now_ns)
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), -1, True])
+def test_invalid_h5_demo_scores_cannot_drive_fixture(score) -> None:
+    now_ns = time.monotonic_ns()
+    context = {
+        "method_id": "H5", "valid_until_monotonic_ns": now_ns + 1_000_000,
+        "simulation_h5_warning": {
+            "mode": "simulation_warning", "status": "warning", "score": score, "threshold": 2.7,
+        },
+    }
+    with pytest.raises(ValueError, match="invalid H5 simulation score"):
+        FixturePolicy._simulation_h5_warning(
+            {"contract_type": "SimulationSnapshot", "display_only": True}, context, now_ns
+        )

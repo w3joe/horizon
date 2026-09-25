@@ -5,6 +5,8 @@ from pathlib import Path
 import time
 
 import jsonschema
+import pytest
+from dataclasses import replace
 
 from horizon_perception.live import (
     BoundedFrameQueue,
@@ -194,7 +196,8 @@ def test_h4_shadow_mode_publishes_score_but_never_camera_authority(tmp_path: Pat
     assert neural["payload"]["health_detail"]["camera_free_space_usable"] is False
 
 
-def test_h5_shadow_mode_requires_temporal_pair_then_publishes_score(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["shadow_only", "simulation_warning"])
+def test_h5_modes_require_temporal_pair_then_publish_score(tmp_path: Path, mode: str) -> None:
     reference = ReferenceArtifact.from_dict(build_reference(
         "H5",
         [[0.0] * 2048, [0.1] * 2048, [0.9] * 2048, [1.0] * 2048],
@@ -229,6 +232,10 @@ def test_h5_shadow_mode_requires_temporal_pair_then_publishes_score(tmp_path: Pa
         geometry=geometry(),
         method_id="H5",
         reference=reference,
+        simulation_warning=(
+            {"threshold": 10.0, "reference_hash": reference.artifact_hash}
+            if mode == "simulation_warning" else None
+        ),
     )
     image = tmp_path / "00001L.jpg"
     image.write_bytes(b"recorded-camera-frame")
@@ -244,6 +251,44 @@ def test_h5_shadow_mode_requires_temporal_pair_then_publishes_score(tmp_path: Pa
     assert health["status"] == "unknown"
     assert health["score"] is not None
     assert second_neural["payload"]["health_detail"]["camera_free_space_usable"] is False
+    if mode == "shadow_only":
+        assert "simulation_h5_warning" not in second_neural["payload"]
+        return
+    assert first_neural["payload"]["simulation_h5_warning"]["status"] == "unknown"
+    assert second_neural["payload"]["simulation_h5_warning"]["status"] == "below_threshold"
+    unusual = evidence(3)
+    unusual.activation_summaries["temporal_fusion"]["pooled_mean"] = [1000.0] * 2048
+    third = replace(second, sequence=3, captured_monotonic_ns=2_500, valid_until_monotonic_ns=4_000)
+    _, warned = h5_builder.build(third, unusual, completed_monotonic_ns=2_600)
+    assert warned["payload"]["simulation_h5_warning"]["status"] == "warning"
+    assert warned["payload"]["perception_health"]["status"] == "unknown"
+    assert "H5_SIMULATION_WARNING" in warned["payload"]["perception_health"]["reason_codes"]
+    OBSERVATION_VALIDATOR.validate(warned)
+    # Even a high score is unusable once publication misses the original expiry.
+    expired = replace(third, sequence=4, captured_monotonic_ns=3_000)
+    _, stale = h5_builder.build(expired, unusual, completed_monotonic_ns=4_000)
+    assert stale["payload"]["simulation_h5_warning"]["status"] == "unknown"
+    # A new clip, a stale previous frame, or reversed ordering cannot form a pair.
+    for frame in (
+        replace(expired, sequence_id="another-clip", sequence=5, captured_monotonic_ns=3_500),
+        replace(expired, sequence=6, captured_monotonic_ns=5_000, valid_until_monotonic_ns=6_000),
+        replace(expired, sequence=5, captured_monotonic_ns=5_500, valid_until_monotonic_ns=6_000),
+    ):
+        _, unknown = h5_builder.build(frame, unusual, completed_monotonic_ns=frame.captured_monotonic_ns + 1)
+        assert unknown["payload"]["simulation_h5_warning"]["status"] == "unknown"
+    for bad_config in (
+        {"threshold": -1, "reference_hash": reference.artifact_hash},
+        {"threshold": float("nan"), "reference_hash": reference.artifact_hash},
+        {"threshold": True, "reference_hash": reference.artifact_hash},
+        {"threshold": 10, "reference_hash": "wrong-reference"},
+    ):
+        with pytest.raises(ValueError, match="simulation warning requires"):
+            RecordedCameraObservationBuilder(
+                run_id="run", branch_id="protected", model_version="wasrt-test",
+                weights_sha256="2" * 64, preprocessing_sha256="3" * 64,
+                geometry=geometry(), method_id="H5", reference=reference,
+                simulation_warning=bad_config,
+            )
 
 
 def test_bounded_queue_drops_oldest_without_reordering_survivors(tmp_path: Path) -> None:

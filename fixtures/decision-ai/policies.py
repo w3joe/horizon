@@ -74,6 +74,10 @@ class FixturePolicy:
         if self.camera_reliance == "recorded_camera_supporting" and not camera_support_usable:
             speed = min(speed, 1.0)
 
+        h5_warning = self._simulation_h5_warning(snapshot, perception_context, start_ns)
+        if h5_warning:
+            speed = min(speed, 1.0)
+
         sim_time = float(snapshot["simulation_time_s"])
         issued_ns = round(sim_time * 1e9)
         expiry_s = sim_time + 0.35
@@ -127,11 +131,46 @@ class FixturePolicy:
                 "route_progress": 1.0,
                 "contact_avoidance": 0.5 if self.mode == "nominal" else 0.0,
                 "camera_support_usable": 1.0 if camera_support_usable else 0.0,
+                "h5_simulation_warning": 1.0 if h5_warning else 0.0,
             },
             "status": "ok",
         }
         self.sequence += 1
         return proposal, trace
+
+    @staticmethod
+    def _simulation_h5_warning(snapshot: dict, context: dict | None, now_ns: int) -> bool:
+        """A fresh H5 demo warning can only lower a simulated speed proposal."""
+        if (
+            snapshot.get("contract_type") != "SimulationSnapshot"
+            or snapshot.get("display_only") is not True
+            or context is None or context.get("method_id") != "H5"
+            or context.get("valid_until_monotonic_ns", 0) <= now_ns
+        ):
+            return False
+        warning = context.get("simulation_h5_warning")
+        if warning is None:
+            return False
+        if not isinstance(warning, dict) or warning.get("mode") != "simulation_warning":
+            raise ValueError("invalid H5 simulation warning")
+        threshold = warning.get("threshold")
+        if (
+            isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+            or not math.isfinite(threshold) or threshold <= 0
+        ):
+            raise ValueError("invalid H5 simulation threshold")
+        score = warning.get("score")
+        if warning.get("status") == "unknown" and score is None:
+            return False
+        if (
+            isinstance(score, bool) or not isinstance(score, (int, float))
+            or not math.isfinite(score) or score < 0
+        ):
+            raise ValueError("invalid H5 simulation score")
+        active = score >= threshold
+        if warning.get("status") != ("warning" if active else "below_threshold"):
+            raise ValueError("H5 simulation status does not match score")
+        return active
 
     @staticmethod
     def _nearest_contact(snapshot: dict[str, Any]) -> tuple[float, dict[str, Any]] | None:
